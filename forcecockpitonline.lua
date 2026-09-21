@@ -1,4 +1,4 @@
--- force_cockpit_online.lua
+-- forcecockpitonline.lua
 -- Script ONLINE do CSP. Forca a camera de cockpit como diretiva da sessao.
 --
 -- Guardas ativas (campos de ac.StateSim, via global "sim"):
