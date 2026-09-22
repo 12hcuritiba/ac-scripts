@@ -31,6 +31,5 @@ function script.update(dt)
   if timer < cfg.CHECK_INTERVAL then return end
   timer = 0
 
-  ac.setCurrentCamera(ac.CameraMode.Car)
   ac.setCurrentCamera(cfg.CAR_CAMERA_INDEX)
 end
