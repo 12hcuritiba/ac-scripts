@@ -8,6 +8,7 @@
 
 local cfg = ac.configValues({
   CHECK_INTERVAL  = 0.05,
+  CAMERA_MODE      = 1,    
   ADMIN_STEAM_IDS = ''
 })
 
@@ -31,5 +32,5 @@ function script.update(dt)
   if timer < cfg.CHECK_INTERVAL then return end
   timer = 0
 
-  ac.setCurrentCamera(cfg.CAR_CAMERA_INDEX)
+  ac.setCurrentCamera(cfg.CAMERA_MODE)
 end
