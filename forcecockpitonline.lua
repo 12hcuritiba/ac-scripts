@@ -8,7 +8,7 @@
 
 local cfg = ac.configValues({
   CHECK_INTERVAL  = 0.05,
-  CAMERA_MODE      = 1,    
+  CAMERA_MODE      = 0,    
   ADMIN_STEAM_IDS = ''
 })
 
