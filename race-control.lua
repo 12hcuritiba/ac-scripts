@@ -36,14 +36,15 @@
 --   3. Serving order: DT0 before DT1; same deadline, the oldest first. One pit pass serves one DT.
 --   4. A slowdown that becomes a DT at the line crossing counts for the next lap.
 --   5. Two DT0 pending on the same lap: hold of holdShortSeconds, clears the list. Exception: if one of them is
---      the PAC that became DT0 crossing the line on track: hold of holdLongSeconds, clears the list.
+--      the PSE that became DT0 crossing the line on track: hold of holdLongSeconds, clears the list.
 --   6. Crossing the line outside the pits with a DT0 pending: DSQ applied by the script (ac.PenaltyType.BlackFlag).
 --      The DT0 of an end-of-lap slowdown does not count.
 --   7. Two DT0 do not become one DT1; two DT1 do not become one DT2.
 --
--- List categories: PAC = pit speeding DT applied by the game; SDn = unpaid slowdown of cut zone n.
+-- List categories: PSE = Pit Speed Exceeded, the pit lane speeding DT applied by the game; SDn = unpaid slowdown
+-- of cut zone n.
 -- In the game, a DT with k laps of deadline is sent with parameter k + 1.
--- The game DT (PAC) is detected by comparing the table with the game state before and after the line,
+-- The game DT (PSE) is detected by comparing the table with the game state before and after the line,
 -- at pit exit and before the script writes to the game.
 -- DSQ for leaving the pits with the session closed is outside the list (applied directly, with its own message).
 -- Any DSQ clears the list; the script keeps running (the DSQ may be lifted by Race Control).
@@ -167,7 +168,7 @@ local cfg = ac.configValues({
   -- Holds (rule 5): seconds stopped in the pits with locked controls; the hold clears the whole list
   -- holdShortSeconds: two pending DT0.
   holdShortSeconds = 45,
-  -- holdLongSeconds: two pending DT0 when one of them is the PAC that became DT0 crossing the line on track.
+  -- holdLongSeconds: two pending DT0 when one of them is the PSE that became DT0 crossing the line on track.
   holdLongSeconds = 90,
 
   -- Driver swap panel (green, below the slowdown box; race sessions only). ACSM runs the swap itself: its timer
@@ -213,6 +214,9 @@ local cfg = ac.configValues({
 })
 
 
+-- Version shown in the opening of the Race Control panel (date of the release)
+local RC_VERSION = '2026.09.26'
+
 local TEXTS = {
   pit = {
     DSQ = 'Pit exit with session closed - disqualified',
@@ -222,7 +226,12 @@ local TEXTS = {
     DT = 'Exclusion zone cut - drive-through',
     DSQ = 'Exclusion zone cut - disqualified',
   },
-  timer = 'SLOW DOWN  %.1f s   deadline %.0f s or end of lap',
+  -- slowdown box line, in pieces: the two numbers pulse (see slowdown.lua)
+  timerPay = 'SLOW DOWN  ',
+  timerSeconds = '%.1f s',
+  timerDeadline = '   deadline ',
+  timerDeadlineSeconds = '%.0f s',
+  timerEnd = ' or end of lap',
   -- slowdown box and gain check box (same size, same font)
   sdTitle = 'EXCLUSION ZONE CUT - slow down',
   liftTitle = 'EXCLUSION ZONE CUT - lift to avoid a slowdown',
@@ -232,6 +241,10 @@ local TEXTS = {
   -- Race Control: server log line (chat, hidden from every client) and the box on the penalized driver's screen
   rcPrefix = '[RC] ',
   rcTitle = 'RACE CONTROL',
+  -- opening of the panel (panel/intro.lua): name and version
+  introText = 'RACE CONTROL  v' .. RC_VERSION,
+  -- light of the light test
+  introLight = '●',
   -- Race Control panel cells
   cellPit = 'PIT WINDOW',
   cellSwap = 'SWAP',
@@ -265,7 +278,7 @@ local TEXTS = {
   reason = {
     SD1 = 'Exclusion zone cut - zone 1',
     SD2 = 'Exclusion zone cut - zone 2',
-    PAC = 'Pit lane speeding',
+    PSE = 'Pit lane speeding',
   },
   pitDsq = "You've been disqualified for leaving the pit lane with the session closed.",
   dtDsq = "You've been disqualified for not serving the drive-through.",
@@ -389,7 +402,7 @@ local state = {
     curLap = 0,           -- current lap (car.lapCount)
     seq = 0,
     inGameItem = nil,     -- table item that is in the game
-    written = 0,          -- game parameter of the inGameItem DT (written by the script, or read from the game for a PAC)
+    written = 0,          -- game parameter of the inGameItem DT (written by the script, or read from the game for a PSE)
     paying = nil,         -- parameter of the DT the game is clearing in the pit pass in progress
     inPitNow = false,     -- car in the pit lane in the current frame
     jumped = false,       -- car teleported (ac.onCarJumped): the penalty stays until a real pit pass pays it
@@ -658,8 +671,8 @@ local sendPenaltyList
 -- the list; every other client keeps the last list of each car and, when a different driver enters that car, sends
 -- it only to the new driver together with SWAP_INFO. Fixed size: up to PENALTY_LIST_MAX items, category code + laps.
 local PENALTY_LIST_MAX = 4
-local CAT_CODES = { PAC = 1, SD1 = 2, SD2 = 3 }
-local CAT_NAMES = { 'PAC', 'SD1', 'SD2' }
+local CAT_CODES = { PSE = 1, SD1 = 2, SD2 = 3 }
+local CAT_NAMES = { 'PSE', 'SD1', 'SD2' }
 
 local function applyPenaltyList(msg)
   local sw = state.swap
@@ -823,7 +836,7 @@ end
 -- The game applies and resolves the DT; the script writes to the game only to set position 0,
 -- for the hold and for the DSQs (rule 6 and closed pit).
 -- Pit pass payment: at the line inside the pit, position 0 leaves the table (rule 3).
--- PAC: game DT (GAME_DT with parameter > 0) the table does not explain (nothing sent, or a parameter other than
+-- PSE: game DT (GAME_DT with parameter > 0) the table does not explain (nothing sent, or a parameter other than
 -- the written one and the one being paid); the deadline comes from the game. Read only at events: before the line,
 -- after the line on track, at pit exit and before the script writes to the game.
 -- ============================================================
@@ -929,7 +942,7 @@ end
 
 local function hasLongHold(items)
   for _, it in ipairs(items) do
-    if it.cat == 'PAC' and it.dt0OnTrack then return true end
+    if it.cat == 'PSE' and it.dt0OnTrack then return true end
   end
   return false
 end
@@ -1061,8 +1074,8 @@ end
 -- at pit exit and before the script writes to the game.
 --   game without DT: nothing is being paid and the DT sent is no longer in the game (goes back via tick if still listed)
 --   game with the DT sent or the DT being paid (same or lower parameter, lowered by the game at the line): nothing changes
---   game with another DT: pit speeding (PAC), with the game's deadline
--- lapsLost: laps the PAC already lost at the line before showing up in the game. Received while another DT was
+--   game with another DT: pit speeding (PSE), with the game's deadline
+-- lapsLost: laps the PSE already lost at the line before showing up in the game. Received while another DT was
 -- being paid, the game only shows it after the line; since it was received in the pass, it loses that line's lap (rule 2).
 function Rules.sync(gs, where, lapsLost)
   local l = state.list
@@ -1079,11 +1092,11 @@ function Rules.sync(gs, where, lapsLost)
   end
   if l.paying and gs.p <= l.paying then return false end
   local before = listDump()
-  l.inGameItem = listAdd('PAC', math.max(gs.p - 1 - (lapsLost or 0), 0))
+  l.inGameItem = listAdd('PSE', math.max(gs.p - 1 - (lapsLost or 0), 0))
   l.written = gs.p
-  ac.log(string.format('race-control: PAC %s game=%d/%d before=%s after=%s', where, gs.t, gs.p, before,
+  ac.log(string.format('race-control: PSE %s game=%d/%d before=%s after=%s', where, gs.t, gs.p, before,
     listDump()))
-  rcLog('Drive-through', TEXTS.reason.PAC)
+  rcLog('Drive-through', TEXTS.reason.PSE)
   return true
 end
 
@@ -1131,7 +1144,7 @@ function Rules.line(viaPit, prev, g, lapCount)
       it.expireLap = it.expireLap + 1
     else
       it.laps = it.laps - 1
-      if it.cat == 'PAC' and it.laps == 0 and not viaPit then it.dt0OnTrack = true end
+      if it.cat == 'PSE' and it.laps == 0 and not viaPit then it.dt0OnTrack = true end
     end
   end
   -- Rule 4: end-of-lap slowdowns enter as DT0 of the next lap
@@ -1159,7 +1172,7 @@ function Rules.sessionSync(g)
   listLoad()
   l.paying = nil
   if gameHasDT(g) then
-    if #l.items == 0 then l.inGameItem = listAdd('PAC', math.max(g.p - 1, 0)) end
+    if #l.items == 0 then l.inGameItem = listAdd('PSE', math.max(g.p - 1, 0)) end
     if not l.inGameItem then l.inGameItem = l.items[1] end
     l.written = g.p
   else
@@ -1252,6 +1265,9 @@ local function onSlowdownUnpaid(cat, endOfLap, inPit)
   ac.log(string.format('race-control: slowdown %s unpaid, end of lap=%s', cat, tostring(endOfLap)))
 end
 
+local SLOWDOWN_PULSE_MAX_HZ = 6
+local SLOWDOWN_PULSE_MIN_HZ = 1
+
 -- Counts down only with throttle <= maxGas and outside the pit lane; deadline: seconds or end of lap.
 -- CODE-80: nothing is paid; with frozen deadlines the deadline (seconds and lap) stops too.
 local function updateSlowdowns(dt, inPit, lapCount)
@@ -1264,11 +1280,17 @@ local function updateSlowdowns(dt, inPit, lapCount)
     if config.code80Freeze then return end
   end
   local canPay = not inPit and not state.code80
+  -- Pulse of the numbers in the slowdown box: SLOWDOWN_PULSE_MAX_HZ x (time to pay / deadline left), faster the closer
+  -- the deadline; steady while the driver is paying, and below SLOWDOWN_PULSE_MIN_HZ (deadline still long)
   for cat, sd in pairs(current) do
     -- A hold or DSQ cleared the list and the slowdowns: nothing else is processed
     if state.slowdowns ~= current then return end
     if sd.active then
       local finished = false
+      sd.paying = car.gas <= sd.maxGas and canPay
+      local hz = SLOWDOWN_PULSE_MAX_HZ * math.min(math.max(sd.toPay / math.max(sd.deadlineLeft, 0.001), 0), 1)
+      sd.pulseHz = (sd.paying or hz < SLOWDOWN_PULSE_MIN_HZ) and 0 or hz
+      sd.phase = sd.pulseHz > 0 and ((sd.phase or 0) + 2 * math.pi * sd.pulseHz * dt) % (2 * math.pi) or 0
       if car.gas <= sd.maxGas and canPay then
         sd.toPay = sd.toPay - dt
         if sd.toPay <= 0 then
@@ -1344,6 +1366,8 @@ end
 -- ============================================================
 
 local GAIN_SAMPLES = 20
+-- Time constant of the gain meter (seconds)
+local LIFT_SMOOTH_SECONDS = 0.35
 local SPIN_MIN_SPEED_KMH = 5
 
 -- Position inside the zone, 0 at the start and 1 at the end (zones may cross the line)
@@ -1424,6 +1448,10 @@ local function updateCutChecks()
     local elapsed = sim.time - cc.t0
     local limit = refAt(cc.ref, p) * (1 + zone.gainTolerance / 100)
     cc.margin = limit > 0 and (elapsed / limit - 1) or 0
+    -- Meter value: follows the margin smoothly (LIFT_SMOOTH_SECONDS), so it can be read
+    local k = cc.lastT and math.min((sim.time - cc.lastT) / 1000 / LIFT_SMOOTH_SECONDS, 1) or 1
+    cc.shown = cc.shown and (cc.shown + (cc.margin - cc.shown) * k) or cc.margin
+    cc.lastT = sim.time
     if car.speedKmh > SPIN_MIN_SPEED_KMH and driftAngle(car) > config.cutSpinAngle then cc.spun = true end
     local back = car.wheelsOutside <= zone.maxWheelsOut
     if car.isInPitlane then
@@ -1563,7 +1591,7 @@ function Panel.cellTrack()
   return nil
 end
 
--- PENALTIES: DSQ, hold, or the first two drive-throughs with origin and deadline ("SD1 DT0 · PAC DT1 +1")
+-- PENALTIES: DSQ, hold, or the first two drive-throughs with origin and deadline ("SD1 DT0 · PSE DT1 +1")
 function Panel.cellPenalties()
   if state.dtDsqActive or state.pitDsqActive then return { value = TEXTS.penDsq, color = 'red' } end
   if state.hold then return { value = TEXTS.penHold, color = 'red' } end
@@ -1617,9 +1645,73 @@ local PANEL_CELLS = {
   { title = TEXTS.cellPenalties, fn = Panel.cellPenalties },
 }
 -- Fixed width of the Race Control panel at 1080p. Widest texts measured with Segoe UI Bold (cell = text + 16 px):
--- RACE CONTROL 112 (15 px), OPEN 00:00 71, 88 | 88 40, CODE-80 54, PENALTIES "PAC DT1 · PAC DT1 +9" 140 (13 px):
+-- RACE CONTROL 112 (15 px), OPEN 00:00 71, 88 | 88 40, CODE-80 54, PENALTIES "PSE DT1 · PSE DT1 +9" 140 (13 px):
 -- 128 + 87 + 56 + 70 + 156 = 497 px, plus 20 px of borders = 517 px
 local PANEL_WIDTH = 520
+
+-- ============================================================
+-- Race Control panel: opening
+-- Only on the first load on the server: the first time the driver goes out on track, the panel runs a light test
+-- like a start tree (the cells light up amber one by one, then all green), then the message line shows the name and
+-- version, typed like a typewriter, fading in centered, and leaves sliding to the left. It does not repeat between
+-- sessions, on reconnections or on script reloads. After it, the panel is shown only when a cell or the message line
+-- has something to show.
+-- ============================================================
+
+local INTRO_TREE_STEP = 0.35  -- seconds between two cells lighting up
+local INTRO_TREE_GO = 0.5     -- seconds with all cells green
+local INTRO_TYPE = 1.2        -- seconds typing the text
+local INTRO_FADE_IN = 0.4     -- seconds of the fade in, while typing
+local INTRO_HOLD = 1.5        -- seconds with the whole text
+local INTRO_EXIT = 0.6        -- seconds sliding out to the left
+local INTRO_EXIT_DX = 260     -- px at 1080p covered while sliding out
+local INTRO_TREE_CELLS = 4    -- cells with a title (all but RACE CONTROL)
+local INTRO_TOTAL = INTRO_TREE_STEP * INTRO_TREE_CELLS + INTRO_TREE_GO + INTRO_TYPE + INTRO_HOLD + INTRO_EXIT
+
+-- Shown once while the game is running (ac.store survives reconnections and script reloads)
+local INTRO_SHOWN_KEY = 'race-control.intro'
+
+local Intro = { t0 = nil, done = ac.load(INTRO_SHOWN_KEY) == 1 }
+
+-- Starts on the first frame with the car out of the pit lane; ends after INTRO_TOTAL
+function Intro.update(car)
+  if Intro.done then return end
+  if not Intro.t0 then
+    if not car.isInPitlane then
+      Intro.t0 = state.ui.clock
+      ac.store(INTRO_SHOWN_KEY, 1)
+    end
+  elseif state.ui.clock - Intro.t0 >= INTRO_TOTAL then
+    Intro.done = true
+  end
+end
+
+-- Current frame of the opening (reads only its own state): nil when not running; otherwise
+-- { lit = cells lit (1..4), go = all green } during the light test, or
+-- { text = typed part, full = whole text, alpha = 0..1, dx = px at 1080p (negative = to the left) }
+function Intro.frame()
+  if Intro.done or not Intro.t0 then return nil end
+  local t = state.ui.clock - Intro.t0
+  local treeEnd = INTRO_TREE_STEP * INTRO_TREE_CELLS + INTRO_TREE_GO
+  if t < treeEnd then
+    return { lit = math.min(math.floor(t / INTRO_TREE_STEP) + 1, INTRO_TREE_CELLS),
+      go = t >= INTRO_TREE_STEP * INTRO_TREE_CELLS }
+  end
+  local full = TEXTS.introText
+  t = t - treeEnd
+  if t < INTRO_TYPE then
+    return { text = full:sub(1, math.floor(#full * t / INTRO_TYPE)), full = full,
+      alpha = math.min(t / INTRO_FADE_IN, 1), dx = 0 }
+  end
+  t = t - INTRO_TYPE
+  if t < INTRO_HOLD then return { text = full, full = full, alpha = 1, dx = 0 } end
+  t = t - INTRO_HOLD
+  if t < INTRO_EXIT then
+    local k = t / INTRO_EXIT
+    return { text = full, full = full, alpha = 1 - k, dx = -INTRO_EXIT_DX * k }
+  end
+  return nil
+end
 
 -- ============================================================
 -- Callbacks
@@ -1630,6 +1722,8 @@ local PANEL_WIDTH = 520
 local FONT_TITLE = 'Segoe UI;Weight=Bold'
 local FONT_TEXT = 'Segoe UI;Weight=SemiBold'
 local FONT_MONO = 'Consolas'
+-- Typewriter font of the opening (panel/intro.lua)
+local FONT_TYPE = 'Courier New;Weight=Bold'
 local COLOR_TITLE = rgbm(0.96, 0.96, 0.96, 1)
 local COLOR_TEXT = rgbm(1, 0.85, 0.25, 1)
 local COLOR_SWAP = rgbm(0.45, 1, 0.55, 1)
@@ -1638,15 +1732,15 @@ local COLOR_LIFT_SLOW = rgbm(0.2, 0.8, 0.3, 0.35)
 local COLOR_DIM = rgbm(0.6, 0.63, 0.65, 1)
 -- Race Control panel: dark title of a cell with nothing to show; value colors
 local COLOR_CELL_OFF = rgbm(0.23, 0.25, 0.27, 1)
--- Frame of the panel with nothing to show at all
-local COLOR_PANEL_OFF = rgbm(0.23, 0.25, 0.27, 1)
 local PANEL_COLORS = {
   title = rgbm(0.96, 0.96, 0.96, 1), dim = rgbm(0.6, 0.63, 0.65, 1), yellow = rgbm(1, 0.85, 0.25, 1),
   red = rgbm(1, 0.3, 0.3, 1), blue = rgbm(0.56, 0.7, 1, 1), green = rgbm(0.45, 1, 0.55, 1),
 }
 -- Gain meter: position of the limit line and how much margin (fraction of the limit) spans from it to the edge
 local LIFT_LIMIT_POS = 0.55
-local LIFT_SCALE = 4.5
+local LIFT_SCALE = 1.8
+-- Mark of the gain meter: pulses in white at this rate
+local LIFT_CARET_HZ = 2
 
 local function px(v) return math.floor(v + 0.5) end
 
@@ -1704,7 +1798,8 @@ function script.drawUI()
     ui.popDWriteFont()
   end
 
-  -- Fixed layout: Race Control panel on top (always shown), slowdown box right below it, driver swap panel below.
+  -- Fixed layout: Race Control panel on top (only when it has something to show, or during its opening), slowdown box
+  -- right below it, driver swap panel below.
   -- Legibility correction only (no proportional scaling): sizes grow with the resolution to the power 0.3, from 1x
   -- at 1080p up to 1.3x (1.23x at 4K), so on a big screen the boxes are bigger but take a smaller part of it.
   local s = math.min(math.max((h / 1080) ^ 0.3, 1), 1.3)
@@ -1738,43 +1833,59 @@ function script.drawUI()
     state.ui.notice = nil
   end
 
-  do
+  -- Race Control panel: cells and message first; with nothing to show anywhere (and no opening), no panel at all
+  local intro = Intro.frame()
+  local values, anyOn = {}, false
+  for i, c in ipairs(PANEL_CELLS) do
+    values[i] = c.fn()
+    if c.title and values[i] then anyOn = true end
+  end
+  local text, color = Panel.message()
+  if intro or anyOn or text then
     local p1 = vec2(x, yMsg)
     local p2 = vec2(x + boxW, yMsg + msgH)
-    -- Cells and message first: with nothing to show anywhere, the RACE CONTROL title and the frame are off too
-    local values, anyOn = {}, false
-    for i, c in ipairs(PANEL_CELLS) do
-      values[i] = c.fn()
-      if c.title and values[i] then anyOn = true end
-    end
-    local text, color = Panel.message()
-    local idle = not anyOn and not text
-    drawPanel(p1, p2, idle and COLOR_PANEL_OFF or Panel.frameColor(), s)
+    drawPanel(p1, p2, intro and BORDER_BASE or Panel.frameColor(), s)
     local cx = p1.x + 12 * s
     local innerW = boxW - 20 * s
+    local lit = 0
     for i, c in ipairs(PANEL_CELLS) do
       local cw = cellW[i] or (innerW - fixedW)
       if i > 1 then
         ui.drawSimpleLine(vec2(px(cx), px(p1.y + 6 * s)), vec2(px(cx), px(p1.y + 32 * s)), rgbm(1, 1, 1, 0.12), 1)
       end
       local cell = values[i]
-      local function put(text, font, size, y, color)
+      -- Opening, light test: the titled cells light up one by one (amber), then all green
+      if intro and intro.lit and c.title then
+        lit = lit + 1
+        cell = lit <= intro.lit and { value = TEXTS.introLight, color = intro.go and 'green' or 'yellow' } or nil
+      elseif intro and c.title then
+        cell = nil
+      end
+      local function put(t, font, size, y, col)
         ui.pushDWriteFont(font)
-        local tw = ui.measureDWriteText(text, size).x
+        local tw = ui.measureDWriteText(t, size).x
         local tx = c.center and (cx + (cw - tw) / 2) or (cx + 6 * s)
-        ui.dwriteDrawText(text, size, vec2(px(tx), px(y)), color)
+        ui.dwriteDrawText(t, size, vec2(px(tx), px(y)), col)
         ui.popDWriteFont()
       end
       if c.title then
         put(c.title, FONT_TITLE, 10 * s, p1.y + 5 * s, cell and PANEL_COLORS.dim or COLOR_CELL_OFF)
         if cell then put(cell.value, FONT_TITLE, 13 * s, p1.y + 17 * s, PANEL_COLORS[cell.color]) end
       elseif cell then
-        put(cell.value, FONT_TITLE, 15 * s, p1.y + 10 * s, idle and COLOR_CELL_OFF or PANEL_COLORS[cell.color])
+        put(cell.value, FONT_TITLE, 15 * s, p1.y + 10 * s, PANEL_COLORS[cell.color])
       end
       cx = cx + cw
     end
     drawSeparator(p1, p2, p1.y + 36 * s, s)
-    if text then
+    if intro and intro.text then
+      -- Opening, name and version: typewriter, centered on the whole text, fading in; leaves sliding to the left
+      local size = 14 * s
+      ui.pushDWriteFont(FONT_TYPE)
+      local fw = ui.measureDWriteText(intro.full, size).x
+      local tx = p1.x + (boxW - fw) / 2 + intro.dx * s
+      ui.dwriteDrawText(intro.text, size, vec2(px(tx), px(p1.y + 43 * s)), rgbm(0.96, 0.96, 0.96, intro.alpha))
+      ui.popDWriteFont()
+    elseif text and not intro then
       ui.pushDWriteFont(FONT_TEXT)
       ui.setCursor(vec2(math.floor(p1.x + 16 * s), math.floor(p1.y + 41 * s)))
       ui.dwriteTextAligned(text, 14 * s, ui.Alignment.Start, ui.Alignment.Start,
@@ -1795,17 +1906,21 @@ function script.drawUI()
     drawText(TEXTS.liftTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
     drawSeparator(p1, p2, p1.y + 24 * s, s)
     -- Meter: left of the limit line = slower than reference x (1 + tolerance), no slowdown (green); right = faster,
-    -- slowdown (red). The white mark is where the driver is now; +/-10% of the limit spans the whole bar.
+    -- slowdown (red). The white mark is where the driver is now (smoothed); about +/-30% of the limit spans the bar.
     local bx1, bx2 = p1.x + 16 * s, p2.x - 16 * s
     local by1, by2 = p1.y + 30 * s, p1.y + 38 * s
     local lim = bx1 + (bx2 - bx1) * LIFT_LIMIT_POS
     ui.drawRectFilled(vec2(px(bx1), px(by1)), vec2(px(lim), px(by2)), COLOR_LIFT_SLOW, px(4 * s))
     ui.drawRectFilled(vec2(px(lim), px(by1)), vec2(px(bx2), px(by2)), COLOR_LIFT_FAST, px(4 * s))
     ui.drawSimpleLine(vec2(px(lim), px(by1 - 2 * s)), vec2(px(lim), px(by2 + 2 * s)), rgbm(1, 1, 1, 0.8), 1)
-    local f = math.min(math.max(LIFT_LIMIT_POS - cc.margin * LIFT_SCALE, 0), 1)
+    local f = math.min(math.max(LIFT_LIMIT_POS - (cc.shown or cc.margin) * LIFT_SCALE, 0), 1)
     local mx = bx1 + (bx2 - bx1) * f
+    -- Mark: white, with a glow pulsing at LIFT_CARET_HZ
+    local pulse = 0.5 + 0.5 * math.sin(2 * math.pi * LIFT_CARET_HZ * state.ui.clock)
+    ui.drawRectFilled(vec2(px(mx - 4 * s), px(by1 - 5 * s)), vec2(px(mx + 4 * s), px(by2 + 5 * s)),
+      rgbm(1, 1, 1, 0.15 + 0.35 * pulse), px(3 * s))
     ui.drawRectFilled(vec2(px(mx - 1.5 * s), px(by1 - 3 * s)), vec2(px(mx + 1.5 * s), px(by2 + 3 * s)),
-      rgbm(1, 1, 1, 1), px(1 * s))
+      rgbm(1, 1, 1, 0.75 + 0.25 * pulse), px(1 * s))
     local ly = p1.y + 41 * s
     drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, vec2(bx1, ly), COLOR_DIM)
     local mid = string.format(TEXTS.liftLimit, cc.zone.gainTolerance)
@@ -1820,13 +1935,30 @@ function script.drawUI()
   for _, zone in ipairs(config.cutZones) do
     local sd = state.slowdowns[zone.category]
     if not cc and sd and sd.active then
-      local timerText = string.format(TEXTS.timer, math.max(sd.toPay, 0), math.max(sd.deadlineLeft, 0))
       local p1 = vec2(x, ySd)
       local p2 = vec2(x + boxW, ySd + sdH)
       drawPanel(p1, p2, BORDER_YELLOW, s)
       drawText(sd.title, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
       drawSeparator(p1, p2, p1.y + 24 * s, s)
-      drawText(timerText, FONT_MONO, 12 * s, vec2(p1.x + 16 * s, p1.y + 29 * s), COLOR_TEXT)
+      -- Line in pieces: the time to pay and the deadline pulse together (rate set in slowdown.lua)
+      local numColor = COLOR_TEXT
+      if (sd.pulseHz or 0) > 0 then
+        numColor = rgbm(COLOR_TEXT.r, COLOR_TEXT.g, COLOR_TEXT.b, 0.3 + 0.7 * (0.5 + 0.5 * math.cos(sd.phase or 0)))
+      end
+      local pieces = {
+        { TEXTS.timerPay, COLOR_TEXT },
+        { string.format(TEXTS.timerSeconds, math.max(sd.toPay, 0)), numColor },
+        { TEXTS.timerDeadline, COLOR_TEXT },
+        { string.format(TEXTS.timerDeadlineSeconds, math.max(sd.deadlineLeft, 0)), numColor },
+        { TEXTS.timerEnd, COLOR_TEXT },
+      }
+      local tx = p1.x + 16 * s
+      ui.pushDWriteFont(FONT_MONO)
+      for _, piece in ipairs(pieces) do
+        ui.dwriteDrawText(piece[1], 12 * s, vec2(px(tx), px(p1.y + 29 * s)), piece[2])
+        tx = tx + ui.measureDWriteText(piece[1], 12 * s).x
+      end
+      ui.popDWriteFont()
       break
     end
   end
@@ -1909,6 +2041,7 @@ function script.update(dt)
   updateSwapRelay()
   publishOwnList(car)
   Panel.updatePit(car)
+  Intro.update(car)
   -- Penalty list of the previous driver (driver swap): taken over only if this driver has none
   if sw.pendingList then
     local items = sw.pendingList
@@ -2032,7 +2165,7 @@ function script.update(dt)
     end
 
     -- Pit exit: the pass has ended; the DT being paid left the game. If there is still a DT the table does not
-    -- explain, it is new (PAC). If a DT was being paid, it was received in the pass and lost that line's lap.
+    -- explain, it is new (PSE). If a DT was being paid, it was received in the pass and lost that line's lap.
     if not inPit and l.prevInPit and not lineFrame and not l.wrote then
       local paid = l.paying ~= nil
       l.paying = nil
