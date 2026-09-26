@@ -56,7 +56,24 @@
 -- Keys read from the script's own [SCRIPT_n] server section (ac.configValues uses the section that created it).
 -- Every key below can be set in that section; the value here is the default used when the key is missing.
 -- Session prefixes: practice / qualify / race (the session type reported by the game).
+-- Same order as config/server/ACSM-CSP.txt: 1. script operation, 2. optional general data, 3. ACSM server,
+-- 4. holds, tow and repair, 5. penalty control (pit exit, exclusion zone 1, exclusion zone 2, slowdown).
 local cfg = ac.configValues({
+  -- ------------------------------------------------------------
+  -- 1. Script operation
+  -- ------------------------------------------------------------
+  -- announce
+  --   1: public chat lines sent by the driver's client ("Exclusion zone cut - slow down", "- drive-through",
+  --      "- disqualified", "Pit exit with session closed - disqualified").
+  --   0: no public lines. The hidden [RC] lines for the server log are always sent.
+  announce = 0,
+  -- penaltyMode
+  --   'CSP': every client checks its own car and applies the penalties in the game (cut zones, DT list, holds,
+  --          DSQ). This is the mode the rules document describes.
+  --   'KMR': only the Race Control client (raceControlSteamID) checks every car, and only for the closed pit exit:
+  --          it sends '/kmr player_kick <id>' through the chat (that client must be logged in as a KMR admin).
+  --          Cut zones, slowdowns and the DT list are not used in this mode.
+  penaltyMode = 'CSP',
   -- Car controls
   -- forceCockpit: 1 = the cockpit camera is forced (every cockpitCheckInterval seconds, except with the game paused or
   --   in a replay); 0 = off. Replaces the separate forcecockpitonline.lua script.
@@ -65,112 +82,25 @@ local cfg = ac.configValues({
   cockpitCameraMode = 0,
   -- cockpitCheckInterval: seconds between checks.
   cockpitCheckInterval = 0.05,
+  -- CODE-80 (VSC / SC / full course yellow): no penalty can be served while it lasts. Started and ended by the server
+  -- chat messages (start: "vsc", "virtual safety car", "safety car", "code-80", "code 80", "full course yellow";
+  -- end: "green flag", "bandeira verde"). While it lasts: a pit pass pays nothing (the drive-through goes back to the
+  -- game at the pit exit), slowdowns are not paid, and the hold for two pending DT0 waits for the green flag.
+  -- code80FreezeDeadlines: 1 = deadlines stop: the line crossing does not take laps from the drive-throughs nor
+  --   disqualify, and the slowdown deadline stops. 0 = deadlines keep running.
+  code80FreezeDeadlines = 1,
+
+  -- ------------------------------------------------------------
+  -- 2. General data (optional, filled in by the organizer)
+  -- ------------------------------------------------------------
+  -- raceControlSteamID: Steam ID of the Race Control client ('KMR' mode only). Empty = nobody.
+  raceControlSteamID = '',
   -- cockpitExemptSteamIDs: Steam IDs not forced (for example, Race Control / broadcast), separated by semicolons.
   cockpitExemptSteamIDs = '',
 
-  -- penaltyMode
-  --   'CSP': every client checks its own car and applies the penalties in the game (cut zones, DT list, holds,
-  --          DSQ). This is the mode the rules document describes.
-  --   'KMR': only the Race Control client (raceControlSteamID) checks every car, and only for the closed pit exit:
-  --          it sends '/kmr player_kick <id>' through the chat (that client must be logged in as a KMR admin).
-  --          Cut zones, slowdowns and the DT list are not used in this mode.
-  penaltyMode = 'CSP',
-  -- raceControlSteamID: Steam ID of the Race Control client ('KMR' mode only). Empty = nobody.
-  raceControlSteamID = '',
-  -- announce
-  --   1: public chat lines sent by the driver's client ("Exclusion zone cut - slow down", "- drive-through",
-  --      "- disqualified", "Pit exit with session closed - disqualified").
-  --   0: no public lines. The hidden [RC] lines for the server log are always sent.
-  announce = 0,
-
-  -- Pit exit while closed
-  -- <session>ClosedSeconds: seconds after the session start during which leaving the pit lane is forbidden.
-  --   0 = the pit is never closed. Before the session starts, the pit counts as closed when the value is > 0.
-  practiceClosedSeconds = 0,
-  qualifyClosedSeconds = 120,
-  raceClosedSeconds = 0,
-  -- <session>Penalty: 'DSQ' = black flag + on-screen message (KMR mode: kick). 'NONE' = nothing.
-  --   Any other value is ignored.
-  practicePenalty = 'NONE',
-  qualifyPenalty = 'DSQ',
-  racePenalty = 'NONE',
-  -- <session>PenaltyParam: not used (DSQ has no parameter).
-  practicePenaltyParam = -1,
-  qualifyPenaltyParam = -1,
-  racePenaltyParam = -1,
-  -- pitSlowdownDeadline / pitSlowdownMaxGas: not used.
-  pitSlowdownDeadline = 0,
-  pitSlowdownMaxGas = 0,
-
-  -- Cut zone 1 (category SD1)
-  -- cutZoneStart / cutZoneEnd: track spline position of the zone, 0..1. Start = end disables the zone.
-  --   Start > end means the zone crosses the start/finish line.
-  cutZoneStart = 0.16,
-  cutZoneEnd = 0.24,
-  -- cutMaxWheelsOut: penalty when more wheels than this are outside the track (3 = all four wheels out).
-  --   At most one penalty per pass through the zone; not checked in the pit lane.
-  cutMaxWheelsOut = 3,
-  -- <session>CutPenalty
-  --   'SLOWDOWN': the driver must lift (throttle <= cutSlowdownMaxGas, outside the pit lane) for
-  --               <session>CutPenaltyParam seconds, within cutSlowdownDeadline seconds or before the end of the lap.
-  --               Unpaid: <session>SlowdownUnpaidPenalty.
-  --   'DT': drive-through DT0 at once. 'DSQ': black flag at once. 'NONE': nothing.
-  --   The default 'SLOW DOWN' (with a space) is not a valid value: without the server key the zone does nothing.
-  practiceCutPenalty = 'SLOW DOWN',
-  qualifyCutPenalty = 'SLOW DOWN',
-  raceCutPenalty = 'SLOW DOWN',
-  -- <session>CutPenaltyParam: 'SLOWDOWN' seconds to pay. 0 = paid at once. Not used by 'DT' / 'DSQ'.
-  practiceCutPenaltyParam = 0,
-  qualifyCutPenaltyParam = 0,
-  raceCutPenaltyParam = 0,
-  -- cutSlowdownDeadline: seconds to pay the slowdown. The deadline keeps running in the pit lane; the payment
-  --   does not. The line crossing also ends it (the DT0 then counts for the next lap).
-  cutSlowdownDeadline = 10,
-  -- cutSlowdownMaxGas: highest throttle (0..1) that still counts as lifting.
-  cutSlowdownMaxGas = 0.2,
-
-  -- Cut zone 2 (category SD2): same meaning as zone 1
-  cutZone2Start = 0.81,
-  cutZone2End = 0.91,
-  cutZone2MaxWheelsOut = 3,
-  practiceCutZone2Penalty = 'SLOW DOWN',
-  qualifyCutZone2Penalty = 'SLOW DOWN',
-  raceCutZone2Penalty = 'SLOW DOWN',
-  practiceCutZone2PenaltyParam = 0,
-  qualifyCutZone2PenaltyParam = 0,
-  raceCutZone2PenaltyParam = 0,
-  cutZone2SlowdownDeadline = 10,
-  cutZone2SlowdownMaxGas = 0.1,
-
-  -- Gain filter (slowdown only). Reference = the driver's best clean passage through the zone in this session.
-  -- cutGainTolerance / cutZone2GainTolerance: % over the reference. A cut with the car back on track in less than
-  --   reference x (1 + %) gets the slowdown; slower (lost time), no slowdown. No reference yet: slowdown as before.
-  cutGainTolerance = 6,
-  cutZone2GainTolerance = 6,
-  -- cutSpinAngle: degrees between where the car points and where it moves; above it during the cut = spin, cut discarded
-  cutSpinAngle = 90,
-  -- Overlapping slowdowns (zone 2 while zone 1 is still running, or the other way round) are merged into one:
-  -- the times add up, with the newest deadline; unpaid, each zone becomes its own DT0.
-
-  -- Unpaid slowdown
-  -- <session>SlowdownUnpaidPenalty
-  --   'DT': DT0 of the category (SD1 / SD2). Deadline expired mid-lap: DT0 of the current lap (crossing the line on
-  --         track without serving it = DSQ). Expired at the line, or inside the pit lane: DT0 of the next lap.
-  --   'DSQ': black flag at once. 'NONE': nothing.
-  practiceSlowdownUnpaidPenalty = 'DT',
-  qualifySlowdownUnpaidPenalty = 'DT',
-  raceSlowdownUnpaidPenalty = 'DT',
-  -- <session>SlowdownUnpaidParam: not used (the DT is always DT0).
-  practiceSlowdownUnpaidParam = 0,
-  qualifySlowdownUnpaidParam = 0,
-  raceSlowdownUnpaidParam = 0,
-
-  -- Holds (rule 5): seconds stopped in the pits with locked controls; the hold clears the whole list
-  -- holdShortSeconds: two pending DT0.
-  holdShortSeconds = 45,
-  -- holdLongSeconds: two pending DT0 when one of them is the PSE that became DT0 crossing the line on track.
-  holdLongSeconds = 90,
-
+  -- ------------------------------------------------------------
+  -- 3. ACSM server: must match the ACSM race settings
+  -- ------------------------------------------------------------
   -- Driver swap panel (green, below the slowdown box; race sessions only). ACSM runs the swap itself: its timer
   -- starts when the driver disconnects and it tells the next driver "please wait ..." / "Free to leave pits in ..."
   -- / "You are clear to leave the pits, go go go!" through the chat; those chat lines are kept as they are.
@@ -184,15 +114,18 @@ local cfg = ac.configValues({
   --   mandatory (valid server setup): the cell shows done | 0. Only with driverSwapEnabled = 1, race sessions.
   driverSwapRequired = '',
 
-  -- CODE-80 (VSC / SC / full course yellow): no penalty can be served while it lasts. Started and ended by the server
-  -- chat messages (start: "vsc", "virtual safety car", "safety car", "code-80", "code 80", "full course yellow";
-  -- end: "green flag", "bandeira verde"). While it lasts: a pit pass pays nothing (the drive-through goes back to the
-  -- game at the pit exit), slowdowns are not paid, and the hold for two pending DT0 waits for the green flag.
-  -- code80FreezeDeadlines: 1 = deadlines stop: the line crossing does not take laps from the drive-throughs nor
-  --   disqualify, and the slowdown deadline stops. 0 = deadlines keep running.
-  code80FreezeDeadlines = 1,
+  -- ------------------------------------------------------------
+  -- 4.1 Holds (rule 5): seconds stopped in the pits with locked controls; the hold clears the whole list
+  -- ------------------------------------------------------------
+  -- holdShortSeconds: two pending DT0.
+  holdShortSeconds = 45,
+  -- holdLongSeconds: two pending DT0 when one of them is the PSE that became DT0 crossing the line on track.
+  holdLongSeconds = 90,
 
-  -- Tow and repair hold (race sessions only): the car is locked in the pits (TeleportToPits) for
+  -- ------------------------------------------------------------
+  -- 4.2 Tow and repair hold (race sessions only)
+  -- ------------------------------------------------------------
+  -- The car is locked in the pits (TeleportToPits) for
   --   back to pits from the track (teleport): raceTowSeconds + repair;
   --   repair chosen in the pit menu (car driven to its pit place): repair.
   -- repair = raceRepairFactor x (repairBaseSeconds x (repairWeightEngine x powertrain + repairWeightSuspension x
@@ -211,6 +144,95 @@ local cfg = ac.configValues({
   repairWeightEngine = 1.0,
   repairWeightSuspension = 0.5,
   repairWeightBody = 0.25,
+
+  -- ------------------------------------------------------------
+  -- 5.1 Penalty control: pit exit while closed
+  -- ------------------------------------------------------------
+  -- <session>ClosedSeconds: seconds after the session start during which leaving the pit lane is forbidden.
+  --   0 = the pit is never closed. Before the session starts, the pit counts as closed when the value is > 0.
+  practiceClosedSeconds = 0,
+  qualifyClosedSeconds = 120,
+  raceClosedSeconds = 0,
+  -- <session>Penalty: 'DSQ' = black flag + on-screen message (KMR mode: kick). 'NONE' = nothing.
+  --   Any other value is ignored.
+  practicePenalty = 'NONE',
+  qualifyPenalty = 'DSQ',
+  racePenalty = 'NONE',
+  -- <session>PenaltyParam: not used (DSQ has no parameter).
+  practicePenaltyParam = -1,
+  qualifyPenaltyParam = -1,
+  racePenaltyParam = -1,
+
+  -- ------------------------------------------------------------
+  -- 5.2 Penalty control: cut zone 1 (category SD1)
+  -- ------------------------------------------------------------
+  -- cutZoneStart / cutZoneEnd: track spline position of the zone, 0..1. Start = end disables the zone.
+  --   Start > end means the zone crosses the start/finish line.
+  cutZoneStart = 0.16,
+  cutZoneEnd = 0.24,
+  -- <session>CutPenalty
+  --   'SLOWDOWN': the driver must lift (throttle <= cutSlowdownMaxGas, outside the pit lane) for
+  --               <session>CutPenaltyParam seconds, within cutSlowdownDeadline seconds or before the end of the lap.
+  --               Unpaid: <session>SlowdownUnpaidPenalty.
+  --   'DT': drive-through DT0 at once. 'DSQ': black flag at once. 'NONE': nothing.
+  --   The default 'SLOW DOWN' (with a space) is not a valid value: without the server key the zone does nothing.
+  practiceCutPenalty = 'SLOW DOWN',
+  qualifyCutPenalty = 'SLOW DOWN',
+  raceCutPenalty = 'SLOW DOWN',
+  -- <session>CutPenaltyParam: 'SLOWDOWN' seconds to pay. 0 = paid at once. Not used by 'DT' / 'DSQ'.
+  practiceCutPenaltyParam = 0,
+  qualifyCutPenaltyParam = 0,
+  raceCutPenaltyParam = 0,
+  -- cutSlowdownDeadline: seconds to pay the slowdown. The deadline keeps running in the pit lane; the payment
+  --   does not. The line crossing also ends it (the DT0 then counts for the next lap).
+  cutSlowdownDeadline = 10,
+  -- cutMaxWheelsOut: penalty when more wheels than this are outside the track (3 = all four wheels out).
+  --   At most one penalty per pass through the zone; not checked in the pit lane.
+  cutMaxWheelsOut = 3,
+  -- cutSlowdownMaxGas: highest throttle (0..1) that still counts as lifting.
+  cutSlowdownMaxGas = 0.2,
+  -- Gain filter (slowdown only). Reference = the driver's best clean passage through the zone in this session.
+  -- cutGainTolerance: % over the reference. A cut with the car back on track in less than reference x (1 + %) gets
+  --   the slowdown; slower (lost time), no slowdown. No reference yet: slowdown as before.
+  cutGainTolerance = 6,
+
+  -- ------------------------------------------------------------
+  -- 5.3 Penalty control: cut zone 2 (category SD2), same meaning as zone 1
+  -- ------------------------------------------------------------
+  cutZone2Start = 0.81,
+  cutZone2End = 0.91,
+  practiceCutZone2Penalty = 'SLOW DOWN',
+  qualifyCutZone2Penalty = 'SLOW DOWN',
+  raceCutZone2Penalty = 'SLOW DOWN',
+  practiceCutZone2PenaltyParam = 0,
+  qualifyCutZone2PenaltyParam = 0,
+  raceCutZone2PenaltyParam = 0,
+  cutZone2SlowdownDeadline = 10,
+  cutZone2MaxWheelsOut = 3,
+  cutZone2SlowdownMaxGas = 0.1,
+  cutZone2GainTolerance = 6,
+
+  -- ------------------------------------------------------------
+  -- 5.4 Penalty control: slowdown, both zones
+  -- ------------------------------------------------------------
+  -- Overlapping slowdowns (zone 2 while zone 1 is still running, or the other way round) are merged into one:
+  -- the times add up, with the newest deadline; unpaid, each zone becomes its own DT0.
+  -- <session>SlowdownUnpaidPenalty
+  --   'DT': DT0 of the category (SD1 / SD2). Deadline expired mid-lap: DT0 of the current lap (crossing the line on
+  --         track without serving it = DSQ). Expired at the line, or inside the pit lane: DT0 of the next lap.
+  --   'DSQ': black flag at once. 'NONE': nothing.
+  practiceSlowdownUnpaidPenalty = 'DT',
+  qualifySlowdownUnpaidPenalty = 'DT',
+  raceSlowdownUnpaidPenalty = 'DT',
+  -- cutSpinAngle: degrees between where the car points and where it moves; above it during the cut = spin, cut discarded
+  cutSpinAngle = 90,
+  -- <session>SlowdownUnpaidParam: not used (the DT is always DT0).
+  practiceSlowdownUnpaidParam = 0,
+  qualifySlowdownUnpaidParam = 0,
+  raceSlowdownUnpaidParam = 0,
+  -- pitSlowdownDeadline / pitSlowdownMaxGas: not used.
+  pitSlowdownDeadline = 0,
+  pitSlowdownMaxGas = 0,
 })
 
 
@@ -243,8 +265,6 @@ local TEXTS = {
   rcTitle = 'RACE CONTROL',
   -- opening of the panel (panel/intro.lua): name and version
   introText = 'RACE CONTROL  v' .. RC_VERSION,
-  -- light of the light test
-  introLight = '●',
   -- Race Control panel cells
   cellPit = 'PIT WINDOW',
   cellSwap = 'SWAP',
@@ -423,6 +443,7 @@ local state = {
     remaining = nil,      -- seconds left in the ACSM countdown (driver taking the car), at remainingT
     remainingT = 0,
     fromPeers = false,    -- remaining came from the other clients (relay), not from the ACSM message
+    entered = false,      -- this driver took over the car in a driver swap (no panel opening)
     clearUntil = nil,     -- "clear to leave" shown until this clock
     lastNames = {},       -- [carIndex] = last known driver name (other cars)
     left = {},            -- [carIndex] = { sessionID, driver = name code, t = clock } drivers that left a car
@@ -564,6 +585,7 @@ local function onDriverSwapMessage(message)
   local wait = low:match('please wait (%S+) before leaving the pits') or low:match('^free to leave pits in (%S+)')
   if wait then
     local seconds = parseGoDuration(wait)
+    state.swap.entered = true
     if seconds then
       state.swap.remaining = seconds
       state.swap.remainingT = state.ui.clock
@@ -616,6 +638,7 @@ local function onSwapInfo(msg)
     ac.log('race-control: swap relay: same driver reconnected, no countdown')
     return
   end
+  sw.entered = true
   -- Swaps done by this car (the peers already counted this one)
   sw.count = math.max(sw.count, msg.pcSwaps or 0)
   ac.store(SWAP_COUNT_KEY, string.format('%d|%d', sim.currentSessionIndex, sw.count))
@@ -1650,34 +1673,122 @@ local PANEL_CELLS = {
 local PANEL_WIDTH = 520
 
 -- ============================================================
--- Race Control panel: opening
--- Only on the first load on the server: the first time the driver goes out on track, the panel runs a light test
--- like a start tree (the cells light up amber one by one, then all green), then the message line shows the name and
--- version, typed like a typewriter, fading in centered, and leaves sliding to the left. It does not repeat between
--- sessions, on reconnections or on script reloads. After it, the panel is shown only when a cell or the message line
--- has something to show.
+-- Dot matrix text (5 x 7 dots per character), like the display of an old car stereo. Drawn dot by dot, so it looks
+-- the same on every computer (no font file is needed). Unknown characters are drawn as a space.
 -- ============================================================
 
-local INTRO_TREE_STEP = 0.35  -- seconds between two cells lighting up
-local INTRO_TREE_GO = 0.5     -- seconds with all cells green
-local INTRO_TYPE = 1.2        -- seconds typing the text
-local INTRO_FADE_IN = 0.4     -- seconds of the fade in, while typing
-local INTRO_HOLD = 1.5        -- seconds with the whole text
-local INTRO_EXIT = 0.6        -- seconds sliding out to the left
-local INTRO_EXIT_DX = 260     -- px at 1080p covered while sliding out
-local INTRO_TREE_CELLS = 4    -- cells with a title (all but RACE CONTROL)
-local INTRO_TOTAL = INTRO_TREE_STEP * INTRO_TREE_CELLS + INTRO_TREE_GO + INTRO_TYPE + INTRO_HOLD + INTRO_EXIT
+local DOT_MATRIX_GLYPHS = {
+  ['0'] = { '.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.' },
+  ['1'] = { '..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.' },
+  ['2'] = { '.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####' },
+  ['3'] = { '#####', '...#.', '..#..', '...#.', '....#', '#...#', '.###.' },
+  ['4'] = { '...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.' },
+  ['5'] = { '#####', '#....', '####.', '....#', '....#', '#...#', '.###.' },
+  ['6'] = { '..##.', '.#...', '#....', '####.', '#...#', '#...#', '.###.' },
+  ['7'] = { '#####', '....#', '...#.', '..#..', '.#...', '.#...', '.#...' },
+  ['8'] = { '.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.' },
+  ['9'] = { '.###.', '#...#', '#...#', '.####', '....#', '...#.', '.##..' },
+  A = { '.###.', '#...#', '#...#', '#...#', '#####', '#...#', '#...#' },
+  B = { '####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.' },
+  C = { '.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.' },
+  D = { '###..', '#..#.', '#...#', '#...#', '#...#', '#..#.', '###..' },
+  E = { '#####', '#....', '#....', '####.', '#....', '#....', '#####' },
+  F = { '#####', '#....', '#....', '####.', '#....', '#....', '#....' },
+  G = { '.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.####' },
+  H = { '#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#' },
+  I = { '.###.', '..#..', '..#..', '..#..', '..#..', '..#..', '.###.' },
+  J = { '..###', '...#.', '...#.', '...#.', '...#.', '#..#.', '.##..' },
+  K = { '#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#' },
+  L = { '#....', '#....', '#....', '#....', '#....', '#....', '#####' },
+  M = { '#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#' },
+  N = { '#...#', '#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#' },
+  O = { '.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.' },
+  P = { '####.', '#...#', '#...#', '####.', '#....', '#....', '#....' },
+  Q = { '.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#' },
+  R = { '####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#' },
+  S = { '.####', '#....', '#....', '.###.', '....#', '....#', '####.' },
+  T = { '#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..' },
+  U = { '#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.' },
+  V = { '#...#', '#...#', '#...#', '#...#', '#...#', '.#.#.', '..#..' },
+  W = { '#...#', '#...#', '#...#', '#.#.#', '#.#.#', '#.#.#', '.#.#.' },
+  X = { '#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#' },
+  Y = { '#...#', '#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..' },
+  Z = { '#####', '....#', '...#.', '..#..', '.#...', '#....', '#####' },
+  ['.'] = { '.....', '.....', '.....', '.....', '.....', '.##..', '.##..' },
+  ['-'] = { '.....', '.....', '.....', '#####', '.....', '.....', '.....' },
+}
+local DOT_MATRIX_COLS = 6   -- 5 dots + 1 dot of spacing per character
+
+local DotMatrix = {}
+
+-- Width of a text in dot-pitch units (multiply by the pitch in px)
+function DotMatrix.width(text)
+  return #text * DOT_MATRIX_COLS - 1
+end
+
+-- Draws the text with its top-left corner at pos. pitch: distance between dots (px); on: lit dots; off: unlit dots
+-- of each character cell (nil = not drawn)
+function DotMatrix.draw(text, pos, pitch, on, off)
+  local size = pitch * 0.72
+  local up = text:upper()
+  for i = 1, #up do
+    local glyph = DOT_MATRIX_GLYPHS[up:sub(i, i)]
+    local x0 = pos.x + (i - 1) * DOT_MATRIX_COLS * pitch
+    for row = 1, 7 do
+      local line = glyph and glyph[row] or '.....'
+      for col = 1, 5 do
+        local lit = line:sub(col, col) == '#'
+        local color = lit and on or off
+        if color then
+          local x = x0 + (col - 1) * pitch
+          local y = pos.y + (row - 1) * pitch
+          ui.drawRectFilled(vec2(x, y), vec2(x + size, y + size), color, size * 0.3)
+        end
+      end
+    end
+  end
+end
+
+-- ============================================================
+-- Race Control panel: opening
+-- Only on the first load on the server, when the driver leaves the setup menu (the pits menu with the Drive button):
+-- a bulb check like the dashboard of a car (every cell lights up at the same time, with no value, for a moment, then
+-- goes off), then the message line shows the name and version in dot matrix, like the display of an old car stereo:
+-- it fades in centered, then scrolls to the left, disappearing at the edge of the panel, until it is all gone. It
+-- does not repeat between sessions, on reconnections or on script reloads, and there is none for a driver taking over
+-- the car in a driver swap (the session is already running): if the swap is known only during the opening, it
+-- stops there. After it,
+-- the panel is shown only when a cell or the message line has something to show.
+-- ============================================================
+
+local INTRO_BULB = 2.0        -- seconds with every cell lit (bulb check)
+local INTRO_GAP = 0.3         -- seconds with every cell off before the text
+local INTRO_FADE_IN = 0.6     -- seconds of the fade in
+local INTRO_HOLD = 0.8        -- seconds standing still before scrolling
+local INTRO_SCROLL_SPEED = 180  -- px per second at 1080p
+local INTRO_DOT_PITCH = 3     -- px at 1080p between two dots of the dot matrix
+local INTRO_TEXT_AREA = PANEL_WIDTH - 32  -- px at 1080p of the message line inside the panel
+-- Text start (centered in the message line) and the scroll needed to take it all out of the panel, px at 1080p
+local INTRO_TEXT_W = DotMatrix.width(TEXTS.introText) * INTRO_DOT_PITCH
+local INTRO_TEXT_X = (INTRO_TEXT_AREA - INTRO_TEXT_W) / 2
+local INTRO_SCROLL = (16 + INTRO_TEXT_X + INTRO_TEXT_W) / INTRO_SCROLL_SPEED
+local INTRO_TOTAL = INTRO_BULB + INTRO_GAP + INTRO_FADE_IN + INTRO_HOLD + INTRO_SCROLL
 
 -- Shown once while the game is running (ac.store survives reconnections and script reloads)
 local INTRO_SHOWN_KEY = 'race-control.intro'
 
 local Intro = { t0 = nil, done = ac.load(INTRO_SHOWN_KEY) == 1 }
 
--- Starts on the first frame with the car out of the pit lane; ends after INTRO_TOTAL
-function Intro.update(car)
+-- Starts on the first frame out of the setup menu; ends after INTRO_TOTAL
+function Intro.update()
   if Intro.done then return end
+  if state.swap.entered then
+    Intro.done = true
+    ac.store(INTRO_SHOWN_KEY, 1)
+    return
+  end
   if not Intro.t0 then
-    if not car.isInPitlane then
+    if not sim.isInMainMenu then
       Intro.t0 = state.ui.clock
       ac.store(INTRO_SHOWN_KEY, 1)
     end
@@ -1687,28 +1798,26 @@ function Intro.update(car)
 end
 
 -- Current frame of the opening (reads only its own state): nil when not running; otherwise
--- { lit = cells lit (1..4), go = all green } during the light test, or
--- { text = typed part, full = whole text, alpha = 0..1, dx = px at 1080p (negative = to the left) }
+-- { bulb = true } during the bulb check, { off = true } in the gap, or
+-- { text, x = px at 1080p from the start of the message line (goes negative while scrolling), pitch, alpha }
 function Intro.frame()
   if Intro.done or not Intro.t0 then return nil end
   local t = state.ui.clock - Intro.t0
-  local treeEnd = INTRO_TREE_STEP * INTRO_TREE_CELLS + INTRO_TREE_GO
-  if t < treeEnd then
-    return { lit = math.min(math.floor(t / INTRO_TREE_STEP) + 1, INTRO_TREE_CELLS),
-      go = t >= INTRO_TREE_STEP * INTRO_TREE_CELLS }
+  if t < INTRO_BULB then return { bulb = true } end
+  t = t - INTRO_BULB
+  if t < INTRO_GAP then return { off = true } end
+  t = t - INTRO_GAP
+  local text = { text = TEXTS.introText, x = INTRO_TEXT_X, pitch = INTRO_DOT_PITCH, alpha = 1 }
+  if t < INTRO_FADE_IN then
+    text.alpha = t / INTRO_FADE_IN
+    return text
   end
-  local full = TEXTS.introText
-  t = t - treeEnd
-  if t < INTRO_TYPE then
-    return { text = full:sub(1, math.floor(#full * t / INTRO_TYPE)), full = full,
-      alpha = math.min(t / INTRO_FADE_IN, 1), dx = 0 }
-  end
-  t = t - INTRO_TYPE
-  if t < INTRO_HOLD then return { text = full, full = full, alpha = 1, dx = 0 } end
+  t = t - INTRO_FADE_IN
+  if t < INTRO_HOLD then return text end
   t = t - INTRO_HOLD
-  if t < INTRO_EXIT then
-    local k = t / INTRO_EXIT
-    return { text = full, full = full, alpha = 1 - k, dx = -INTRO_EXIT_DX * k }
+  if t < INTRO_SCROLL then
+    text.x = INTRO_TEXT_X - INTRO_SCROLL_SPEED * t
+    return text
   end
   return nil
 end
@@ -1722,8 +1831,6 @@ end
 local FONT_TITLE = 'Segoe UI;Weight=Bold'
 local FONT_TEXT = 'Segoe UI;Weight=SemiBold'
 local FONT_MONO = 'Consolas'
--- Typewriter font of the opening (panel/intro.lua)
-local FONT_TYPE = 'Courier New;Weight=Bold'
 local COLOR_TITLE = rgbm(0.96, 0.96, 0.96, 1)
 local COLOR_TEXT = rgbm(1, 0.85, 0.25, 1)
 local COLOR_SWAP = rgbm(0.45, 1, 0.55, 1)
@@ -1844,23 +1951,18 @@ function script.drawUI()
   if intro or anyOn or text then
     local p1 = vec2(x, yMsg)
     local p2 = vec2(x + boxW, yMsg + msgH)
-    drawPanel(p1, p2, intro and BORDER_BASE or Panel.frameColor(), s)
+    drawPanel(p1, p2, intro and (intro.off and COLOR_CELL_OFF or BORDER_BASE) or Panel.frameColor(), s)
     local cx = p1.x + 12 * s
     local innerW = boxW - 20 * s
-    local lit = 0
     for i, c in ipairs(PANEL_CELLS) do
       local cw = cellW[i] or (innerW - fixedW)
       if i > 1 then
         ui.drawSimpleLine(vec2(px(cx), px(p1.y + 6 * s)), vec2(px(cx), px(p1.y + 32 * s)), rgbm(1, 1, 1, 0.12), 1)
       end
       local cell = values[i]
-      -- Opening, light test: the titled cells light up one by one (amber), then all green
-      if intro and intro.lit and c.title then
-        lit = lit + 1
-        cell = lit <= intro.lit and { value = TEXTS.introLight, color = intro.go and 'green' or 'yellow' } or nil
-      elseif intro and c.title then
-        cell = nil
-      end
+      -- Opening: during the bulb check every title is lit and there is no value; otherwise the cells are off
+      local bulb = intro and intro.bulb
+      if intro then cell = (not c.title and not intro.off) and cell or nil end
       local function put(t, font, size, y, col)
         ui.pushDWriteFont(font)
         local tw = ui.measureDWriteText(t, size).x
@@ -1869,7 +1971,7 @@ function script.drawUI()
         ui.popDWriteFont()
       end
       if c.title then
-        put(c.title, FONT_TITLE, 10 * s, p1.y + 5 * s, cell and PANEL_COLORS.dim or COLOR_CELL_OFF)
+        put(c.title, FONT_TITLE, 10 * s, p1.y + 5 * s, (cell or bulb) and PANEL_COLORS.dim or COLOR_CELL_OFF)
         if cell then put(cell.value, FONT_TITLE, 13 * s, p1.y + 17 * s, PANEL_COLORS[cell.color]) end
       elseif cell then
         put(cell.value, FONT_TITLE, 15 * s, p1.y + 10 * s, PANEL_COLORS[cell.color])
@@ -1878,13 +1980,12 @@ function script.drawUI()
     end
     drawSeparator(p1, p2, p1.y + 36 * s, s)
     if intro and intro.text then
-      -- Opening, name and version: typewriter, centered on the whole text, fading in; leaves sliding to the left
-      local size = 14 * s
-      ui.pushDWriteFont(FONT_TYPE)
-      local fw = ui.measureDWriteText(intro.full, size).x
-      local tx = p1.x + (boxW - fw) / 2 + intro.dx * s
-      ui.dwriteDrawText(intro.text, size, vec2(px(tx), px(p1.y + 43 * s)), rgbm(0.96, 0.96, 0.96, intro.alpha))
-      ui.popDWriteFont()
+      -- Opening, name and version in dot matrix: drawn only inside the message line of the panel, so it disappears
+      -- at the edge of the panel while scrolling to the left
+      ui.pushClipRect(vec2(p1.x + 8 * s, p1.y + 37 * s), vec2(p2.x - 8 * s, p2.y - 3 * s))
+      DotMatrix.draw(intro.text, vec2(p1.x + (16 + intro.x) * s, p1.y + 42 * s), intro.pitch * s,
+        rgbm(0.96, 0.96, 0.96, intro.alpha), rgbm(1, 1, 1, 0.06 * intro.alpha))
+      ui.popClipRect()
     elseif text and not intro then
       ui.pushDWriteFont(FONT_TEXT)
       ui.setCursor(vec2(math.floor(p1.x + 16 * s), math.floor(p1.y + 41 * s)))
@@ -2041,7 +2142,7 @@ function script.update(dt)
   updateSwapRelay()
   publishOwnList(car)
   Panel.updatePit(car)
-  Intro.update(car)
+  Intro.update()
   -- Penalty list of the previous driver (driver swap): taken over only if this driver has none
   if sw.pendingList then
     local items = sw.pendingList
