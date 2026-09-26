@@ -111,7 +111,8 @@ local cfg = ac.configValues({
   driverSwapMinSeconds = 120,
   -- driverSwapRequired: number of mandatory driver swaps in the race (same as "Minimum number of driver swaps" in ACSM).
   --   Empty = not informed: the SWAP cell of the Race Control panel stays off. 0 = driver swaps allowed, none
-  --   mandatory (valid server setup): the cell shows done | 0. Only with driverSwapEnabled = 1, race sessions.
+  --   mandatory (valid server setup): the cell shows done | 0. The cell is shown whenever the panel is on, but it
+  --   turns the panel on only inside the pit lane. Only with driverSwapEnabled = 1, race sessions.
   driverSwapRequired = '',
 
   -- ------------------------------------------------------------
@@ -1570,7 +1571,8 @@ end
 -- the value is off; with something to show, the title is gray and the value lights up in its color.
 -- Each cell is its own function, reads only its own state and changes nothing (safe to call any number of times).
 -- Shared by the whole panel: the message line and the frame color.
--- A cell returns nil (off) or { value = text, color = key of PANEL_COLORS }.
+-- A cell returns nil (off) or { value = text, color = key of PANEL_COLORS, quiet = true when it is shown while the
+-- panel is on but does not turn the panel on by itself }.
 -- ============================================================
 
 local Panel = {}
@@ -1594,15 +1596,17 @@ function Panel.cellPit()
   return { value = TEXTS.pitMissed, color = 'red' }
 end
 
--- SWAP: driver swaps, done | required (0 required = swaps allowed, none mandatory). Off when driver swaps are disabled
--- or the required number is not informed. Gray during the race; lit only inside the pit lane (the countdown, WAIT and
--- GO stay in the driver swap panel).
+-- SWAP: driver swaps, done | required (0 required = swaps allowed, none mandatory: done | 0). Off when driver swaps
+-- are disabled or the required number is not informed. Always shown while the panel is on, but it turns the panel on
+-- only inside the pit lane, where it lights up green; on track it is gray and quiet (the countdown, WAIT and GO stay
+-- in the driver swap panel).
 function Panel.cellSwap()
-  if not config.swapEnabled or config.swapRequired == nil or sim.raceSessionType ~= ac.SessionType.Race then
+  if not config.swapEnabled or not config.swapRequired or sim.raceSessionType ~= ac.SessionType.Race then
     return nil
   end
   local lit = ac.getCar(0).isInPitlane
-  return { value = string.format(TEXTS.swapCount, state.swap.count, config.swapRequired), color = lit and 'green' or 'dim' }
+  return { value = string.format(TEXTS.swapCount, state.swap.count, config.swapRequired), color = lit and 'green' or 'dim',
+    quiet = not lit }
 end
 
 -- TRACK: CODE-80 (VSC / SC / CODE-80) or the flag shown to the driver
@@ -1993,7 +1997,7 @@ function script.drawUI()
   local values, anyOn = {}, false
   for i, c in ipairs(PANEL_CELLS) do
     values[i] = c.fn()
-    if c.title and values[i] then anyOn = true end
+    if c.title and values[i] and not values[i].quiet then anyOn = true end
   end
   local text, color = Panel.message()
   if intro or anyOn or text then
