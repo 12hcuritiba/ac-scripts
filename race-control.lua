@@ -1992,7 +1992,9 @@ function script.drawUI()
     state.ui.notice = nil
   end
 
-  -- Race Control panel: cells and message first; with nothing to show anywhere (and no opening), no panel at all
+  -- Race Control panel: cells and message first; with nothing to show anywhere (and no opening), no panel at all.
+  -- Before the opening (driver still in the setup menu, before Drive) nothing is shown: the first thing on screen is
+  -- the opening; with no opening (driver swap, already shown), the panel works normally.
   local intro = Intro.frame()
   local values, anyOn = {}, false
   for i, c in ipairs(PANEL_CELLS) do
@@ -2000,7 +2002,7 @@ function script.drawUI()
     if c.title and values[i] and not values[i].quiet then anyOn = true end
   end
   local text, color = Panel.message()
-  if intro or anyOn or text then
+  if intro or (Intro.done and (anyOn or text)) then
     local p1 = vec2(x, yMsg)
     local p2 = vec2(x + boxW, yMsg + msgH)
     local INTRO_BORDERS = { base = BORDER_BASE, yellow = BORDER_YELLOW, blue = BORDER_BLUE, red = BORDER_RED,
