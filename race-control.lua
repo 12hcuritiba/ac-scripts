@@ -26,6 +26,17 @@
 -- Every key below can be set in that section; the value here is the default used when the key is missing.
 -- Session prefixes: practice / qualify / race (the session type reported by the game).
 local cfg = ac.configValues({
+  -- Car controls
+  -- forceCockpit: 1 = the cockpit camera is forced (every cockpitCheckInterval seconds, except with the game paused or
+  --   in a replay); 0 = off. Replaces the separate forcecockpitonline.lua script.
+  forceCockpit = 0,
+  -- cockpitCameraMode: camera forced (0 = cockpit, first person view; ac.CameraMode).
+  cockpitCameraMode = 0,
+  -- cockpitCheckInterval: seconds between checks.
+  cockpitCheckInterval = 0.05,
+  -- cockpitExemptSteamIDs: Steam IDs not forced (for example, Race Control / broadcast), separated by semicolons.
+  cockpitExemptSteamIDs = '',
+
   -- penaltyMode
   --   'CSP': every client checks its own car and applies the penalties in the game (cut zones, DT list, holds,
   --          DSQ). This is the mode the rules document describes.
@@ -153,17 +164,20 @@ local cfg = ac.configValues({
   -- Tow and repair hold (race sessions only): the car is locked in the pits (TeleportToPits) for
   --   back to pits from the track (teleport): raceTowSeconds + repair;
   --   repair chosen in the pit menu (car driven to its pit place): repair.
-  -- repair = raceRepairFactor x (repairBaseSeconds x (repairWeightEngine x engine + repairWeightGearbox x gearbox
-  --          + repairWeightSuspension x suspension) + repairWeightBody x body)
-  --   engine = 1 - engineLifeLeft / 1000 (0..1); gearbox = gearboxDamage (0..1); suspension = sum of the 4 wheels
-  --   (0..1 each); body = sum of the body damage zones in km/h (car.damage). Damage from before the teleport / the pit
-  --   entry. raceTowSeconds = 0 and raceRepairFactor = 0 disable it. With it on, set ENFORCE_BACK_TO_PITS_PENALTY = 0
-  --   in [EXTRA_RULES], or the driver also gets the AC back-to-pits penalty.
+  -- repair = raceRepairFactor x (repairBaseSeconds x (repairWeightEngine x powertrain + repairWeightSuspension x
+  --          suspension) + repairWeightBody x body)
+  -- Only damage from collisions counts: the damage that appears within COLLISION_DAMAGE_WINDOW seconds after a
+  -- collision (ac.onCarCollision). Normal wear (engine life going down with use and revs) is not charged.
+  --   powertrain = engine and gearbox together (the gearbox cannot be set by the script and breaks at 1): each frame,
+  --     the larger of the engine damage increase (engineLifeLeft / 1000) and the gearbox damage increase;
+  --   suspension = increase of the 4 wheels (0..1 each); body = increase of the body damage zones in km/h (car.damage).
+  -- Counted until the car is repaired (the hold). raceTowSeconds = 0 and raceRepairFactor = 0 disable it. With it on,
+  -- set ENFORCE_BACK_TO_PITS_PENALTY = 0 in [EXTRA_RULES], or the driver also gets the AC back-to-pits penalty.
   raceTowSeconds = 120,
   raceRepairFactor = 1.5,
   repairBaseSeconds = 180,
+  -- repairWeightEngine: weight of the powertrain (engine + gearbox)
   repairWeightEngine = 1.0,
-  repairWeightGearbox = 0.75,
   repairWeightSuspension = 0.5,
   repairWeightBody = 0.25,
 })
@@ -283,7 +297,6 @@ local config = {
     factor = tonumber(cfg.raceRepairFactor) or 0,
     base = tonumber(cfg.repairBaseSeconds) or 0,
     wEngine = tonumber(cfg.repairWeightEngine) or 0,
-    wGearbox = tonumber(cfg.repairWeightGearbox) or 0,
     wSuspension = tonumber(cfg.repairWeightSuspension) or 0,
     wBody = tonumber(cfg.repairWeightBody) or 0,
   },
@@ -373,6 +386,10 @@ local state = {
     relay = {},           -- pending SWAP_INFO sends: { target, car, driver, swaps, leftT, dueT }
     count = 0,            -- driver swaps done by this car in the race (SWAP cell)
     carSwaps = {},        -- [carIndex] = swaps done by other cars, seen by this client (sent to the next driver)
+    carLists = {},        -- [carIndex] = penalty list published by the driver of another car when parked
+    listSent = nil,       -- signature of the own list last published while parked
+    listApplied = false,  -- penalty list of the previous driver already received (this session)
+    pendingList = nil,    -- received list waiting to be applied in script.update
   },
   code80 = nil,           -- CODE-80 in progress: 'VSC', 'SC' or 'CODE-80' (from the server chat); nil = green
   code80Ended = false,    -- green flag received: the rules deferred during CODE-80 run in the next frame
@@ -380,7 +397,9 @@ local state = {
   pit = { done = false }, -- mandatory pit stop done inside the pit window (PIT WINDOW cell)
   -- tow and repair hold
   tow = {
-    damage = nil,         -- damage read in the last frame outside the pit lane
+    damage = nil,         -- collision damage not repaired yet: { powertrain, suspension, body }
+    lastRead = nil,       -- damage read in the previous frame outside the pit lane
+    collisionUntil = -1,  -- damage increases until this clock come from a collision
     jumpPending = false,  -- teleport from the track to process in the next frame
     ownJumpUntil = -1,    -- teleports until this clock are the script's own holds
     repairDone = false,   -- repair hold already applied in this pit stop
@@ -592,15 +611,94 @@ ac.onClientConnected(function(carIndex, sessionID)
   sw.left[carIndex] = nil
   -- Only while the swap can still be running
   if state.ui.clock - rec.t > config.swapMinSeconds then return end
-  -- A different driver in the car: one more swap for it
-  if nameCode(ac.getDriverName(carIndex)) ~= rec.driver then
-    sw.carSwaps[carIndex] = (sw.carSwaps[carIndex] or 0) + 1
+  -- A different driver in the car: one more swap for it. Same driver (reconnection): no swap, nothing carried
+  if nameCode(ac.getDriverName(carIndex)) == rec.driver then
+    sw.carLists[carIndex] = nil
+    return
   end
+  sw.carSwaps[carIndex] = (sw.carSwaps[carIndex] or 0) + 1
   for _, delay in ipairs(SWAP_RELAY_DELAYS) do
     sw.relay[#sw.relay + 1] = { target = sessionID, car = sessionID, driver = rec.driver, leftT = rec.t,
-      swaps = sw.carSwaps[carIndex] or 0, dueT = state.ui.clock + delay }
+      swaps = sw.carSwaps[carIndex] or 0, list = sw.carLists[carIndex], dueT = state.ui.clock + delay }
   end
 end)
+
+local sendPenaltyList
+-- Penalty list carried to the next driver (penalties belong to the car). The driver parked at the pit place publishes
+-- the list; every other client keeps the last list of each car and, when a different driver enters that car, sends
+-- it only to the new driver together with SWAP_INFO. Fixed size: up to PENALTY_LIST_MAX items, category code + laps.
+local PENALTY_LIST_MAX = 4
+local CAT_CODES = { PAC = 1, SD1 = 2, SD2 = 3 }
+local CAT_NAMES = { 'PAC', 'SD1', 'SD2' }
+
+local function applyPenaltyList(msg)
+  local sw = state.swap
+  if not config.swapEnabled or sim.raceSessionType ~= ac.SessionType.Race then return end
+  if msg.pcCar ~= ac.getCar(0).sessionID or sw.listApplied then return end
+  sw.listApplied = true
+  local items = {}
+  for i = 1, math.min(msg.pcCount, PENALTY_LIST_MAX) do
+    local cat = CAT_NAMES[msg['pcCat' .. i]]
+    if cat then items[#items + 1] = { cat = cat, laps = msg['pcLaps' .. i] } end
+  end
+  -- Applied in script.update, where the list functions are available
+  if #items > 0 then sw.pendingList = items end
+end
+
+local penaltyListLayout = {
+  ac.StructItem.key('12hcuritiba.race-control.list'),
+  pcCar = ac.StructItem.uint8(),
+  pcCount = ac.StructItem.uint8(),
+  pcTarget = ac.StructItem.uint8(),   -- 255 = published by the driver of pcCar; else relayed to this session
+}
+for i = 1, PENALTY_LIST_MAX do
+  penaltyListLayout['pcCat' .. i] = ac.StructItem.uint8()
+  penaltyListLayout['pcLaps' .. i] = ac.StructItem.uint8()
+end
+local sendPenaltyListEvent = ac.OnlineEvent(penaltyListLayout, function(sender, msg)
+  if sender and sender.index == 0 then return end
+  if msg.pcTarget == 255 then
+    -- Published by the driver of another car: kept for the next driver of that car
+    if sender and config.swapEnabled then
+      local list = { count = math.min(msg.pcCount, PENALTY_LIST_MAX) }
+      for i = 1, list.count do list[i] = { cat = msg['pcCat' .. i], laps = msg['pcLaps' .. i] } end
+      state.swap.carLists[sender.index] = list
+    end
+  else
+    applyPenaltyList(msg)
+  end
+end, nil, nil, { processPostponed = true })
+
+sendPenaltyList = function(list, car, target)
+  local msg = { pcCar = car, pcCount = list.count, pcTarget = target and 0 or 255 }
+  for i = 1, list.count do
+    msg['pcCat' .. i] = list[i].cat
+    msg['pcLaps' .. i] = list[i].laps
+  end
+  sendPenaltyListEvent(msg, false, target)
+end
+
+-- Driver parked at the pit place in a race: publishes the own list (again if it changes while parked)
+local function publishOwnList(car)
+  local sw = state.swap
+  if not config.swapEnabled or sim.raceSessionType ~= ac.SessionType.Race or not car.isInPit then
+    sw.listSent = nil
+    return
+  end
+  local list = { count = 0 }
+  local sig = {}
+  for _, it in ipairs(state.list.items) do
+    if list.count < PENALTY_LIST_MAX and CAT_CODES[it.cat] then
+      list.count = list.count + 1
+      list[list.count] = { cat = CAT_CODES[it.cat], laps = math.max(it.laps, 0) }
+      sig[#sig + 1] = it.cat .. it.laps
+    end
+  end
+  local signature = table.concat(sig, ',')
+  if sw.listSent == signature then return end
+  sw.listSent = signature
+  sendPenaltyList(list, car.sessionID, nil)
+end
 
 -- Sends the scheduled SWAP_INFO messages and keeps the last known name of each driver
 local function updateSwapRelay()
@@ -618,6 +716,7 @@ local function updateSwapRelay()
       local elapsed = math.min(math.floor((clock - r.leftT) * 10 + 0.5), 65535)
       sendSwapInfo({ pcType = MSG_SWAP_INFO, pcCar = r.car, pcDriver = r.driver, pcElapsed = elapsed,
         pcSwaps = math.min(r.swaps, 255) }, false, r.target)
+      if r.list and r.list.count > 0 then sendPenaltyList(r.list, r.car, r.target) end
     end
   end
 end
@@ -825,6 +924,13 @@ local function applyHold(long)
   rcLog(string.format('Hold %d s', seconds), reason)
 end
 
+-- Seconds after a collision in which damage increases are charged as collision damage
+local COLLISION_DAMAGE_WINDOW = 1.5
+
+ac.onCarCollision(0, function()
+  state.tow.collisionUntil = state.ui.clock + COLLISION_DAMAGE_WINDOW
+end)
+
 -- Damage read from the car (see the tow and repair keys)
 local function readDamage(car)
   local body, suspension = 0, 0
@@ -838,11 +944,24 @@ local function readDamage(car)
   }
 end
 
+-- Adds the collision damage of this frame (only inside the window after a collision)
+local function updateCollisionDamage(car)
+  local tw = state.tow
+  local cur = readDamage(car)
+  local prev = tw.lastRead
+  tw.lastRead = cur
+  if not prev or state.ui.clock > tw.collisionUntil then return end
+  local d = tw.damage or { powertrain = 0, suspension = 0, body = 0 }
+  d.powertrain = d.powertrain + math.max(cur.engine - prev.engine, cur.gearbox - prev.gearbox, 0)
+  d.suspension = d.suspension + math.max(cur.suspension - prev.suspension, 0)
+  d.body = d.body + math.max(cur.body - prev.body, 0)
+  tw.damage = d
+end
+
 local function repairSeconds(d)
   local t = config.tow
   if not d then return 0 end
-  local s = t.factor * (t.base * (t.wEngine * d.engine + t.wGearbox * d.gearbox + t.wSuspension * d.suspension)
-    + t.wBody * d.body)
+  local s = t.factor * (t.base * (t.wEngine * d.powertrain + t.wSuspension * d.suspension) + t.wBody * d.body)
   return math.max(math.floor(s + 0.5), 0)
 end
 
@@ -851,13 +970,15 @@ local function applyTowHold(tow, damage, reason)
   local repair = repairSeconds(damage)
   local seconds = tow + repair
   state.tow.repairDone = true
+  -- The car leaves the hold repaired: collision damage counted from zero again
+  state.tow.damage = nil
   if seconds <= 0 then return end
   local text = tow > 0 and string.format('Tow %s + Repair %s', mmss(tow), mmss(repair))
     or string.format('Repair %s', mmss(repair))
   startHold(seconds, text)
-  local d = damage or { engine = 0, gearbox = 0, suspension = 0, body = 0 }
-  ac.log(string.format('race-control: tow hold %d s (tow %d, repair %d; engine %.3f gearbox %.3f suspension %.3f'
-    .. ' body %.1f km/h)', seconds, tow, repair, d.engine, d.gearbox, d.suspension, d.body))
+  local d = damage or { powertrain = 0, suspension = 0, body = 0 }
+  ac.log(string.format('race-control: tow hold %d s (tow %d, repair %d; collision damage: powertrain %.3f'
+    .. ' suspension %.3f body %.1f km/h)', seconds, tow, repair, d.powertrain, d.suspension, d.body))
   rcLog(string.format('Hold %d s', seconds), string.format('%s - tow %d s + repair %d s', reason, tow, repair))
 end
 
@@ -1033,7 +1154,11 @@ function Rules.tick(inPit, lineFrame, g)
     head = l.items[1]
     if not head or l.inGameItem == head then return end
   end
-  l.written = math.max(head.laps, 0) + 1
+  -- One lap more than the rule in the game: the game disqualifies by itself a drive-through with 1 lap left that
+  -- crosses the line unpaid, and labels it "jump start" (setCarPenalty has no reason; log 25/09 06:54). With one lap
+  -- more, the game never gets there and the DSQ is always this script's (rule 6), with its own message. The game
+  -- alert shows one lap more than the Race Control panel; the panel is the reference.
+  l.written = math.max(head.laps, 0) + 2
   physics.setCarPenalty(MANDATORY_PITS, l.written)
   l.wrote = true
   l.inGameItem = head
@@ -1483,6 +1608,8 @@ local COLOR_LIFT_SLOW = rgbm(0.2, 0.8, 0.3, 0.35)
 local COLOR_DIM = rgbm(0.6, 0.63, 0.65, 1)
 -- Race Control panel: dark title of a cell with nothing to show; value colors
 local COLOR_CELL_OFF = rgbm(0.23, 0.25, 0.27, 1)
+-- Frame of the panel with nothing to show at all
+local COLOR_PANEL_OFF = rgbm(0.23, 0.25, 0.27, 1)
 local PANEL_COLORS = {
   title = rgbm(0.96, 0.96, 0.96, 1), dim = rgbm(0.6, 0.63, 0.65, 1), yellow = rgbm(1, 0.85, 0.25, 1),
   red = rgbm(1, 0.3, 0.3, 1), blue = rgbm(0.56, 0.7, 1, 1), green = rgbm(0.45, 1, 0.55, 1),
@@ -1571,7 +1698,8 @@ function script.drawUI()
   local msgH, sdH = math.floor(66 * s), math.floor(56 * s)
   local gap = math.floor(6 * s)
   local x = math.floor(w * 0.5 - boxW * 0.5)
-  local yMsg = math.floor(h * 0.18)
+  -- 10 px lower than 18% of the height: clear of the AC virtual mirror
+  local yMsg = math.floor(h * 0.18 + 10 * s)
   local ySd = yMsg + msgH + gap
 
   -- Notice timing (new penalty / server message): ends after its time or when its penalty leaves the list
@@ -1583,7 +1711,15 @@ function script.drawUI()
   do
     local p1 = vec2(x, yMsg)
     local p2 = vec2(x + boxW, yMsg + msgH)
-    drawPanel(p1, p2, Panel.frameColor(), s)
+    -- Cells and message first: with nothing to show anywhere, the RACE CONTROL title and the frame are off too
+    local values, anyOn = {}, false
+    for i, c in ipairs(PANEL_CELLS) do
+      values[i] = c.fn()
+      if c.title and values[i] then anyOn = true end
+    end
+    local text, color = Panel.message()
+    local idle = not anyOn and not text
+    drawPanel(p1, p2, idle and COLOR_PANEL_OFF or Panel.frameColor(), s)
     local cx = p1.x + 12 * s
     local innerW = boxW - 20 * s
     for i, c in ipairs(PANEL_CELLS) do
@@ -1591,7 +1727,7 @@ function script.drawUI()
       if i > 1 then
         ui.drawSimpleLine(vec2(px(cx), px(p1.y + 6 * s)), vec2(px(cx), px(p1.y + 32 * s)), rgbm(1, 1, 1, 0.12), 1)
       end
-      local cell = c.fn()
+      local cell = values[i]
       local function put(text, font, size, y, color)
         ui.pushDWriteFont(font)
         local tw = ui.measureDWriteText(text, size).x
@@ -1603,12 +1739,11 @@ function script.drawUI()
         put(c.title, FONT_TITLE, 10 * s, p1.y + 5 * s, cell and PANEL_COLORS.dim or COLOR_CELL_OFF)
         if cell then put(cell.value, FONT_TITLE, 13 * s, p1.y + 17 * s, PANEL_COLORS[cell.color]) end
       elseif cell then
-        put(cell.value, FONT_TITLE, 15 * s, p1.y + 10 * s, PANEL_COLORS[cell.color])
+        put(cell.value, FONT_TITLE, 15 * s, p1.y + 10 * s, idle and COLOR_CELL_OFF or PANEL_COLORS[cell.color])
       end
       cx = cx + cw
     end
     drawSeparator(p1, p2, p1.y + 36 * s, s)
-    local text, color = Panel.message()
     if text then
       ui.pushDWriteFont(FONT_TEXT)
       ui.setCursor(vec2(math.floor(p1.x + 16 * s), math.floor(p1.y + 41 * s)))
@@ -1696,6 +1831,33 @@ function script.drawUI()
   end
 end
 
+-- ============================================================
+-- Car controls: cockpit camera forced by the server (key forceCockpit)
+-- ============================================================
+
+local CarControls = {
+  enabled = tonumber(cfg.forceCockpit) == 1,
+  mode = tonumber(cfg.cockpitCameraMode) or 0,
+  interval = tonumber(cfg.cockpitCheckInterval) or 0.05,
+  exempt = false,
+  timer = 0,
+}
+do
+  local me = tostring(ac.getUserSteamID() or '')
+  for id in tostring(cfg.cockpitExemptSteamIDs or ''):gmatch('[^;]+') do
+    if id:match('^%s*(.-)%s*$') == me and me ~= '' then CarControls.exempt = true end
+  end
+end
+
+function CarControls.update(dt)
+  if not CarControls.enabled or CarControls.exempt then return end
+  if sim.isPaused or sim.isReplayActive then return end
+  CarControls.timer = CarControls.timer + dt
+  if CarControls.timer < CarControls.interval then return end
+  CarControls.timer = 0
+  ac.setCurrentCamera(CarControls.mode)
+end
+
 function script.update(dt)
   local car = ac.getCar(0)
   local l = state.list
@@ -1703,6 +1865,7 @@ function script.update(dt)
   local inPit = car.isInPitlane
   local lapCount = car.lapCount
   state.ui.clock = state.ui.clock + dt
+  CarControls.update(dt)
   if state.hold and state.ui.clock >= state.hold.untilT then state.hold = nil end
 
   -- Driver swap: the stop at the pit place starts the elapsed time of the driver leaving the car (only a stop seen
@@ -1714,7 +1877,24 @@ function script.update(dt)
   if not inPit then sw.remaining = nil end
   sw.prevInPit = parked
   updateSwapRelay()
+  publishOwnList(car)
   Panel.updatePit(car)
+  -- Penalty list of the previous driver (driver swap): taken over only if this driver has none
+  if sw.pendingList then
+    local items = sw.pendingList
+    sw.pendingList = nil
+    if #state.list.items == 0 then
+      local parts = {}
+      for _, it in ipairs(items) do
+        listAdd(it.cat, it.laps)
+        parts[#parts + 1] = it.cat .. ' DT' .. it.laps
+      end
+      ac.log('race-control: swap: penalties of the previous driver taken over: ' .. table.concat(parts, ', '))
+      rcLog('Driver swap', 'Pending penalties taken over: ' .. table.concat(parts, ', '))
+      state.ui.lastSeq = state.list.seq
+      Rules.finalize()
+    end
+  end
   -- Countdown over (ACSM or estimate): clear to leave, even if the ACSM "clear" message is not received
   if sw.remaining and state.ui.clock - sw.remainingT >= sw.remaining then
     sw.remaining = nil
@@ -1740,6 +1920,7 @@ function script.update(dt)
     state.tow.jumpPending = false
     state.tow.repairDone = false
     state.tow.damage = nil
+    state.tow.lastRead = nil
     l.endOfLap = {}
     l.lastLap = lapCount
     l.prevInPit = inPit
@@ -1781,7 +1962,7 @@ function script.update(dt)
       if not dsqActive then Rules.finalize() end
     end
 
-    -- Tow and repair hold (race only): damage from the last frame outside the pit lane
+    -- Tow and repair hold (race only): collision damage counted outside the pit lane
     local tw = state.tow
     local towOn = sim.raceSessionType == ac.SessionType.Race and (config.tow.seconds > 0 or config.tow.factor > 0)
     local rep = car.isRepairing
@@ -1798,7 +1979,9 @@ function script.update(dt)
     tw.prevRepairing = repairing
     if not inPit then
       tw.repairDone = false
-      if towOn then tw.damage = readDamage(car) end
+      if towOn then updateCollisionDamage(car) end
+    else
+      tw.lastRead = nil
     end
 
     updateZonePassages()
