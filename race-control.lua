@@ -266,6 +266,7 @@ local TEXTS = {
   rcTitle = 'RACE CONTROL',
   -- opening of the panel (panel/intro.lua): name and version
   introText = 'RACE CONTROL  v' .. RC_VERSION,
+  introStatus = 'STATUS OK',
   -- Race Control panel cells
   cellPit = 'PIT WINDOW',
   cellSwap = 'SWAP',
@@ -1758,19 +1759,27 @@ end
 -- Only on the first load on the server, when the driver leaves the setup menu (the pits menu with the Drive button;
 -- the menu has to be seen open first, since sim.isInMainMenu is still false in the first frames after the script
 -- loads; if the menu is never seen, it starts when the car moves):
--- a lamp test like the dashboard of a car, here cosmetic: everything lights up at the same time and cycles through all
--- it can show (every cell with each of its values and colors, the frame colors and the message line texts), then the
--- message line shows the name and version in dot matrix, like the display of an old car stereo:
--- it fades in centered, then scrolls to the left, disappearing at the edge of the panel, until it is all gone. It
+-- like the dashboard of a car when it is switched on, here cosmetic, in this order:
+-- 1. wake: the panel fades in with everything off (no border light, no text);
+-- 2. light: the border lights up, then the title, then the cell titles, these still off (dark, no value);
+-- 3. lamp test, as if checking every system: everything cycles through all it can show (every cell with each of its
+--    values and colors, the frame colors and the message line texts);
+-- 4. the message line shows the name and version in dot matrix, like the display of an old car stereo: it fades in
+--    centered, then scrolls to the left, disappearing at the edge of the panel, until it is all gone;
+-- 5. status: STATUS OK in green dot matrix, green frame;
+-- then the panel goes to sleep: hidden, unless there is something to show. It
 -- does not repeat between sessions, on reconnections or on script reloads, and there is none for a driver taking over
 -- the car in a driver swap (the session is already running): if the swap is known only during the opening, it
--- stops there. While the main panel does its lamp test and shows the name, the other boxes do theirs one after the
+-- stops there. From the lamp test on, the other boxes do theirs one after the
 -- other, each in its own place and never on top of each other, with all their content moving: slowdown box (numbers
 -- counting down and pulsing), gain filter box (mark sweeping the bar), driver swap panel (countdown; only when driver
 -- swaps are on). After it, the
 -- panel is shown only when a cell or the message line has something to show.
 -- ============================================================
 
+local INTRO_WAKE = 0.6        -- seconds of the fade in, everything off
+local INTRO_LIGHT_STEP = 0.25 -- seconds between border, title and cell titles lighting up
+local INTRO_LIGHT = 3 * INTRO_LIGHT_STEP
 local INTRO_BULB = 2.4        -- seconds of the lamp test of the main panel
 local INTRO_CYCLE_STEP = 0.3  -- seconds each value stays lit while cycling
 local INTRO_FADE_IN = 0.6     -- seconds of the fade in
@@ -1782,7 +1791,9 @@ local INTRO_TEXT_AREA = PANEL_WIDTH - 32  -- px at 1080p of the message line ins
 local INTRO_TEXT_W = DotMatrix.width(TEXTS.introText) * INTRO_DOT_PITCH
 local INTRO_TEXT_X = (INTRO_TEXT_AREA - INTRO_TEXT_W) / 2
 local INTRO_SCROLL = (16 + INTRO_TEXT_X + INTRO_TEXT_W) / INTRO_SCROLL_SPEED
-local INTRO_TOTAL = INTRO_BULB + INTRO_FADE_IN + INTRO_HOLD + INTRO_SCROLL
+local INTRO_STATUS = 1.5      -- seconds of STATUS OK
+local INTRO_STATUS_X = (INTRO_TEXT_AREA - DotMatrix.width(TEXTS.introStatus) * INTRO_DOT_PITCH) / 2
+local INTRO_TOTAL = INTRO_WAKE + INTRO_LIGHT + INTRO_BULB + INTRO_FADE_IN + INTRO_HOLD + INTRO_SCROLL + INTRO_STATUS
 local INTRO_MOVING_KMH = 5    -- the car moving counts as out of the menu when the menu was never seen
 local INTRO_BOX_STEP = 1.2    -- seconds each secondary box stays lit, one after the other
 
@@ -1844,21 +1855,32 @@ function Intro.update(car)
   end
 end
 
--- Current frame of the opening (reads only its own state): nil when not running; otherwise
--- { bulb = true, t } during the lamp test (values from Intro.lampCell / lampFrame / lampMessage), or
--- { text, x = px at 1080p from the start of the message line (goes negative while scrolling), pitch, alpha };
--- both with box = secondary box lit now ('slowdown', 'lift', 'swap' or nil) and boxK = 0..1 inside its slot
+-- Current frame of the opening (reads only its own state): nil when not running; otherwise, by phase:
+-- { phase = 'wake', alpha } fading in, everything off;
+-- { phase = 'light', title, items } border lit; title and cell titles (off mode) once their flags are true;
+-- { phase = 'bulb', bulb = true, t } lamp test (values from Intro.lampCell / lampFrame / lampMessage);
+-- { phase = 'text' or 'status', text, x = px at 1080p from the start of the message line (goes negative while
+--   scrolling), pitch, alpha }.
+-- From the lamp test on, with box = secondary box lit now ('slowdown', 'lift', 'swap' or nil) and boxK = 0..1 inside
+-- its slot
 function Intro.frame()
   if Intro.done or not Intro.t0 then return nil end
   local t = state.ui.clock - Intro.t0
-  -- Secondary boxes: one after the other from the start of the opening
+  if t < INTRO_WAKE then return { phase = 'wake', alpha = t / INTRO_WAKE } end
+  t = t - INTRO_WAKE
+  if t < INTRO_LIGHT then
+    return { phase = 'light', title = t >= INTRO_LIGHT_STEP, items = t >= 2 * INTRO_LIGHT_STEP }
+  end
+  t = t - INTRO_LIGHT
+  -- Secondary boxes: one after the other from the start of the lamp test
   local boxes = { 'slowdown', 'lift' }
   if config.swapEnabled then boxes[#boxes + 1] = 'swap' end
   local slot = math.floor(t / INTRO_BOX_STEP)
   local box = boxes[slot + 1]
   local boxK = (t - slot * INTRO_BOX_STEP) / INTRO_BOX_STEP   -- 0..1 inside the box slot
-  if t < INTRO_BULB then return { bulb = true, t = t, box = box, boxK = boxK } end
-  local text = { text = TEXTS.introText, x = INTRO_TEXT_X, pitch = INTRO_DOT_PITCH, alpha = 1, box = box, boxK = boxK }
+  if t < INTRO_BULB then return { phase = 'bulb', bulb = true, t = t, box = box, boxK = boxK } end
+  local text = { phase = 'text', text = TEXTS.introText, x = INTRO_TEXT_X, pitch = INTRO_DOT_PITCH, alpha = 1, box = box,
+    boxK = boxK }
   t = t - INTRO_BULB
   if t < INTRO_FADE_IN then
     text.alpha = t / INTRO_FADE_IN
@@ -1870,6 +1892,11 @@ function Intro.frame()
   if t < INTRO_SCROLL then
     text.x = INTRO_TEXT_X - INTRO_SCROLL_SPEED * t
     return text
+  end
+  t = t - INTRO_SCROLL
+  if t < INTRO_STATUS then
+    return { phase = 'status', text = TEXTS.introStatus, x = INTRO_STATUS_X, pitch = INTRO_DOT_PITCH, alpha = 1,
+      box = box, boxK = boxK }
   end
   return nil
 end
@@ -1909,14 +1936,17 @@ local function drawText(text, font, size, pos, color)
   ui.popDWriteFont()
 end
 
-local function drawPanel(p1, p2, border, s)
+-- alpha (optional, default 1): the whole panel fades with it (opening)
+local function drawPanel(p1, p2, border, s, alpha)
+  local a = alpha or 1
   local r = px(8 * s)
   local o = px(3 * s)
-  ui.drawRectFilled(vec2(p1.x + o, p1.y + o), vec2(p2.x + o, p2.y + o), rgbm(0, 0, 0, 0.35), r)
-  ui.drawRectFilled(p1, p2, rgbm(0.04, 0.04, 0.05, 0.9), r)
+  ui.drawRectFilled(vec2(p1.x + o, p1.y + o), vec2(p2.x + o, p2.y + o), rgbm(0, 0, 0, 0.35 * a), r)
+  ui.drawRectFilled(p1, p2, rgbm(0.04, 0.04, 0.05, 0.9 * a), r)
   local i = px(4 * s)
   ui.drawRectFilledMultiColor(vec2(p1.x + i, p1.y + i), vec2(p2.x - i, p2.y - i),
-    rgbm(1, 1, 1, 0.06), rgbm(1, 1, 1, 0.06), rgbm(1, 1, 1, 0), rgbm(1, 1, 1, 0))
+    rgbm(1, 1, 1, 0.06 * a), rgbm(1, 1, 1, 0.06 * a), rgbm(1, 1, 1, 0), rgbm(1, 1, 1, 0))
+  if a < 1 then border = rgbm(border.r, border.g, border.b, (border.mult or 1) * a) end
   ui.drawRectFilled(vec2(p1.x + px(3 * s), p1.y + px(8 * s)), vec2(p1.x + px(7 * s), p2.y - px(8 * s)), border,
     px(2 * s))
   ui.drawRect(p1, p2, border, r, nil, 1.5 * s)
@@ -2007,19 +2037,28 @@ function script.drawUI()
     local p2 = vec2(x + boxW, yMsg + msgH)
     local INTRO_BORDERS = { base = BORDER_BASE, yellow = BORDER_YELLOW, blue = BORDER_BLUE, red = BORDER_RED,
       green = BORDER_GREEN }
-    drawPanel(p1, p2, intro and (intro.bulb and INTRO_BORDERS[Intro.lampFrame(intro.t)] or BORDER_BASE)
-      or Panel.frameColor(), s)
+    local phase = intro and intro.phase
+    local border = Panel.frameColor()
+    if phase == 'wake' then border = COLOR_CELL_OFF
+    elseif phase == 'bulb' then border = INTRO_BORDERS[Intro.lampFrame(intro.t)]
+    elseif phase == 'status' then border = BORDER_GREEN
+    elseif phase then border = BORDER_BASE end
+    drawPanel(p1, p2, border, s, phase == 'wake' and intro.alpha or 1)
+    -- Opening, wake and light: what is not lit yet is not drawn (title; cell titles, dividers and separator)
+    local showTitle = not (phase == 'wake' or (phase == 'light' and not intro.title))
+    local showItems = not (phase == 'wake' or (phase == 'light' and not intro.items))
     local cx = p1.x + 12 * s
     local innerW = boxW - 20 * s
     for i, c in ipairs(PANEL_CELLS) do
       local cw = cellW[i] or (innerW - fixedW)
-      if i > 1 then
+      if i > 1 and showItems then
         ui.drawSimpleLine(vec2(px(cx), px(p1.y + 6 * s)), vec2(px(cx), px(p1.y + 32 * s)), rgbm(1, 1, 1, 0.12), 1)
       end
       local cell = values[i]
       -- Opening: during the lamp test every cell cycles through its values; afterwards the titled cells are off
       local bulb = intro and intro.bulb
       if intro and c.title then cell = bulb and Intro.lampCell(c.title, intro.t) or nil end
+      if not c.title and not showTitle then cell = nil end
       local function put(t, font, size, y, col)
         ui.pushDWriteFont(font)
         local tw = ui.measureDWriteText(t, size).x
@@ -2027,7 +2066,7 @@ function script.drawUI()
         ui.dwriteDrawText(t, size, vec2(px(tx), px(y)), col)
         ui.popDWriteFont()
       end
-      if c.title then
+      if c.title and showItems then
         put(c.title, FONT_TITLE, 10 * s, p1.y + 5 * s, (cell or bulb) and PANEL_COLORS.dim or COLOR_CELL_OFF)
         if cell then put(cell.value, FONT_TITLE, 13 * s, p1.y + 17 * s, PANEL_COLORS[cell.color]) end
       elseif cell then
@@ -2035,13 +2074,14 @@ function script.drawUI()
       end
       cx = cx + cw
     end
-    drawSeparator(p1, p2, p1.y + 36 * s, s)
+    if showItems then drawSeparator(p1, p2, p1.y + 36 * s, s) end
     if intro and intro.text then
       -- Opening, name and version in dot matrix: drawn only inside the message line of the panel, so it disappears
       -- at the edge of the panel while scrolling to the left
       ui.pushClipRect(vec2(p1.x + 8 * s, p1.y + 37 * s), vec2(p2.x - 8 * s, p2.y - 3 * s))
+      local on = phase == 'status' and PANEL_COLORS.green or COLOR_TITLE
       DotMatrix.draw(intro.text, vec2(p1.x + (16 + intro.x) * s, p1.y + 42 * s), intro.pitch * s,
-        rgbm(0.96, 0.96, 0.96, intro.alpha), rgbm(1, 1, 1, 0.06 * intro.alpha))
+        rgbm(on.r, on.g, on.b, intro.alpha), rgbm(1, 1, 1, 0.06 * intro.alpha))
       ui.popClipRect()
     elseif intro and intro.bulb then
       local lampText, lampColor = Intro.lampMessage(intro.t)
