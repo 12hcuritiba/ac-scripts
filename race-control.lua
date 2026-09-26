@@ -1751,18 +1751,21 @@ end
 
 -- ============================================================
 -- Race Control panel: opening
--- Only on the first load on the server, when the driver leaves the setup menu (the pits menu with the Drive button):
+-- Only on the first load on the server, when the driver leaves the setup menu (the pits menu with the Drive button;
+-- the menu has to be seen open first, since sim.isInMainMenu is still false in the first frames after the script
+-- loads; if the menu is never seen, it starts when the car moves):
 -- a bulb check like the dashboard of a car (every cell lights up at the same time, with no value, for a moment, then
 -- goes off), then the message line shows the name and version in dot matrix, like the display of an old car stereo:
 -- it fades in centered, then scrolls to the left, disappearing at the edge of the panel, until it is all gone. It
 -- does not repeat between sessions, on reconnections or on script reloads, and there is none for a driver taking over
 -- the car in a driver swap (the session is already running): if the swap is known only during the opening, it
--- stops there. After it,
--- the panel is shown only when a cell or the message line has something to show.
+-- stops there. While the main panel does its bulb check and shows the name, the other boxes do theirs one after
+-- the other, each in its own place and never on top of each other (frame and title only, no value): slowdown box,
+-- gain filter box (same place as the slowdown box), driver swap panel (when driver swaps are on). After it, the
+-- panel is shown only when a cell or the message line has something to show.
 -- ============================================================
 
 local INTRO_BULB = 2.0        -- seconds with every cell lit (bulb check)
-local INTRO_GAP = 0.3         -- seconds with every cell off before the text
 local INTRO_FADE_IN = 0.6     -- seconds of the fade in
 local INTRO_HOLD = 0.8        -- seconds standing still before scrolling
 local INTRO_SCROLL_SPEED = 180  -- px per second at 1080p
@@ -1772,15 +1775,17 @@ local INTRO_TEXT_AREA = PANEL_WIDTH - 32  -- px at 1080p of the message line ins
 local INTRO_TEXT_W = DotMatrix.width(TEXTS.introText) * INTRO_DOT_PITCH
 local INTRO_TEXT_X = (INTRO_TEXT_AREA - INTRO_TEXT_W) / 2
 local INTRO_SCROLL = (16 + INTRO_TEXT_X + INTRO_TEXT_W) / INTRO_SCROLL_SPEED
-local INTRO_TOTAL = INTRO_BULB + INTRO_GAP + INTRO_FADE_IN + INTRO_HOLD + INTRO_SCROLL
+local INTRO_TOTAL = INTRO_BULB + INTRO_FADE_IN + INTRO_HOLD + INTRO_SCROLL
+local INTRO_MOVING_KMH = 5    -- the car moving counts as out of the menu when the menu was never seen
+local INTRO_BOX_STEP = 1.2    -- seconds each secondary box stays lit, one after the other
 
 -- Shown once while the game is running (ac.store survives reconnections and script reloads)
 local INTRO_SHOWN_KEY = 'race-control.intro'
 
-local Intro = { t0 = nil, done = ac.load(INTRO_SHOWN_KEY) == 1 }
+local Intro = { t0 = nil, done = ac.load(INTRO_SHOWN_KEY) == 1, menuSeen = false }
 
--- Starts on the first frame out of the setup menu; ends after INTRO_TOTAL
-function Intro.update()
+-- Starts when the setup menu closes (or the car moves, if the menu was never seen); ends after INTRO_TOTAL
+function Intro.update(car)
   if Intro.done then return end
   if state.swap.entered then
     Intro.done = true
@@ -1788,7 +1793,9 @@ function Intro.update()
     return
   end
   if not Intro.t0 then
-    if not sim.isInMainMenu then
+    if sim.isInMainMenu then
+      Intro.menuSeen = true
+    elseif Intro.menuSeen or car.speedKmh > INTRO_MOVING_KMH then
       Intro.t0 = state.ui.clock
       ac.store(INTRO_SHOWN_KEY, 1)
     end
@@ -1798,16 +1805,19 @@ function Intro.update()
 end
 
 -- Current frame of the opening (reads only its own state): nil when not running; otherwise
--- { bulb = true } during the bulb check, { off = true } in the gap, or
--- { text, x = px at 1080p from the start of the message line (goes negative while scrolling), pitch, alpha }
+-- { bulb = true } during the bulb check, or
+-- { text, x = px at 1080p from the start of the message line (goes negative while scrolling), pitch, alpha };
+-- both with box = secondary box lit now ('slowdown', 'lift', 'swap' or nil)
 function Intro.frame()
   if Intro.done or not Intro.t0 then return nil end
   local t = state.ui.clock - Intro.t0
-  if t < INTRO_BULB then return { bulb = true } end
+  -- Secondary boxes: one after the other from the start of the opening
+  local boxes = { 'slowdown', 'lift' }
+  if config.swapEnabled then boxes[#boxes + 1] = 'swap' end
+  local box = boxes[math.floor(t / INTRO_BOX_STEP) + 1]
+  if t < INTRO_BULB then return { bulb = true, box = box } end
   t = t - INTRO_BULB
-  if t < INTRO_GAP then return { off = true } end
-  t = t - INTRO_GAP
-  local text = { text = TEXTS.introText, x = INTRO_TEXT_X, pitch = INTRO_DOT_PITCH, alpha = 1 }
+  local text = { text = TEXTS.introText, x = INTRO_TEXT_X, pitch = INTRO_DOT_PITCH, alpha = 1, box = box }
   if t < INTRO_FADE_IN then
     text.alpha = t / INTRO_FADE_IN
     return text
@@ -1951,7 +1961,7 @@ function script.drawUI()
   if intro or anyOn or text then
     local p1 = vec2(x, yMsg)
     local p2 = vec2(x + boxW, yMsg + msgH)
-    drawPanel(p1, p2, intro and (intro.off and COLOR_CELL_OFF or BORDER_BASE) or Panel.frameColor(), s)
+    drawPanel(p1, p2, intro and BORDER_BASE or Panel.frameColor(), s)
     local cx = p1.x + 12 * s
     local innerW = boxW - 20 * s
     for i, c in ipairs(PANEL_CELLS) do
@@ -1962,7 +1972,7 @@ function script.drawUI()
       local cell = values[i]
       -- Opening: during the bulb check every title is lit and there is no value; otherwise the cells are off
       local bulb = intro and intro.bulb
-      if intro then cell = (not c.title and not intro.off) and cell or nil end
+      if intro then cell = (not c.title) and cell or nil end
       local function put(t, font, size, y, col)
         ui.pushDWriteFont(font)
         local tw = ui.measureDWriteText(t, size).x
@@ -2030,6 +2040,33 @@ function script.drawUI()
     ui.dwriteDrawText(mid, 10 * s, vec2(px(lim - mw / 2), px(ly)), COLOR_DIM)
     ui.popDWriteFont()
     drawTextRight(TEXTS.liftFaster, FONT_MONO, 10 * s, bx2, ly, COLOR_DIM)
+  end
+
+  -- Opening: the secondary boxes light up one after the other (frame and title only), unless a real one is showing
+  local anySd = false
+  for _, sd in pairs(state.slowdowns) do if sd.active then anySd = true end end
+  if intro and intro.box and not cc and not anySd then
+    if intro.box == 'swap' then
+      local p1 = vec2(x, ySd + sdH + gap)
+      local p2 = vec2(x + boxW, ySd + sdH + gap + msgH)
+      drawPanel(p1, p2, BORDER_GREEN, s)
+      drawText(TEXTS.swapTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+      drawSeparator(p1, p2, p1.y + 24 * s, s)
+    else
+      local p1 = vec2(x, ySd)
+      local p2 = vec2(x + boxW, ySd + sdH)
+      drawPanel(p1, p2, BORDER_YELLOW, s)
+      drawText(intro.box == 'lift' and TEXTS.liftTitle or TEXTS.sdTitle, FONT_TITLE, 14 * s,
+        vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+      drawSeparator(p1, p2, p1.y + 24 * s, s)
+      if intro.box == 'lift' then
+        local bx1, bx2 = p1.x + 16 * s, p2.x - 16 * s
+        local by1, by2 = p1.y + 30 * s, p1.y + 38 * s
+        local lim = bx1 + (bx2 - bx1) * LIFT_LIMIT_POS
+        ui.drawRectFilled(vec2(px(bx1), px(by1)), vec2(px(lim), px(by2)), COLOR_LIFT_SLOW, px(4 * s))
+        ui.drawRectFilled(vec2(px(lim), px(by1)), vec2(px(bx2), px(by2)), COLOR_LIFT_FAST, px(4 * s))
+      end
+    end
   end
 
   -- Slowdown box (one slowdown at a time; overlapping ones are merged)
@@ -2142,7 +2179,7 @@ function script.update(dt)
   updateSwapRelay()
   publishOwnList(car)
   Panel.updatePit(car)
-  Intro.update()
+  Intro.update(car)
   -- Penalty list of the previous driver (driver swap): taken over only if this driver has none
   if sw.pendingList then
     local items = sw.pendingList
