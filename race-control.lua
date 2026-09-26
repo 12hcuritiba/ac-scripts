@@ -1754,18 +1754,21 @@ end
 -- Only on the first load on the server, when the driver leaves the setup menu (the pits menu with the Drive button;
 -- the menu has to be seen open first, since sim.isInMainMenu is still false in the first frames after the script
 -- loads; if the menu is never seen, it starts when the car moves):
--- a bulb check like the dashboard of a car (every cell lights up at the same time, with no value, for a moment, then
--- goes off), then the message line shows the name and version in dot matrix, like the display of an old car stereo:
+-- a lamp test like the dashboard of a car, here cosmetic: everything lights up at the same time and cycles through all
+-- it can show (every cell with each of its values and colors, the frame colors and the message line texts), then the
+-- message line shows the name and version in dot matrix, like the display of an old car stereo:
 -- it fades in centered, then scrolls to the left, disappearing at the edge of the panel, until it is all gone. It
 -- does not repeat between sessions, on reconnections or on script reloads, and there is none for a driver taking over
 -- the car in a driver swap (the session is already running): if the swap is known only during the opening, it
--- stops there. While the main panel does its bulb check and shows the name, the other boxes do theirs one after
--- the other, each in its own place and never on top of each other (frame and title only, no value): slowdown box,
--- gain filter box (same place as the slowdown box), driver swap panel (when driver swaps are on). After it, the
+-- stops there. While the main panel does its lamp test and shows the name, the other boxes do theirs one after the
+-- other, each in its own place and never on top of each other, with all their content moving: slowdown box (numbers
+-- counting down and pulsing), gain filter box (mark sweeping the bar), driver swap panel (countdown; only when driver
+-- swaps are on). After it, the
 -- panel is shown only when a cell or the message line has something to show.
 -- ============================================================
 
-local INTRO_BULB = 2.0        -- seconds with every cell lit (bulb check)
+local INTRO_BULB = 2.4        -- seconds of the lamp test of the main panel
+local INTRO_CYCLE_STEP = 0.3  -- seconds each value stays lit while cycling
 local INTRO_FADE_IN = 0.6     -- seconds of the fade in
 local INTRO_HOLD = 0.8        -- seconds standing still before scrolling
 local INTRO_SCROLL_SPEED = 180  -- px per second at 1080p
@@ -1782,7 +1785,40 @@ local INTRO_BOX_STEP = 1.2    -- seconds each secondary box stays lit, one after
 -- Shown once while the game is running (ac.store survives reconnections and script reloads)
 local INTRO_SHOWN_KEY = 'race-control.intro'
 
+
 local Intro = { t0 = nil, done = ac.load(INTRO_SHOWN_KEY) == 1, menuSeen = false }
+
+-- Lamp test: what each titled cell, the frame and the message line cycle through (value, color key)
+local INTRO_CYCLE = {
+  [TEXTS.cellPit] = { { string.format(TEXTS.pitOpen, '00:00'), 'yellow' }, { TEXTS.pitDone, 'dim' },
+    { TEXTS.pitMissed, 'red' } },
+  [TEXTS.cellSwap] = { { string.format(TEXTS.swapCount, 0, 1), 'dim' }, { string.format(TEXTS.swapCount, 1, 1), 'green' } },
+  [TEXTS.cellTrack] = { { TEXTS.trackYellow, 'yellow' }, { TEXTS.trackBlue, 'blue' }, { 'VSC', 'yellow' },
+    { 'SC', 'yellow' }, { 'CODE-80', 'yellow' } },
+  [TEXTS.cellPenalties] = { { 'SD1 DT0', 'yellow' }, { 'SD1 DT0 · PSE DT1 +1', 'yellow' },{ TEXTS.penHold, 'red' }, { TEXTS.penDsq, 'red' } },
+}
+local INTRO_FRAMES = { 'base', 'yellow', 'blue', 'red', 'green' }
+local INTRO_MESSAGES = {
+  { 'DT0 - Drive-through - ' .. TEXTS.reason.SD1, 'yellow' },
+  { string.format(TEXTS.hold, mmss(45), TEXTS.holdTwoDT), 'red' },
+  { TEXTS.code80, 'yellow' },
+  { TEXTS.pitOpenMsg, 'yellow' },
+}
+
+local function cycled(list, t)
+  return list[math.floor(t / INTRO_CYCLE_STEP) % #list + 1]
+end
+
+-- Lamp test values at time t of the opening (pure): cell value and color for a title, frame color key, message
+function Intro.lampCell(title, t)
+  local item = INTRO_CYCLE[title] and cycled(INTRO_CYCLE[title], t)
+  return item and { value = item[1], color = item[2] } or nil
+end
+function Intro.lampFrame(t) return cycled(INTRO_FRAMES, t) end
+function Intro.lampMessage(t)
+  local item = cycled(INTRO_MESSAGES, t)
+  return item[1], item[2]
+end
 
 -- Starts when the setup menu closes (or the car moves, if the menu was never seen); ends after INTRO_TOTAL
 function Intro.update(car)
@@ -1805,19 +1841,21 @@ function Intro.update(car)
 end
 
 -- Current frame of the opening (reads only its own state): nil when not running; otherwise
--- { bulb = true } during the bulb check, or
+-- { bulb = true, t } during the lamp test (values from Intro.lampCell / lampFrame / lampMessage), or
 -- { text, x = px at 1080p from the start of the message line (goes negative while scrolling), pitch, alpha };
--- both with box = secondary box lit now ('slowdown', 'lift', 'swap' or nil)
+-- both with box = secondary box lit now ('slowdown', 'lift', 'swap' or nil) and boxK = 0..1 inside its slot
 function Intro.frame()
   if Intro.done or not Intro.t0 then return nil end
   local t = state.ui.clock - Intro.t0
   -- Secondary boxes: one after the other from the start of the opening
   local boxes = { 'slowdown', 'lift' }
   if config.swapEnabled then boxes[#boxes + 1] = 'swap' end
-  local box = boxes[math.floor(t / INTRO_BOX_STEP) + 1]
-  if t < INTRO_BULB then return { bulb = true, box = box } end
+  local slot = math.floor(t / INTRO_BOX_STEP)
+  local box = boxes[slot + 1]
+  local boxK = (t - slot * INTRO_BOX_STEP) / INTRO_BOX_STEP   -- 0..1 inside the box slot
+  if t < INTRO_BULB then return { bulb = true, t = t, box = box, boxK = boxK } end
+  local text = { text = TEXTS.introText, x = INTRO_TEXT_X, pitch = INTRO_DOT_PITCH, alpha = 1, box = box, boxK = boxK }
   t = t - INTRO_BULB
-  local text = { text = TEXTS.introText, x = INTRO_TEXT_X, pitch = INTRO_DOT_PITCH, alpha = 1, box = box }
   if t < INTRO_FADE_IN then
     text.alpha = t / INTRO_FADE_IN
     return text
@@ -1961,7 +1999,10 @@ function script.drawUI()
   if intro or anyOn or text then
     local p1 = vec2(x, yMsg)
     local p2 = vec2(x + boxW, yMsg + msgH)
-    drawPanel(p1, p2, intro and BORDER_BASE or Panel.frameColor(), s)
+    local INTRO_BORDERS = { base = BORDER_BASE, yellow = BORDER_YELLOW, blue = BORDER_BLUE, red = BORDER_RED,
+      green = BORDER_GREEN }
+    drawPanel(p1, p2, intro and (intro.bulb and INTRO_BORDERS[Intro.lampFrame(intro.t)] or BORDER_BASE)
+      or Panel.frameColor(), s)
     local cx = p1.x + 12 * s
     local innerW = boxW - 20 * s
     for i, c in ipairs(PANEL_CELLS) do
@@ -1970,9 +2011,9 @@ function script.drawUI()
         ui.drawSimpleLine(vec2(px(cx), px(p1.y + 6 * s)), vec2(px(cx), px(p1.y + 32 * s)), rgbm(1, 1, 1, 0.12), 1)
       end
       local cell = values[i]
-      -- Opening: during the bulb check every title is lit and there is no value; otherwise the cells are off
+      -- Opening: during the lamp test every cell cycles through its values; afterwards the titled cells are off
       local bulb = intro and intro.bulb
-      if intro then cell = (not c.title) and cell or nil end
+      if intro and c.title then cell = bulb and Intro.lampCell(c.title, intro.t) or nil end
       local function put(t, font, size, y, col)
         ui.pushDWriteFont(font)
         local tw = ui.measureDWriteText(t, size).x
@@ -1996,6 +2037,13 @@ function script.drawUI()
       DotMatrix.draw(intro.text, vec2(p1.x + (16 + intro.x) * s, p1.y + 42 * s), intro.pitch * s,
         rgbm(0.96, 0.96, 0.96, intro.alpha), rgbm(1, 1, 1, 0.06 * intro.alpha))
       ui.popClipRect()
+    elseif intro and intro.bulb then
+      local lampText, lampColor = Intro.lampMessage(intro.t)
+      ui.pushDWriteFont(FONT_TEXT)
+      ui.setCursor(vec2(math.floor(p1.x + 16 * s), math.floor(p1.y + 41 * s)))
+      ui.dwriteTextAligned(lampText, 14 * s, ui.Alignment.Start, ui.Alignment.Start,
+        vec2(boxW - 32 * s, msgH - 43 * s), true, PANEL_COLORS[lampColor])
+      ui.popDWriteFont()
     elseif text and not intro then
       ui.pushDWriteFont(FONT_TEXT)
       ui.setCursor(vec2(math.floor(p1.x + 16 * s), math.floor(p1.y + 41 * s)))
@@ -2046,12 +2094,19 @@ function script.drawUI()
   local anySd = false
   for _, sd in pairs(state.slowdowns) do if sd.active then anySd = true end end
   if intro and intro.box and not cc and not anySd then
+    local k = intro.boxK or 0
+    local pulse = 0.5 + 0.5 * math.cos(2 * math.pi * 3 * state.ui.clock)
     if intro.box == 'swap' then
       local p1 = vec2(x, ySd + sdH + gap)
       local p2 = vec2(x + boxW, ySd + sdH + gap + msgH)
       drawPanel(p1, p2, BORDER_GREEN, s)
       drawText(TEXTS.swapTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
       drawSeparator(p1, p2, p1.y + 24 * s, s)
+      local total = config.swapMinSeconds
+      local left = total * (1 - k)
+      drawText(string.format(TEXTS.swapWait, mmss(left)), FONT_TEXT, 12 * s, vec2(p1.x + 16 * s, p1.y + 29 * s), COLOR_SWAP)
+      drawText(string.format(TEXTS.swapTimes, mmss(total - left), mmss(total)), FONT_MONO, 12 * s,
+        vec2(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE)
     else
       local p1 = vec2(x, ySd)
       local p2 = vec2(x + boxW, ySd + sdH)
@@ -2065,6 +2120,29 @@ function script.drawUI()
         local lim = bx1 + (bx2 - bx1) * LIFT_LIMIT_POS
         ui.drawRectFilled(vec2(px(bx1), px(by1)), vec2(px(lim), px(by2)), COLOR_LIFT_SLOW, px(4 * s))
         ui.drawRectFilled(vec2(px(lim), px(by1)), vec2(px(bx2), px(by2)), COLOR_LIFT_FAST, px(4 * s))
+        ui.drawSimpleLine(vec2(px(lim), px(by1 - 2 * s)), vec2(px(lim), px(by2 + 2 * s)), rgbm(1, 1, 1, 0.8), 1)
+        local mx = bx1 + (bx2 - bx1) * k
+        ui.drawRectFilled(vec2(px(mx - 1.5 * s), px(by1 - 3 * s)), vec2(px(mx + 1.5 * s), px(by2 + 3 * s)),
+          rgbm(1, 1, 1, 0.75 + 0.25 * pulse), px(1 * s))
+        local ly = p1.y + 41 * s
+        drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, vec2(bx1, ly), COLOR_DIM)
+        drawTextRight(TEXTS.liftFaster, FONT_MONO, 10 * s, bx2, ly, COLOR_DIM)
+      else
+        local num = rgbm(COLOR_TEXT.r, COLOR_TEXT.g, COLOR_TEXT.b, 0.3 + 0.7 * pulse)
+        local pieces = {
+          { TEXTS.timerPay, COLOR_TEXT },
+          { string.format(TEXTS.timerSeconds, 8 * (1 - k)), num },
+          { TEXTS.timerDeadline, COLOR_TEXT },
+          { string.format(TEXTS.timerDeadlineSeconds, 16 * (1 - k)), num },
+          { TEXTS.timerEnd, COLOR_TEXT },
+        }
+        local tx = p1.x + 16 * s
+        ui.pushDWriteFont(FONT_MONO)
+        for _, piece in ipairs(pieces) do
+          ui.dwriteDrawText(piece[1], 12 * s, vec2(px(tx), px(p1.y + 29 * s)), piece[2])
+          tx = tx + ui.measureDWriteText(piece[1], 12 * s).x
+        end
+        ui.popDWriteFont()
       end
     end
   end
