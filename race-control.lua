@@ -298,9 +298,12 @@ local cfg = ac.configValues({
   -- ------------------------------------------------------------
   -- 5.6 Penalty control: driving the wrong way (ours; ALLOW_WRONG_WAY = 1 in [EXTRA_RULES] turns the CSP one off)
   -- ------------------------------------------------------------
-  -- wrongWay = maxMeters:30 | penalty:DSQ
+  -- wrongWay = maxMeters:30 | penalty:DSQ | showMeters:2 | angle:90
   --   maxMeters: metres against the direction of the track allowed to manoeuvre; more = penalty. penalty: DSQ (our DSQ,
-  --   usual flow: stop at the pit place or the game black flag at the line; no teleport) or NONE.
+  --   usual flow: stop at the pit place or the game black flag at the line; no teleport) or NONE. showMeters: metres
+  --   against the direction of the track from which the wrong way box (no entry sign) is on screen. angle: degrees
+  --   between where the car points and the direction of the track above which it counts (moving back along the
+  --   track); within it the manoeuvre is over and the count is cleared.
   wrongWay = '',
 })
 
@@ -446,7 +449,7 @@ local TEXTS = {
   -- DSQ (black flag drawn by the script until the game black flag)
   dsqTitle = 'DISQUALIFIED',
   dsqStop = 'Stop at your pit before the line',
-  dsqTow = 'Tow to the pits - otherwise disqualified for unsporting behaviour',
+  dsqTow = 'Car withdrawn - return to pits',
   dsqSafety = 'Safety hazard - damage beyond the safety limit',
   -- edited record file (ban)
   editedFile = 'Edited file',
@@ -487,6 +490,9 @@ local TEXTS = {
   dsqBlackFlag = 'Black flag',
   dsqDtReason = 'Drive-through not served',
   wrongWayDsq = 'Driving the wrong way',
+  wrongWayTitle = 'WRONG WAY',
+  wrongWayTurn = 'Turn around - %.0f / %d m',
+  wrongWayLimit = 'Over %d m: disqualified',
   -- drive-through flag box
   dtTitle = 'DRIVE-THROUGH',
   dtMore = '  +%d',
@@ -557,7 +563,7 @@ local TOW_RULE = { mode = 'TOW', towSeconds = 120, repairFactor = 1.5 }
 local REPAIR_FORMULA = structKey('repairFormula', { baseSeconds = 180, weightEngine = 1.0, weightSuspension = 0.5,
   weightBody = 0.25 })
 local SCREEN_SCALE = structKey('screenScale', { exponent = 0.45, max = 1.5 })
-local WRONG_WAY = structKey('wrongWay', { maxMeters = 30, penalty = 'DSQ' })
+local WRONG_WAY = structKey('wrongWay', { maxMeters = 30, penalty = 'DSQ', showMeters = 2, angle = 90 })
 local DAMAGE = structKey('damage', { toeBent = 10, toeBroken = 20, camberBent = 10, camberBroken = 20, bodyRepair = 150,
   maxPunctured = 2, repairLaps = 2, beyondTowSeconds = 180, dsqTowSeconds = 180 })
 
@@ -3447,24 +3453,41 @@ do
 end
 -- ============================================================
 -- Driving the wrong way (rule 33). The CSP penalty is off on the server ([EXTRA_RULES] ALLOW_WRONG_WAY = 1): the rule
--- is ours. The distance driven against the direction of the track (the car's position along the AI spline going back,
--- times the track length, SDK sim.trackLengthM) is added up; a few metres forward end the manoeuvre and clear it.
--- Up to wrongWay maxMeters (default 30) is a manoeuvre; more = our DSQ in the usual flow (stop at the pit place, or the
--- game black flag at the line; no teleport). Not counted in the pit lane nor across a teleport or a car reset.
+-- is ours. Wrong way = the car points more than wrongWay angle (default 90 degrees) away from the direction of the
+-- track (car.look against the AI spline direction at the car, ac.trackProgressToWorldCoordinate) and moves back along
+-- the track. The distance driven like that is added up (position along the spline x sim.trackLengthM); pointing back
+-- within the angle ends the manoeuvre and clears it. Reversing with the car pointing the right way is not counted (the
+-- KMR reverse gear rule), nor a spin sliding forward. Up to maxMeters (default 30) is a manoeuvre; more = our DSQ in
+-- the usual flow (stop at the pit place, or the game black flag at the line; no teleport). Not counted in the pit
+-- lane nor across a teleport or a car reset.
 -- ============================================================
 
-local WrongWay = { prev = nil, back = 0, fwd = 0 }
+local WrongWay = { prev = nil, back = 0 }
 do
-  local FORWARD_CLEARS_M = 5     -- metres forward that end a manoeuvre
   local JUMP_M = 100             -- a jump this big in one frame is a teleport or a car reset, not driving
+  local AHEAD_M = 2              -- the direction of the track: from the car's point to this many metres ahead
 
   function WrongWay.reset()
-    WrongWay.prev, WrongWay.back, WrongWay.fwd = nil, 0, 0
+    WrongWay.prev, WrongWay.back = nil, 0
+  end
+
+  -- Angle between where the car points and the direction of the track at the car, degrees (0 = the right way)
+  local function heading(car, len)
+    local p = car.splinePosition
+    local a = ac.trackProgressToWorldCoordinate(p)
+    local b = ac.trackProgressToWorldCoordinate((p + AHEAD_M / len) % 1)
+    if not a or not b then return 0 end
+    local dx, dz = b.x - a.x, b.z - a.z
+    local f = car.look
+    local n1, n2 = math.sqrt(dx * dx + dz * dz), math.sqrt(f.x * f.x + f.z * f.z)
+    if n1 <= 0 or n2 <= 0 then return 0 end
+    return math.deg(math.acos(math.min(math.max((dx * f.x + dz * f.z) / (n1 * n2), -1), 1)))
   end
 
   function WrongWay.update(car)
     local rule = config.wrongWay
-    if rule.penalty ~= 'DSQ' or car.isInPitlane or state.dtDsqActive or state.pitDsqActive then
+    local len = tonumber(sim.trackLengthM) or 0
+    if rule.penalty ~= 'DSQ' or len <= 0 or car.isInPitlane or state.dtDsqActive or state.pitDsqActive then
       WrongWay.reset()
       return
     end
@@ -3474,17 +3497,15 @@ do
     if not prev then return end
     local d = pos - prev
     if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end    -- across the line
-    local m = d * (tonumber(sim.trackLengthM) or 0)
+    local m = d * len
     if math.abs(m) > JUMP_M then
-      WrongWay.back, WrongWay.fwd = 0, 0
+      WrongWay.back = 0
       return
     end
-    if m < 0 then
+    if heading(car, len) <= rule.angle then
+      WrongWay.back = 0
+    elseif m < 0 then
       WrongWay.back = WrongWay.back - m
-      WrongWay.fwd = 0
-    elseif m > 0 then
-      WrongWay.fwd = WrongWay.fwd + m
-      if WrongWay.fwd >= FORWARD_CLEARS_M then WrongWay.back = 0 end
     end
     if WrongWay.back > rule.maxMeters then
       ac.log(string.format('race-control: DSQ, wrong way %.0f m (limit %d m)', WrongWay.back, rule.maxMeters))
@@ -4774,23 +4795,32 @@ end
 -- Box with a flag drawn by the script (black flag, or black flag with orange disc) and three lines of text
 -- Flag box: the flag on the left, title and two lines. Flag: black (DSQ; with disc = black flag with orange disc), or
 -- 'dt' = drive-through flag, split on the diagonal from the bottom left corner to the top right one: white above,
--- black below (the game no longer shows its drive-through message)
-local function drawFlagBox(p1, p2, s, border, disc, title, titleColor, line1, line2, flag)
+-- black below (the game no longer shows its drive-through message); 'noentry' = wrong way: the international sign, a
+-- white circle with a red border and a red horizontal bar in the middle, in the place of the flag
+local function drawFlagBox(p1, p2, s, border, disc, title, titleColor, line1, line2, flag, line2Color)
   drawPanel(p1, p2, border, s)
   local f1 = vec2(p1.x + 20 * s, p1.y + 12 * s)
   local f2 = vec2(f1.x + 46 * s, f1.y + 32 * s)
-  local dt = flag == 'dt'
-  ui.drawRectFilled(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)), rgbm(0.02, 0.02, 0.02, 1), px(2 * s))
-  if dt then
-    ui.drawTriangleFilled(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f1.y)), vec2(px(f1.x), px(f2.y)),
-      rgbm(0.95, 0.95, 0.95, 1))
+  if flag == 'noentry' then
+    local c, r = vec2(px((f1.x + f2.x) / 2), px((f1.y + f2.y) / 2)), 16 * s
+    local red = rgbm(0.86, 0.1, 0.1, 1)
+    ui.drawCircleFilled(c, r, rgbm(0.97, 0.97, 0.97, 1), 32)
+    ui.drawCircle(c, r - 1.5 * s, red, 32, 3 * s)
+    ui.drawRectFilled(vec2(c.x - r * 0.62, c.y - 2.5 * s), vec2(c.x + r * 0.62, c.y + 2.5 * s), red, 1 * s)
+  else
+    local dt = flag == 'dt'
+    ui.drawRectFilled(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)), rgbm(0.02, 0.02, 0.02, 1), px(2 * s))
+    if dt then
+      ui.drawTriangleFilled(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f1.y)), vec2(px(f1.x), px(f2.y)),
+        rgbm(0.95, 0.95, 0.95, 1))
+    end
+    ui.drawRect(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)), rgbm(0.33, 0.33, 0.33, 1), px(2 * s))
+    if disc then ui.drawCircleFilled(vec2(px((f1.x + f2.x) / 2), px((f1.y + f2.y) / 2)), 9 * s, disc, 24) end
   end
-  ui.drawRect(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)), rgbm(0.33, 0.33, 0.33, 1), px(2 * s))
-  if disc then ui.drawCircleFilled(vec2(px((f1.x + f2.x) / 2), px((f1.y + f2.y) / 2)), 9 * s, disc, 24) end
   local tx = f2.x + 12 * s
   drawText(title, FONT_TITLE, 14 * s, vec2(tx, p1.y + 5 * s), titleColor)
   drawText(line1 or '', FONT_TEXT, 12 * s, vec2(tx, p1.y + 23 * s), COLOR_TITLE)
-  drawText(line2 or '', FONT_MONO, 12 * s, vec2(tx, p1.y + 38 * s), COLOR_TEXT)
+  drawText(line2 or '', FONT_MONO, 12 * s, vec2(tx, p1.y + 38 * s), line2Color or COLOR_TEXT)
 end
 
 local function drawSeparator(p1, p2, y, s)
@@ -5246,7 +5276,8 @@ function script.drawUI()
   if dsqText then
     -- Same style as the native AC message: one line, centered on screen, red with a dark outline
     local scale = h / 1080
-    local fontSize = 16 * math.min(math.max(scale ^ 0.3, 1), 1.3)
+    -- 20 px at 1080p (decision 142)
+    local fontSize = 20 * math.min(math.max(scale ^ 0.3, 1), 1.3)
     ui.pushDWriteFont('Segoe UI;Weight=Bold')
     local textSize = ui.measureDWriteText(dsqText, fontSize)
     if textSize.x > w * 0.6 then
@@ -5554,6 +5585,16 @@ function script.drawUI()
     end
     yNext = p2.y + gap
   end
+  -- Wrong way (rule 33): while the car goes against the direction of the track, the no entry sign with the metres so
+  -- far and the limit
+  local ww = WrongWay.back or 0
+  if stackOn and not cc and dl.dsq == 0 and ww >= config.wrongWay.showMeters and ww > 0 then
+    local p2 = vec2(x + boxW, yNext + sdH)
+    local lim = config.wrongWay.maxMeters
+    drawFlagBox(vec2(x, yNext), p2, s, BORDER_RED, nil, TEXTS.wrongWayTitle, BORDER_RED,
+      string.format(TEXTS.wrongWayTurn, ww, lim), string.format(TEXTS.wrongWayLimit, lim), 'noentry')
+    yNext = p2.y + gap
+  end
   -- Drive-through flag (the game no longer shows its drive-through message): the drive-through to serve now, with the
   -- reason and the deadline; +n = more drive-throughs in the list
   local dtHead = dl.items[1]
@@ -5571,7 +5612,7 @@ function script.drawUI()
   elseif not cc and dl.dsq > 0 and dl.dsqStage ~= 1 then
     local p2 = vec2(x + boxW, yNext + sdH)
     drawFlagBox(vec2(x, yNext), p2, s, BORDER_RED, nil, TEXTS.dsqTitle, BORDER_RED, dl.dsqReason,
-      dl.dsqStage == 2 and TEXTS.dsqTow or TEXTS.dsqStop)
+      dl.dsqStage == 2 and TEXTS.dsqTow or TEXTS.dsqStop, nil, BORDER_RED)
     yNext = p2.y + gap
   elseif not cc and rp.lapsLeft and rp.class == 'repair' then
     local p2 = vec2(x + boxW, yNext + sdH)
