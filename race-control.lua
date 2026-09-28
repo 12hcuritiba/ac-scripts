@@ -72,7 +72,7 @@
 --   practiceTow = mode:RESET | clearDsq:1        qualifyTow = mode:TOW | towSeconds:120 | repairFactor:1.5
 --   raceTow = mode:TOW | towSeconds:120 | repairFactor:1.5
 --     Back to the pits from the track (tow), per session. TOW = the car is locked in the pits (TeleportToPits) for
---     towSeconds + repair; repair chosen in the pit menu = repair only. RESET = the tow clears the penalties and the
+--     towSeconds + repair; repair chosen in the own pit stop box = repair only. RESET = the tow clears the penalties and the
 --     slowdowns in progress (not a DSQ). NONE = nothing. With TOW, set ENFORCE_BACK_TO_PITS_PENALTY = 0 in
 --     [EXTRA_RULES], or the driver also gets the AC back-to-pits penalty. practiceTow clearDsq: 1 = in practice the car
 --     at its pit place (after the tow, forced or by the driver, or back to the session) also clears the DSQ: the game
@@ -272,7 +272,8 @@ local cfg = ac.configValues({
   --   'SLOWDOWN': the driver must lift (throttle <= cutSlowdownMaxGas, outside the pit lane) for
   --               <session>CutPenaltyParam seconds, within cutSlowdownDeadline seconds or before the end of the lap.
   --               Unpaid: <session>SlowdownUnpaidPenalty.
-  --   'DT': drive-through DT0 at once. 'DSQ': black flag at once. 'NONE': nothing.
+  --   'DT': drive-through DT0 at once. 'DSQ': our DSQ at once, in the usual flow (stop at the pit place; game black
+  --          flag there or after dsqBlackFlagLaps line crossings). 'NONE': nothing.
   --   The default 'SLOW DOWN' (with a space) is not a valid value: without the server key the zone does nothing.
   practiceCutPenalty = 'SLOW DOWN',
   qualifyCutPenalty = 'SLOW DOWN',
@@ -318,7 +319,7 @@ local cfg = ac.configValues({
   -- <session>SlowdownUnpaidPenalty
   --   'DT': DT0 of the category (SD1 / SD2). Deadline expired mid-lap: DT0 of the current lap (crossing the line on
   --         track without serving it = DSQ). Expired at the line, or inside the pit lane: DT0 of the next lap.
-  --   'DSQ': black flag at once. 'NONE': nothing.
+  --   'DSQ': our DSQ at once, in the usual flow. 'NONE': nothing.
   practiceSlowdownUnpaidPenalty = 'DT',
   qualifySlowdownUnpaidPenalty = 'DT',
   raceSlowdownUnpaidPenalty = 'DT',
@@ -919,7 +920,7 @@ function CarRead.snapshot(car)
     s.km[i] = CarRead.num(car.wheels and car.wheels[i] and car.wheels[i].tyreVirtualKM)
     s.susp[i] = CarRead.num(car.suspensionDamage[i])
   end
-  for i = 0, 4 do s.body[i] = CarRead.num(car.damage[i]) end
+  for i = 0, 3 do s.body[i] = CarRead.num(car.damage[i]) end
   return s
 end
 -- Service at the pit place: the own pit stop box running a stop, or a real change in the car since it arrived (fuel
@@ -937,7 +938,8 @@ function CarRead.serviced(car, s)
       return true
     end
   end
-  for i = 0, 4 do
+  -- Body: the 4 zones of the damage screen (the fifth "is not really used", SDK; decision 168)
+  for i = 0, 3 do
     if CarRead.num(car.damage[i]) < s.body[i] then return true end
   end
   return false
@@ -946,6 +948,16 @@ end
 function CarRead.parked(car) return car.isInPit end
 -- Moving: any speed
 function CarRead.moving(car) return car.speedKmh > 0 end
+-- Setup values as shown (value x displayMultiplier), by setup section name (WING_1, SPRING_RATE_LF ...); '-' for an item
+-- the car does not have. One reading for the setup status and the pit stop box
+function CarRead.setupValues()
+  local out = setmetatable({}, { __index = function() return '-' end })
+  for _, sp in ipairs(ac.getSetupSpinners() or {}) do
+    local v = CarRead.num(sp.value) * (tonumber(sp.displayMultiplier) or 1)
+    out[tostring(sp.name):upper()] = (math.floor(v) == v) and tostring(v) or string.format('%.1f', v)
+  end
+  return out
+end
 
 -- Tyre readings: helpers kept inside this block (the whole script is one chunk, limited to 200 local variables)
 do
@@ -2181,7 +2193,8 @@ end)
 -- Damage read from the car (see the tow and repair keys)
 local function readDamage(car)
   local body, suspension = 0, 0
-  for i = 0, 4 do body = body + math.max(tonumber(car.damage[i]) or 0, 0) end
+  -- Body: the 4 zones of the damage screen (SDK: the fifth "is not really used"; decision 168)
+  for i = 0, 3 do body = body + math.max(tonumber(car.damage[i]) or 0, 0) end
   for i = 0, 3 do suspension = suspension + math.max(tonumber(car.suspensionDamage[i]) or 0, 0) end
   return {
     engine = math.min(math.max(1 - (tonumber(car.engineLifeLeft) or 1000) / 1000, 0), 1),
@@ -2213,7 +2226,8 @@ local function repairSeconds(d)
   return math.max(math.floor(s + 0.5), 0)
 end
 
--- Tow and repair hold (race only). The drive-throughs stay in the table and go back to the game after the hold.
+-- Tow and repair hold (qualifying and race, keys qualifyTow / raceTow). The penalties stay in the list after the hold;
+-- nothing goes to the game (decision 78)
 local function applyTowHold(tow, damage, reason)
   local repair = repairSeconds(damage)
   local seconds = tow + repair
@@ -5284,12 +5298,11 @@ do
   local COLOR_OFF = rgbm(0.45, 0.48, 0.5, 1)
   local num = CarRead.num
 
+  -- Wing F / R as in the setup status (WING_1 / WING_2); other setup items named WING_n are not the adjustable wings
   local function wing()
-    local out = {}
-    for _, sp in ipairs(ac.getSetupSpinners() or {}) do
-      if tostring(sp.name):upper():find('WING', 1, true) then out[#out + 1] = tostring(sp.value) end
-    end
-    return #out > 0 and table.concat(out, ' / ') or '-'
+    local sp = CarRead.setupValues()
+    if sp.WING_1 == '-' and sp.WING_2 == '-' then return '-' end
+    return sp.WING_1 .. ' / ' .. sp.WING_2
   end
 
   drawPitBox = function(car, w, h, s)
@@ -5463,16 +5476,6 @@ do
     return BORDER_RED
   end
 
-  -- Setup spinner value shown (value x displayMultiplier); '-' for a spinner the car does not have
-  local function spinners()
-    local out = setmetatable({}, { __index = function() return '-' end })
-    for _, sp in ipairs(ac.getSetupSpinners() or {}) do
-      local v = num(sp.value) * (tonumber(sp.displayMultiplier) or 1)
-      out[tostring(sp.name):upper()] = (math.floor(v) == v) and tostring(v) or string.format('%.1f', v)
-    end
-    return out
-  end
-
   -- Areas of the setup (approved screen 14, decision 177). An area is a list of items: { title = text }, or
   -- { label, { { axis, values }, ... } } with one line per axis group. Label on the left, axis (F / R, F/R) in its own
   -- column, values right-aligned in value columns at the right edge of the area: cols = 2 (the wheels of an axle; one
@@ -5549,7 +5552,7 @@ do
   end
 
   local function drawSetup(car, w, h, s)
-    local sp = spinners()
+    local sp = CarRead.setupValues()
     local wh = car.wheels or {}
     local function f(fmt, v) return string.format(fmt, num(v)) end
     -- The four wheels of a setup item (LF, RF, LR, RR) and the heave of the two axles (HF, HR)
