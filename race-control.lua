@@ -69,12 +69,14 @@
 --     the whole list and every later penalty adds secondsPerDT, up to maxDT drive-throughs (one more = DSQ);
 --     deadlineLaps: laps to serve it (1 = this lap or the next, like a DT1); returnSeconds: time the same driver has to
 --     come back after a disconnection while stopped (0 = no limit). Without the key: HOLD.
---   practiceTow = mode:RESET        qualifyTow = mode:TOW | towSeconds:120 | repairFactor:1.5
+--   practiceTow = mode:RESET | clearDsq:1        qualifyTow = mode:TOW | towSeconds:120 | repairFactor:1.5
 --   raceTow = mode:TOW | towSeconds:120 | repairFactor:1.5
 --     Back to the pits from the track (tow), per session. TOW = the car is locked in the pits (TeleportToPits) for
 --     towSeconds + repair; repair chosen in the pit menu = repair only. RESET = the tow clears the penalties and the
 --     slowdowns in progress (not a DSQ). NONE = nothing. With TOW, set ENFORCE_BACK_TO_PITS_PENALTY = 0 in
---     [EXTRA_RULES], or the driver also gets the AC back-to-pits penalty.
+--     [EXTRA_RULES], or the driver also gets the AC back-to-pits penalty. practiceTow clearDsq: 1 = in practice the car
+--     at its pit place (after the tow, forced or by the driver, or back to the session) also clears the DSQ: the game
+--     black flag is taken off and the controls released; 0 = the DSQ stays for the session.
 --   repairFormula = baseSeconds:180 | weightEngine:1.0 | weightSuspension:0.5 | weightBody:0.25
 --     repair = repairFactor x (baseSeconds x (weightEngine x powertrain + weightSuspension x suspension) + weightBody x
 --     body). Only damage from collisions counts (within COLLISION_DAMAGE_WINDOW seconds after ac.onCarCollision);
@@ -624,7 +626,7 @@ local config = {
   wrongWay = WRONG_WAY,
   -- Tow per session: mode ('TOW', 'RESET', 'NONE'), towSeconds, repairFactor
   tow = bySession(
-    structKey('practiceTow', { mode = 'RESET', towSeconds = 0, repairFactor = 0 }),
+    structKey('practiceTow', { mode = 'RESET', towSeconds = 0, repairFactor = 0, clearDsq = 1 }),
     structKey('qualifyTow', TOW_RULE),
     structKey('raceTow', TOW_RULE)),
   repair = {
@@ -3472,23 +3474,26 @@ end
 local WrongWay = { prev = nil, back = 0 }
 do
   local JUMP_M = 100             -- a jump this big in one frame is a teleport or a car reset, not driving
-  local AHEAD_M = 2              -- the direction of the track: from the car's point to this many metres ahead
+  -- The direction of the track: from this many metres behind the car to this many ahead (the AI spline is made of
+  -- points a few metres apart: two positions close together can give the same point)
+  local SPAN_M = 10
   local STOPPED_KMH = 1          -- below this the car is stopped: the count is cleared
 
   function WrongWay.reset()
     WrongWay.prev, WrongWay.back = nil, 0
   end
 
-  -- Angle between where the car points and the direction of the track at the car, degrees (0 = the right way)
+  -- Angle between where the car points and the direction of the track at the car, degrees (0 = the right way);
+  -- nil when it cannot be told (then the count stays as it is)
   local function heading(car, len)
     local p = car.splinePosition
-    local a = ac.trackProgressToWorldCoordinate(p)
-    local b = ac.trackProgressToWorldCoordinate((p + AHEAD_M / len) % 1)
-    if not a or not b then return 0 end
+    local a = ac.trackProgressToWorldCoordinate((p - SPAN_M / len) % 1)
+    local b = ac.trackProgressToWorldCoordinate((p + SPAN_M / len) % 1)
+    if not a or not b then return nil end
     local dx, dz = b.x - a.x, b.z - a.z
     local f = car.look
     local n1, n2 = math.sqrt(dx * dx + dz * dz), math.sqrt(f.x * f.x + f.z * f.z)
-    if n1 <= 0 or n2 <= 0 then return 0 end
+    if n1 <= 0 or n2 <= 0 then return nil end
     return math.deg(math.acos(math.min(math.max((dx * f.x + dz * f.z) / (n1 * n2), -1), 1)))
   end
 
@@ -3522,10 +3527,23 @@ do
       return
     end
     -- The manoeuvre ends pointing back within the angle, or with the car stopped (decision 146)
-    if heading(car, len) <= rule.angle or car.speedKmh < STOPPED_KMH then
+    local angle = heading(car, len)
+    local before = WrongWay.back
+    if (angle and angle <= rule.angle) or car.speedKmh < STOPPED_KMH then
       WrongWay.back = 0
+      -- Audit: every manoeuvre shown on screen that ends, with why
+      if before >= rule.showMeters then
+        rcLog('Wrong way cleared', string.format('%.0f m - %s', before, angle and angle <= rule.angle
+          and string.format('back within %d deg (%.0f deg)', rule.angle, angle) or 'car stopped'))
+      end
+    elseif not angle then
+      -- direction of the track not known here: going forward along the track ends it, going back keeps it
+      if m > 0 then WrongWay.back = 0 end
     elseif m < 0 then
       WrongWay.back = WrongWay.back - m
+      if before < rule.showMeters and WrongWay.back >= rule.showMeters then
+        rcLog('Wrong way', string.format('%.0f deg from the track - %.0f m', angle, WrongWay.back))
+      end
     end
     if WrongWay.back > rule.maxMeters then
       ac.log(string.format('race-control: DSQ, wrong way %.0f m (limit %d m)', WrongWay.back, rule.maxMeters))
@@ -5904,8 +5922,22 @@ function script.update(dt)
       rcLog('Tow', 'Practice - pending penalties cleared')
     end
     -- Practice (decisions 13, 14, 86): the car at its pit place (back to the session, tow, or driven in) clears the
-    -- penalties and the slowdowns in progress; a DSQ stays
-    if sim.raceSessionType == ac.SessionType.Practice and CarRead.parked(car) and not dsqActive
+    -- penalties and the slowdowns in progress. With practiceTow clearDsq:1 (decision 148) also the DSQ: the game black
+    -- flag is taken off and the controls released after the tow (forced or by the driver) or back to the session; the
+    -- DSQ rules themselves do not change
+    local practice = sim.raceSessionType == ac.SessionType.Practice
+    if practice and CarRead.parked(car) and dsqActive and (config.tow[ac.SessionType.Practice].clearDsq or 0) == 1 then
+      l.dsq, l.dsqStage, l.dsqUntil, l.dsqReason = 0, 0, 0, nil
+      l.seq = l.seq + 1
+      state.dtDsqActive, state.pitDsqActive = false, false
+      if g.t == BLACK_FLAG then physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag) end
+      physics.lockUserControlsFor(0)
+      Rules.zero()
+      l.invalidLap = nil
+      dsqActive = false
+      ac.log('race-control: practice, car at its pit place: disqualification cleared')
+      rcLog('Pit', 'Practice - disqualification cleared at the pit place')
+    elseif practice and CarRead.parked(car) and not dsqActive
         and (#l.items > 0 or next(state.slowdowns) or #l.endOfLap > 0) then
       Rules.zero()
       l.invalidLap = nil
