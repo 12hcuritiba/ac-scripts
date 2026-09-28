@@ -130,6 +130,15 @@ local cfg = ac.configValues({
   --   from 1x at 1080p (the approved size) up to max. The Race Control panel keeps its own growth (^0.3, up to 1.3x),
   --   so these screens grow slightly more on a big screen (1440p: 1.14x; 4K: 1.37x).
   screenScale = '',
+  -- tyreLife = ok:70 | worn:30
+  --   Colors of the tyre life in the setup status (remaining life from the wear curve of the compound), graded: green
+  --   from ok % up (ok), yellow in the middle of the half life band (worn % to ok %), orange at worn %, red at 0 (end).
+  tyreLife = '',
+  -- tyreTemp = edge:98
+  --   Colors of the tyre temperature (shown on the pressure in the setup status), from the thermal curve of the
+  --   compound: green on its top (ideal); cold side graded to blue at edge % of the top grip; hot side graded to yellow
+  --   at edge % (overheating), then to red at the lowest grip of its hot end (cliff).
+  tyreTemp = '',
 
   -- ------------------------------------------------------------
   -- 2. General data (optional, filled in by the organizer)
@@ -170,6 +179,11 @@ local cfg = ac.configValues({
   --   stop). Same notation as PITS_ORDER of the CSP [EXTRA_RULES]: F fuel, T tyres, R repair, one after the other;
   --   letters inside < > at the same time. F<TR> = fuel first, then tyres and repair together.
   pitStopOrder = 'F<TR>',
+  -- pitStopMode: how the own pit stop box starts the stop by default (the driver changes it in the last line of the
+  --   box). AUTO = stopping at the pit place with the box touched and something chosen starts it; MANUAL = only the
+  --   start on the last line of the box (D-pad right). The box not touched is a plain stop: it serves the stop & go and allows
+  --   the driver swap; a service allows neither in the same stop.
+  pitStopMode = 'AUTO',
   -- pitWindowStartMinutes / pitWindowEndMinutes: driver swap window of the race, in minutes after the race start (the
   --   script's own; off in the ACSM). A driver swap is valid only if the car crossed the pit entry line inside it; the
   --   pit lane is a neutral zone. Closed without a valid swap: DSQ. 0 = no window.
@@ -378,9 +392,13 @@ local TEXTS = {
   pitBoxTitle = 'PIT STOP',
   pitBoxTotal = 'Total %s',
   pitBoxConfirm = 'Enter to confirm',
+  pitBoxMode = '< %s >',
+  pitBoxStart = '   START >',
+  pitModeAuto = 'AUTO',
+  pitModeManual = 'MANUAL',
   pitBoxServing = 'Pit stop in progress',
   pitFuel = 'Fuel',
-  pitFuelValue = '+%d L (to %d L)',
+  pitFuelValue = '+%d L (to %d / %d L)',
   pitCompound = 'Compound',
   pitTyres = 'Tyres',
   pitPressureFront = 'Pressure front',
@@ -415,6 +433,8 @@ local TEXTS = {
   setupPsi = 'PSI',
   setupLife = 'Life',
   setupKm = 'Km',
+  setupLaps = 'Laps',
+  setupLapsOf = '%d/%s',
   setupElectronics = 'ABS %d  TC %d  TC2 %d  MAP %d  EB %d  ERS %d  REC %d',
   statusTitle = 'CAR STATUS',
   statusRepair = 'REPAIR',
@@ -507,6 +527,7 @@ local TEXTS = {
   dsqBlackFlag = 'Black flag',
   dsqDtReason = 'Drive-through not served',
   wrongWayDsq = 'Driving the wrong way',
+  swapVoidService = 'Driver swap not valid - service in the same pit stop',
   wrongWayTitle = 'WRONG WAY',
   wrongWayTurn = 'Turn around - %.0f / %d m',
   wrongWayLimit = 'Over %d m: disqualified',
@@ -580,6 +601,8 @@ local TOW_RULE = { mode = 'TOW', towSeconds = 120, repairFactor = 1.5 }
 local REPAIR_FORMULA = structKey('repairFormula', { baseSeconds = 180, weightEngine = 1.0, weightSuspension = 0.5,
   weightBody = 0.25 })
 local SCREEN_SCALE = structKey('screenScale', { exponent = 0.45, max = 1.5 })
+local TYRE_LIFE = structKey('tyreLife', { ok = 70, worn = 30 })
+local TYRE_TEMP = structKey('tyreTemp', { edge = 98 })
 local WRONG_WAY = structKey('wrongWay', { maxMeters = 30, penalty = 'DSQ', showMeters = 2, angle = 90 })
 local DAMAGE = structKey('damage', { toeBent = 10, toeBroken = 20, camberBent = 10, camberBroken = 20, bodyRepair = 150,
   powertrainRepair = 45,
@@ -615,6 +638,7 @@ local config = {
   wrongDriver = tonumber(cfg.wrongDriverSeconds),
   dsqBlackFlagLaps = math.max(math.floor(tonumber(cfg.dsqBlackFlagLaps) or 3), 1),
   pitStopOrder = tostring(cfg.pitStopOrder or 'F<TR>'),
+  pitStopAuto = string.upper(tostring(cfg.pitStopMode or 'AUTO')) ~= 'MANUAL',
   beyondTowSeconds = DAMAGE.beyondTowSeconds,
   dsqTowSeconds = DAMAGE.dsqTowSeconds,
   swap = bySession(tonumber(cfg.practiceDriverSwap) == 1, tonumber(cfg.qualifyDriverSwap) == 1,
@@ -632,6 +656,8 @@ local config = {
   pitSpeedDeadlineLaps = math.floor(tonumber(cfg.pitSpeedDeadlineLaps) or 1),
   code80Freeze = tonumber(cfg.code80FreezeDeadlines) == 1,
   screenScale = SCREEN_SCALE,
+  tyreLife = TYRE_LIFE,
+  tyreTemp = TYRE_TEMP,
   wrongWay = WRONG_WAY,
   -- Tow per session: mode ('TOW', 'RESET', 'NONE'), towSeconds, repairFactor
   tow = bySession(
@@ -711,6 +737,8 @@ local state = {
   dtDsqActive = false,
   onJumped = {},
   kmrMessages = {},
+  tyreLaps = { [0] = 0, 0, 0, 0 },   -- laps of each tyre since it was fitted (car record)
+  pitPassServiced = false,   -- a service in the pit pass in progress (kept in the pit record: the next driver sees it)
   rcCommands = {},       -- Race Control commands from the server (ACSM live timing), read in script.update
   pitService = nil,       -- own pit stop in progress: { startMs, untilMs, plan } (PitBox)       -- KMR drive-through messages to this driver, read in script.update (KmrDT)
   -- Car damage class (DamageClass): 'normal', 'repair' (orange disc) or 'beyond'; lapsLeft = line crossings left to
@@ -760,6 +788,10 @@ local state = {
     relay = {},           -- pending SWAP_INFO sends: { target, car, driver, swaps, leftT, dueT }
     count = 0,            -- driver swaps done by this car (swap number of the last one)
     valid = 0,            -- valid driver swaps (pit entry inside the pit window, decision 112): the SWAP cell
+    voids = 0,            -- valid swaps taken back: a service in the same pit stop (decision 161); valid - voids
+    passSwap = false,     -- a driver swap in the pit pass in progress (this driver took the car in it)
+    passSwapValid = false, -- ... and it was a valid one
+    passVoided = false,   -- ... and it was already taken back
     swapNo = 0,           -- swap number of the driver in command (driver table)
     driver = 0,           -- name code of the driver in command (0 = none yet)
     swapInfo = nil,       -- swap told by the other drivers in this connection: { inWindow }
@@ -815,7 +847,7 @@ ac.log('race-control: section=' .. tostring(__cfgSection__)
   .. ' physics.allowed=' .. tostring(physics.allowed())
   .. ' ' .. table.concat(zoneLog, ' '))
 -- Struct keys as the server sent them (one text each) and the stop & go mode in force
-for _, key in ipairs({ 'screenScale', 'wrongWay', 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage' }) do
+for _, key in ipairs({ 'screenScale', 'tyreLife', 'tyreTemp', 'wrongWay', 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage' }) do
   ac.log('race-control: key ' .. key .. ' = ' .. tostring(cfg[key]))
 end
 ac.log('race-control: stopAndGo mode in force: ' .. (config.sg and 'SG' or 'HOLD'))
@@ -900,6 +932,93 @@ end
 function CarRead.parked(car) return car.isInPit end
 -- Moving: any speed
 function CarRead.moving(car) return car.speedKmh > 0 end
+
+-- Remaining life of a tyre in % (decision 163): its grip now (wheel tyreWear, the game's grip value, 1 = full) against
+-- the wear curve of the compound fitted (car data tyres.ini, [FRONT] / [REAR], [FRONT_n] / [REAR_n] for compound n:
+-- WEAR_CURVE, grip % by virtual km, read with ac.DataLUT11.carData): 100 = the highest grip of the curve (new), 0 = the
+-- lowest (its end). Wear is not linear (temperature cycles, use of the rubber): the curve of the car gives it. nil when
+-- the car data has no wear curve
+-- A curve of the tyre of the car (tyres.ini of the car data, section of the compound fitted and the axle of wheel i:
+-- prefix FRONT / REAR, _n for compound n; key WEAR_CURVE or PERFORMANCE_CURVE), read once (false = none)
+local tyreCurves = {}
+local function tyreCurve(car, i, prefix, key)
+  local compound = CarRead.num(car.compoundIndex)
+  local axle = prefix .. (i < 2 and 'FRONT' or 'REAR')
+  local section = compound == 0 and axle or (axle .. '_' .. compound)
+  local id = section .. '/' .. key
+  local lut = tyreCurves[id]
+  if lut == nil then
+    lut = false
+    local ini = ac.INIConfig.carData(0, 'tyres.ini')
+    local file = ini and ini:get(section, key, '') or ''
+    if file ~= '' then
+      local ok, l = pcall(ac.DataLUT11.carData, 0, file)
+      if ok and l then lut = l end
+    end
+    tyreCurves[id] = lut
+  end
+  return lut
+end
+
+function CarRead.tyreLife(car, i)
+  local lut = tyreCurve(car, i, '', 'WEAR_CURVE')
+  local w = car.wheels and car.wheels[i]
+  if not lut or not w then return nil end
+  local lo, hi = lut:bounds()
+  if not lo or not hi or hi.y <= lo.y then return nil end
+  return math.min(math.max((CarRead.num(w.tyreWear) * 100 - lo.y) / (hi.y - lo.y) * 100, 0), 100)
+end
+
+-- Laps of a tyre against its wear curve (decision 165): the life the curve of the compound fitted gives at the virtual
+-- km of the tyre (tyreVirtualKM; 100 = highest grip of the curve, 0 = its lowest), and the expected laps of the tyre:
+-- km where the curve reaches its lowest grip, at the km per lap run so far (laps of the tyre). limit nil before a lap
+-- with km; nil when the car data has no wear curve
+function CarRead.tyreLapLimit(car, i, laps)
+  local lut = tyreCurve(car, i, '', 'WEAR_CURVE')
+  local w = car.wheels and car.wheels[i]
+  if not lut or not w then return nil end
+  local lo, hi = lut:bounds()
+  if not lo or not hi or hi.y <= lo.y then return nil end
+  local endKm, k = nil, 0
+  while not endKm do
+    local x, y = lut:getPointInput(k), lut:getPointOutput(k)
+    if x == nil or x ~= x then break end
+    if y <= lo.y then endKm = x end
+    k = k + 1
+  end
+  local km = CarRead.num(w.tyreVirtualKM)
+  local life = math.min(math.max((lut:get(km) - lo.y) / (hi.y - lo.y) * 100, 0), 100)
+  local limit = endKm and laps > 0 and km > 0 and math.floor(endKm * laps / km) or nil
+  return life, limit
+end
+
+-- Thermal state of a tyre (decision 164), the way proTyres does it: temperature = 75% core + 25% average of the tread
+-- (inside, middle, outside); grip at that temperature from the thermal curve of the compound fitted (tyres.ini
+-- [THERMAL_FRONT] / [THERMAL_REAR], _n for compound n: PERFORMANCE_CURVE), in % of its highest grip. Side: 'ideal'
+-- on the top of the curve, 'cold' before it, 'hot' after it. Also the lowest grip of the hot end (the cliff reaches it).
+-- nil when the car data has no thermal curve
+function CarRead.tyreThermal(car, i)
+  local lut = tyreCurve(car, i, 'THERMAL_', 'PERFORMANCE_CURVE')
+  local w = car.wheels and car.wheels[i]
+  if not lut or not w then return nil end
+  local n = CarRead.num
+  local t = 0.75 * n(w.tyreCoreTemperature) + 0.25 * (n(w.tyreInsideTemperature) + n(w.tyreMiddleTemperature)
+    + n(w.tyreOutsideTemperature)) / 3
+  local _, hi = lut:bounds()
+  if not hi or hi.y <= 0 then return nil end
+  -- The top of the curve: first and last point at its highest grip; the grip at its hot end
+  local top1, top2, hotEnd, k = nil, nil, nil, 0
+  while true do
+    local x, y = lut:getPointInput(k), lut:getPointOutput(k)
+    if x == nil or x ~= x then break end
+    if y >= hi.y then top1 = top1 or x; top2 = x end
+    hotEnd = y
+    k = k + 1
+  end
+  if not top1 then return nil end
+  local side = t < top1 and 'cold' or (t > top2 and 'hot' or 'ideal')
+  return { grip = lut:get(t) / hi.y * 100, side = side, hotEnd = (hotEnd or hi.y) / hi.y * 100, temp = t }
+end
 
 -- Movement of the car, from documented world readings only: where it is frame to frame (SDK car.position: "Car position
 -- in the world"), where it points (car.look: "Vector facing forward") and where a point is on the track
@@ -1224,7 +1343,7 @@ end
 -- car record (this process, this computer, the other drivers), so a hold keeps counting in server time while one
 -- driver leaves and another enters, or through a crash (the new connection gets the time left).
 -- Body: <stops with service>|<last stop: lap/fuel added/tyres/repair>|<hold end, server ms (0 = none)>|<hold text>|
---       <pit stop in progress: start ms/end ms/plan (PitBox), or ->
+--       <pit stop in progress: start ms/end ms/plan (PitBox), or ->|<service in the pit pass in progress: 1 / 0>
 -- ============================================================
 
 local PitRecord = { stops = 0, last = '-' }
@@ -1237,16 +1356,19 @@ function PitRecord.save()
   local text = h and tostring(h.text):gsub('|', '/') or ''
   PitRecord.seq = (PitRecord.seq or 0) + 1
   local sv = state.pitService
-  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s', PitRecord.stops, PitRecord.last,
+  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d', PitRecord.stops, PitRecord.last,
     h and math.floor(h.untilMs) or 0, text,
-    sv and string.format('%d/%d/%s', math.floor(sv.startMs), math.floor(sv.untilMs), sv.plan) or '-'))
+    sv and string.format('%d/%d/%s', math.floor(sv.startMs), math.floor(sv.untilMs), sv.plan) or '-',
+    state.pitPassServiced and 1 or 0))
 end
 
 -- A record of this process (script reload: the game hold is still running) or of another connection (the hold is
 -- applied again for the time left)
 local function pitApply(body, seq, newConnection)
-  local stops, last, untilMs, text, service = tostring(body):match('^(%d+)|([^|]*)|(%d+)|([^|]*)|(.*)$')
+  local stops, last, untilMs, text, service, serviced = tostring(body):match('^(%d+)|([^|]*)|(%d+)|([^|]*)|([^|]*)|?(%d?)$')
   if not stops then return end
+  -- A new connection in the same pit pass (driver swap, crash): a service already done in it counts (decision 161)
+  if newConnection and serviced == '1' then state.pitPassServiced = true end
   local svStart, svUntil, svPlan = service:match('^(%d+)/(%d+)/(.+)$')
   if svStart and not state.pitService and PitRecord.onService then
     PitRecord.onService(tonumber(svStart), tonumber(svUntil), svPlan)
@@ -1473,18 +1595,24 @@ local function nameCode(name)
   return h
 end
 
--- Swap record of the car: <swaps>|<valid swaps>|<swap number of the driver in command>|<name code of that driver>
+-- Swap record of the car: <swaps>|<valid swaps>|<swap number of the driver in command>|<name code of that driver>|
+-- <valid swaps taken back: a service in the same pit stop, decision 161>
 local SwapRecord = {}
 function SwapRecord.save()
   local sw = state.swap
-  Record.save('swap', math.floor(serverTimeMs() / 1000), string.format('%d|%d|%d|%d', sw.count, sw.valid, sw.swapNo,
-    sw.driver))
+  Record.save('swap', math.floor(serverTimeMs() / 1000), string.format('%d|%d|%d|%d|%d', sw.count, sw.valid, sw.swapNo,
+    sw.driver, sw.voids))
+end
+-- Valid swaps now: valid ones less those taken back
+function SwapRecord.validNow()
+  local sw = state.swap
+  return math.max(sw.valid - sw.voids, 0)
 end
 -- A swap record (this computer or the other drivers; an old one holds only the swaps): the higher counts win, and the
 -- driver in command comes from the record with the most swaps
 function SwapRecord.apply(body)
   local sw = state.swap
-  local count, valid, swapNo, driver = tostring(body or ''):match('^(%d+)|?(%d*)|?(%d*)|?(%d*)$')
+  local count, valid, swapNo, driver, voids = tostring(body or ''):match('^(%d+)|?(%d*)|?(%d*)|?(%d*)|?(%d*)$')
   if not count then return end
   count = tonumber(count)
   if count >= sw.count then
@@ -1493,6 +1621,7 @@ function SwapRecord.apply(body)
   end
   sw.count = math.max(sw.count, count)
   sw.valid = math.max(sw.valid, tonumber(valid) or count)
+  sw.voids = math.max(sw.voids, tonumber(voids) or 0)
 end
 
 local function onSwapInfo(msg)
@@ -2154,16 +2283,19 @@ do
     end
     for i = 0, 4 do body[#body + 1] = string.format('%.1f', num(car.damage[i])) end
     local d = state.tow.damage or { powertrain = 0, suspension = 0, body = 0 }
-    return string.format('F%.1f|C%d|K%s|B%s|S%s|R%s|O%s|E%.0f|G%.3f|T%.3f,%.3f,%.1f|D%d|V%s|H%d', num(car.fuel),
+    local laps = {}
+    for i = 0, 3 do laps[#laps + 1] = tostring(state.tyreLaps[i] or 0) end
+    return string.format('F%.1f|C%d|K%s|B%s|S%s|R%s|O%s|E%.0f|G%.3f|T%.3f,%.3f,%.1f|D%d|V%s|H%d|L%s', num(car.fuel),
       num(car.compoundIndex), table.concat(km, ','), table.concat(body, ','), table.concat(pct, ','),
       table.concat(raw, ','), table.concat(orig, ','), num(car.engineLifeLeft), num(car.gearboxDamage), d.powertrain,
       d.suspension, d.body, state.repair.lapsLeft or -1, table.concat(kmh, ','),
-      state.repair.beyondSince and math.floor(state.repair.beyondSince) or -1)
+      state.repair.beyondSince and math.floor(state.repair.beyondSince) or -1, table.concat(laps, ','))
   end
 
   local function carParse(body)
-    local f, c, k, b, s, r, o, e, g, t, dl, v, h = tostring(body):match(
-      '^F([%d%.]+)|C(%d+)|K([^|]*)|B([^|]*)|S([^|]*)|R([^|]*)|O([^|]*)|E([%d%.]+)|G([%d%.]+)|T([^|]*)|D(%-?%d+)|V([^|]*)|H(%-?%d+)$')
+    -- L (laps of each tyre) is the last field; a record without it (older version) still reads, with 0 laps
+    local f, c, k, b, s, r, o, e, g, t, dl, v, h, lp = tostring(body):match(
+      '^F([%d%.]+)|C(%d+)|K([^|]*)|B([^|]*)|S([^|]*)|R([^|]*)|O([^|]*)|E([%d%.]+)|G([%d%.]+)|T([^|]*)|D(%-?%d+)|V([^|]*)|H(%-?%d+)|?L?([^|]*)$')
     if not f then return nil end
     local orig = {}
     for i, v in ipairs(list(o)) do
@@ -2177,7 +2309,7 @@ do
     end
     return { fuel = tonumber(f), compound = tonumber(c), km = nums(k), body = nums(b), pct = nums(s), raw = nums(r),
       orig = orig, engine = tonumber(e), gearbox = tonumber(g), tow = nums(t), repairLaps = tonumber(dl), kmh = nums(v),
-      beyondSince = tonumber(h) }
+      beyondSince = tonumber(h), laps = nums(lp or '') }
   end
 
   local function damageSig(car)
@@ -2263,6 +2395,7 @@ do
     for i = 0, 3 do physics.setTyresVirtualKM(0, i, r.km[i + 1] or 0) end
     physics.setCarBodyDamage(0, vec4(r.body[1] or 0, r.body[2] or 0, r.body[3] or 0, r.body[4] or 0))
     physics.setCarEngineLife(0, r.engine)
+    for i = 0, 3 do state.tyreLaps[i] = r.laps[i + 1] or 0 end
     local t = r.tow
     if (t[1] or 0) > 0 or (t[2] or 0) > 0 or (t[3] or 0) > 0 then
       state.tow.damage = { powertrain = t[1] or 0, suspension = t[2] or 0, body = t[3] or 0 }
@@ -2643,6 +2776,7 @@ do
 
   -- What the pit pass served and paid (pit stop table)
   function PitStops.noteService(text)
+    PitStops.markService()
     local p = PitStops.pass
     if p then p.service = p.service and (p.service .. '; ' .. text) or text end
   end
@@ -2667,9 +2801,35 @@ do
     PitStops.passInWindow = true
     if PitStops.window() and not state.pit.done then
       state.pit.done = true
-      Record.save('window', 1, 'done')
+      Record.save('window', math.floor(serverTimeMs() / 1000), 'done')
       ac.log('race-control: mandatory pit window: valid driver swap')
     end
+  end
+
+  -- A service in a pit stop does not allow the driver swap nor the penalty in the same stop (decision 161): the valid
+  -- swap of this pit pass is taken back at once (the window goes back to open if it fulfilled it); only after leaving
+  -- the pit lane can it be done again
+  function PitStops.voidSwap()
+    local sw = state.swap
+    if not sw.passSwap or not sw.passSwapValid or sw.passVoided then return end
+    sw.passVoided = true
+    sw.voids = sw.voids + 1
+    if state.pit.done then
+      state.pit.done = false
+      Record.save('window', math.floor(serverTimeMs() / 1000), 'open')
+    end
+    SwapRecord.save()
+    ac.log('race-control: driver swap not valid: service in the same pit stop')
+    rcLog(TEXTS.swapTitle, TEXTS.swapVoidService)
+  end
+
+  -- A service started or seen in the pit pass in progress: marked (pit record), and the swap of this pass taken back
+  function PitStops.markService()
+    if not state.pitPassServiced then
+      state.pitPassServiced = true
+      PitRecord.save()
+    end
+    PitStops.voidSwap()
   end
 
   -- End of the race of this car: valid swaps and stops against the required
@@ -2678,8 +2838,8 @@ do
     PitStops.endChecked = true
     local why
     local req = config.swapRequired or 0
-    if config.swapOn() and req > 0 and state.swap.valid < req then
-      why = string.format(TEXTS.swapsMissingDsq, state.swap.valid, req)
+    if config.swapOn() and req > 0 and SwapRecord.validNow() < req then
+      why = string.format(TEXTS.swapsMissingDsq, SwapRecord.validNow(), req)
     end
     if config.pitStopsEnabled and config.pitStopsRequired > 0 and PitRecord.stops < config.pitStopsRequired then
       local s = string.format(TEXTS.stopsMissingDsq, PitRecord.stops, config.pitStopsRequired)
@@ -2729,6 +2889,13 @@ do
     if not inPit and PitStops.wasInPitlane then
       closePass()
       PitStops.passInWindow = false
+      -- Leaving the pit lane ends the pit stop: the next one may swap drivers and serve penalties again
+      local sw = state.swap
+      sw.passSwap, sw.passSwapValid, sw.passVoided = false, false, false
+      if state.pitPassServiced then
+        state.pitPassServiced = false
+        PitRecord.save()
+      end
     end
     PitStops.wasInPitlane = inPit
     -- A real change in the car at its pit place (the AC pit screen, for example) is a stop with service
@@ -2798,6 +2965,9 @@ do
       DriverTable.swapDone = true
       swapNo = sw.count
       if sw.swapInfo.inWindow then PitStops.validSwap() end
+      -- The swap of this pit pass: a service in it (before, by the driver who left; or later, by this one) takes it back
+      sw.passSwap, sw.passSwapValid, sw.passVoided = true, sw.swapInfo.inWindow, false
+      if state.pitPassServiced then PitStops.voidSwap() end
     elseif state.ui.clock - DriverTable.startT < DECIDE_SECONDS then
       return
     elseif sw.driver == me then
@@ -2829,12 +2999,19 @@ end
 -- the order of the operations (key pitStopOrder, the same notation as PITS_ORDER of the CSP: letters F fuel, T tyres,
 -- R repair one after the other; letters inside < > at the same time; default F<TR> = fuel first, then tyres and repair
 -- together). The stop is applied at the end, not little by little.
--- Enter starts the stop: the controls are locked for the total time, counted in server time and kept in the pit record
--- (a crash or a driver swap in the middle goes on with the time left); at the end the stop is applied to the car.
--- Controls (controls.ini, configurable): arrows up / down / left / right and Enter; gamepad D-pad and A.
+-- The stop is chosen anywhere (decision 159): on track and in the pit lane with the gamepad D-pad (a key press shows
+-- the box for a few seconds); at the pit place also with the keyboard arrows (on track the arrows may be the steering).
+-- No button (decision 160): the last line is the start mode and the start itself: left changes the mode, right starts
+-- the stop. AUTO: stopping at the pit place with the box touched and something chosen starts it at once.
+-- The box not touched is a plain stop (it serves the stop & go and allows the driver swap); a service allows neither the
+-- stop & go nor the driver swap in the same stop (decision 161). The choice is kept until the stop is done or the
+-- session changes. The controls are locked for the total time, counted in server time and kept in the pit record (a
+-- crash or a driver swap in the middle goes on with the time left); at the end the stop is applied to the car.
+-- Controls (controls.ini, configurable): keyboard arrows, gamepad D-pad.
 -- ============================================================
 
-local PitBox = { row = 1, fuel = 0, compound = nil, tyres = 1, repair = {}, open = false }
+local PitBox = { row = 1, fuel = 0, compound = nil, tyres = 1, repair = {}, open = false, touched = false,
+  shownUntil = 0, auto = nil }
 -- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
 do
   local num = CarRead.num
@@ -2846,19 +3023,28 @@ do
   }
   local ALL_TYRES = #TYRE_CHOICES
   -- Rows that take a choice (the others are only shown)
-  local ROWS = { 'fuel', 'compound', 'tyres', 'suspension', 'powertrain', 'body' }
+  local ROWS = { 'fuel', 'compound', 'tyres', 'suspension', 'powertrain', 'body', 'mode' }
   local SERVICE_LOCK_EXTRA = 1   -- seconds added to the lock so the stop ends with the car still locked
 
-  local function button(name, key, pad, period)
-    return ac.ControlButton('12hcuritiba.race-control/Pit stop ' .. name,
-      { keyboard = { key = key }, gamepad = pad, period = period })
+  local SHOW_SECONDS = 5          -- a key press away from the pit place shows the box this long
+  -- Keyboard buttons (at the pit place) and gamepad buttons (anywhere), each configurable in the CSP controls
+  local function button(name, key, period)
+    return ac.ControlButton('12hcuritiba.race-control/Pit stop ' .. name, { keyboard = { key = key }, period = period })
+  end
+  local function padButton(name, pad, period)
+    return ac.ControlButton('12hcuritiba.race-control/Pit stop pad ' .. name, { gamepad = pad, period = period })
   end
   local KEYS = {
-    up = button('up', ui.KeyIndex.Up, ac.GamepadButton.DPadUp),
-    down = button('down', ui.KeyIndex.Down, ac.GamepadButton.DPadDown),
-    left = button('left', ui.KeyIndex.Left, ac.GamepadButton.DPadLeft, 0.08),
-    right = button('right', ui.KeyIndex.Right, ac.GamepadButton.DPadRight, 0.08),
-    enter = button('confirm', ui.KeyIndex.Return, ac.GamepadButton.A),
+    up = button('up', ui.KeyIndex.Up),
+    down = button('down', ui.KeyIndex.Down),
+    left = button('left', ui.KeyIndex.Left, 0.08),
+    right = button('right', ui.KeyIndex.Right, 0.08),
+  }
+  local PAD = {
+    up = padButton('up', ac.GamepadButton.DPadUp),
+    down = padButton('down', ac.GamepadButton.DPadDown),
+    left = padButton('left', ac.GamepadButton.DPadLeft, 0.08),
+    right = padButton('right', ac.GamepadButton.DPadRight, 0.08),
   }
 
   -- Service times of the car (car.ini [PIT_STOP])
@@ -2984,7 +3170,10 @@ do
     local wheels = TYRE_CHOICES[p.tyres][2]
     local km = {}
     for i = 0, 3 do km[i] = num(car.wheels[i].tyreVirtualKM) end
-    for _, w in ipairs(wheels) do km[w] = 0 end
+    for _, w in ipairs(wheels) do
+      km[w] = 0
+      state.tyreLaps[w] = 0
+    end
     local body = {}
     for i = 0, 3 do body[i] = p.repair.body and 0 or num(car.damage[i]) end
     -- Gearbox: only a full reset repairs it (no other game function); everything else is put back after it
@@ -3012,6 +3201,8 @@ do
   -- Start of the stop: controls locked for the total, end in server time in the pit record
   local function startStop(p)
     state.pitService = { startMs = serverTimeMs(), untilMs = serverTimeMs() + p.total * 1000, plan = planText(p) }
+    -- A service: no driver swap nor penalty in this stop (decision 161)
+    PitStops.markService()
     physics.lockUserControlsFor(p.total + SERVICE_LOCK_EXTRA)
     PitRecord.save()
     ac.log(string.format('race-control: pit stop started, %.1f s (%s)', p.total, planText(p)))
@@ -3028,6 +3219,19 @@ do
 
   local function reset()
     PitBox.row, PitBox.fuel, PitBox.compound, PitBox.tyres, PitBox.repair = 1, 0, nil, 1, {}
+    PitBox.touched = false
+  end
+  PitBox.reset = reset
+
+  -- Automatic start: the driver's choice in the box, else the key pitStopMode
+  function PitBox.isAuto()
+    if PitBox.auto == nil then return config.pitStopAuto end
+    return PitBox.auto
+  end
+
+  -- Something to do in the plan: fuel, tyres (a new compound changes the 4) or a repair
+  local function chosen(p)
+    return p.fuel > 0 or #TYRE_CHOICES[p.tyres][2] > 0 or p.repair.suspension or p.repair.powertrain or p.repair.body
   end
 
   local function choose(car, dir)
@@ -3041,9 +3245,14 @@ do
       if n > 0 then PitBox.compound = ((PitBox.compound or num(car.compoundIndex)) + dir) % n end
     elseif what == 'tyres' then
       PitBox.tyres = (PitBox.tyres - 1 + dir) % ALL_TYRES + 1
+    elseif what == 'mode' then
+      -- Automatic / manual start (left): the driver's own choice, not a service (the box is not touched by it)
+      PitBox.auto = not PitBox.isAuto()
+      return
     else
       PitBox.repair[what] = not PitBox.repair[what]
     end
+    PitBox.touched = true
   end
 
   -- Menu of the AC off, once (decision 30)
@@ -3065,20 +3274,27 @@ do
       end
       return
     end
+    local wasOpen = PitBox.open
     PitBox.open = CarRead.parked(car) and not state.hold and not state.dtDsqActive and not state.pitDsqActive
       and not CarState.restoring
-    if not PitBox.open then
-      if not car.isInPit then reset() end
-      return
-    end
-    if KEYS.up:pressed() then PitBox.row = (PitBox.row - 2) % #ROWS + 1 end
-    if KEYS.down:pressed() then PitBox.row = PitBox.row % #ROWS + 1 end
-    if KEYS.left:pressed() then choose(car, -1) end
-    if KEYS.right:pressed() then choose(car, 1) end
-    if KEYS.enter:pressed() then
-      local p = PitBox.plan(car)
-      if p.total > 0 or p.fuel > 0 or #TYRE_CHOICES[p.tyres][2] > 0 then startStop(p) end
-    end
+    -- Choosing: the D-pad anywhere, the keyboard only at the pit place
+    local function hit(name) return PAD[name]:pressed() or (KEYS[name]:pressed() and PitBox.open) end
+    local up, down, left, right = hit('up'), hit('down'), hit('left'), hit('right')
+    if up then PitBox.row = (PitBox.row - 2) % #ROWS + 1 end
+    if down then PitBox.row = PitBox.row % #ROWS + 1 end
+    -- Last line: left changes the mode, right is the start (both modes); on the other lines left / right change the value
+    local confirm = right and ROWS[PitBox.row] == 'mode'
+    if left then choose(car, -1) end
+    if right and not confirm then choose(car, 1) end
+    if (up or down or left or right) and not PitBox.open then PitBox.shownUntil = state.ui.clock + SHOW_SECONDS end
+    if not PitBox.open then return end
+    -- Anything chosen starts the stop: fuel, tyres or a repair (a repair can take 0 s: only collision damage is
+    -- charged, and none is recorded without the tow of the session). AUTO: arriving at the pit place with the box
+    -- touched and something chosen starts it at once; both: the start on the last line. Box not touched: a plain stop,
+    -- nothing is started (it serves the stop & go and allows the driver swap)
+    local p = PitBox.plan(car)
+    if not chosen(p) then return end
+    if confirm or (PitBox.isAuto() and not wasOpen and PitBox.touched) then startStop(p) end
   end
 
   PitRecord.onService = PitBox.resume
@@ -4316,7 +4532,7 @@ function Panel.cellSwap()
     return nil
   end
   local lit = ac.getCar(0).isInPitlane
-  return { value = string.format(TEXTS.swapCount, state.swap.valid, config.swapRequired), color = lit and 'green' or 'dim',
+  return { value = string.format(TEXTS.swapCount, SwapRecord.validNow(), config.swapRequired), color = lit and 'green' or 'dim',
     quiet = not lit }
 end
 
@@ -4661,8 +4877,8 @@ end
 --     settings of the app), pit stop box and car status: a click shows that screen anywhere (visible), a click with it
 --     visible goes back to auto-hide; last on the right, reset (every screen back to its place; later, the setup of the
 --     screens).
---   Auto-hide = the rule of each screen (panel: something to show; setup, pit stop box and car status: stopped at the
---   pit place). The panel is also shown with the mouse over its place and stopped at the pit place, in any mode.
+--   Auto-hide = the rule of each screen (panel: something to show; setup, pit stop box and car status: in the pit lane
+--   or during the stop, decision 154). The panel is also shown with the mouse over its place and stopped at the pit place, in any mode.
 -- Position (offset from the default place, px at 1080p), mode and pin are kept on this computer (ac.storage).
 -- ============================================================
 
@@ -4865,6 +5081,14 @@ local function drawText(text, font, size, pos, color)
   ui.popDWriteFont()
 end
 
+-- Width of a text in a font and size (the layout of every screen measures with it)
+local function textWidth(text, font, size)
+  ui.pushDWriteFont(font)
+  local tw = ui.measureDWriteText(text, size).x
+  ui.popDWriteFont()
+  return tw
+end
+
 -- alpha (optional, default 1): the whole panel fades with it (opening)
 local function drawPanel(p1, p2, border, s, alpha)
   Drag.hit(p1, p2)
@@ -4935,6 +5159,9 @@ local drawPitBox
 -- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
 do
   local BOX_W, BOX_H = 288, 195          -- px at 1080p (80% size)
+  -- Layout (decision 158): the size stays; font 11 and one gap everywhere: under the title line, between the 9 rows and
+  -- the footer line, and to the bottom (10 lines of ROW_H; the rest shared by the 4 gaps)
+  local BOX = { font = 11, head = 21, side = 14 }
   local BOX_RIGHT, BOX_BOTTOM = 1920 - 1397 - 288, 48
   -- Car status on its right (status_draw.lua: 171 px wide, 48 px from the right edge at 1080p) and the gap between them
   local STATUS_W, STATUS_RIGHT, STATUS_GAP = 171, 48, 1920 - 1397 - 288 - 48 - 171
@@ -4953,10 +5180,13 @@ do
 
   drawPitBox = function(car, w, h, s)
     local sv = state.pitService
-    -- Mode (Drag): always hidden = never; auto-hide = stopped at the pit place or during the stop; visible = always
-    -- (outside the pit place only information: the commands work only there)
+    -- Mode (Drag): always hidden = never; auto-hide = in the pit lane, during the stop, or for a few seconds after a
+    -- D-pad press away from the pit place (decisions 154 and 159); visible = always
     local mode = Drag.mode('pitbox')
-    if mode == 'hidden' or (mode == 'auto' and not PitBox.open and not sv) then return end
+    local recent = state.ui.clock < PitBox.shownUntil
+    if mode == 'hidden' or (mode == 'auto' and not car.isInPitlane and not PitBox.open and not sv and not recent) then
+      return
+    end
     local k = h / 1080
     local bw, bh = BOX_W * s, BOX_H * s
     local o = Drag.offset('pitbox', h)
@@ -4968,16 +5198,18 @@ do
     local p = PitBox.plan(car)
     if sv then p.total = (sv.untilMs - sv.startMs) / 1000 end
     drawPanel(p1, p2, BORDER_GREEN, s)
-    drawText(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
-    drawTextRight(string.format(TEXTS.pitBoxTotal, mmss(p.total)), FONT_MONO, 11 * s, p2.x - 12 * s, p1.y + 5 * s,
-      COLOR_TITLE)
-    drawSeparator(p1, p2, p1.y + 21 * s, s)
+    local fs = BOX.font * s
+    local gap = (BOX_H - BOX.head - 10 * ROW_H) / 4 * s
+    drawText(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s, vec2(p1.x + BOX.side * s, p1.y + 4 * s), COLOR_TITLE)
+    drawTextRight(string.format(TEXTS.pitBoxTotal, mmss(p.total)), FONT_MONO, 11 * s, p2.x - BOX.side * s,
+      p1.y + 5 * s, COLOR_TITLE)
+    drawSeparator(p1, p2, p1.y + BOX.head * s, s)
     local names = PitBox.compounds()
     local chips = {}
     for _, wIdx in ipairs(PitBox.TYRE_CHOICES[p.tyres][2]) do chips[wIdx] = true end
     local wh = car.wheels or {}
     local rows = {
-      { 'fuel', TEXTS.pitFuel, string.format(TEXTS.pitFuelValue, p.fuel, num(car.fuel) + p.fuel), p.times.fuel },
+      { 'fuel', TEXTS.pitFuel, string.format(TEXTS.pitFuelValue, p.fuel, num(car.fuel) + p.fuel, num(car.maxFuel)), p.times.fuel },
       { 'compound', TEXTS.pitCompound, '< ' .. tostring(ac.getTyresLongName(0, p.compound) or names[p.compound] or '-')
         .. ' >', nil },
       { 'tyres', TEXTS.pitTyres, nil, p.times.tyres },
@@ -5006,40 +5238,53 @@ do
       left.body = remain(r0 + t.suspension + t.powertrain, t.body)
     end
     local chosen = PitBox.ROWS[PitBox.row]
+    -- Values start after the widest row label
+    local labelW = 0
+    for _, r in ipairs(rows) do labelW = math.max(labelW, textWidth(r[2], FONT_TEXT, fs)) end
+    local vx = p1.x + BOX.side * s + labelW + 8 * s
+    local rowsTop = p1.y + BOX.head * s + gap
     for i, r in ipairs(rows) do
-      local y = p1.y + (21 + 4 + (i - 1) * ROW_H) * s
+      local y = rowsTop + (i - 1) * ROW_H * s
       local sel = not sv and r[1] ~= nil and r[1] == chosen
-      local vx = p1.x + 110 * s
-      drawText(r[2], FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y), r[1] and COLOR_TITLE or COLOR_OFF)
+      drawText(r[2], FONT_TEXT, fs, vec2(p1.x + BOX.side * s, y), r[1] and COLOR_TITLE or COLOR_OFF)
       if r[1] == 'tyres' then
         for wIdx = 0, 3 do
-          drawText(PitBox.WHEELS[wIdx], FONT_MONO, 10 * s, vec2(vx + wIdx * 24 * s, y),
+          drawText(PitBox.WHEELS[wIdx], FONT_MONO, fs, vec2(vx + wIdx * 26 * s, y),
             chips[wIdx] and (sel and COLOR_SEL or COLOR_SWAP) or COLOR_OFF)
         end
       elseif r[1] == 'suspension' or r[1] == 'powertrain' or r[1] == 'body' then
         local value = p.repair[r[1]] and TEXTS.pitRepairYes
           or (PitBox.damaged(car, r[1]) and TEXTS.pitRepairNo or TEXTS.pitRepairNone)
-        drawText(value, FONT_MONO, 10 * s, vec2(vx, y), sel and COLOR_SEL or COLOR_TITLE)
+        drawText(value, FONT_MONO, fs, vec2(vx, y), sel and COLOR_SEL or COLOR_TITLE)
       else
-        drawText(r[3], FONT_MONO, 10 * s, vec2(vx, y), sel and COLOR_SEL or (r[1] and COLOR_TITLE or COLOR_OFF))
+        drawText(r[3], FONT_MONO, fs, vec2(vx, y), sel and COLOR_SEL or (r[1] and COLOR_TITLE or COLOR_OFF))
       end
       if r[4] then
         local rest = sv and left[r[1]]
-        drawTextRight(mmss(rest or r[4]), FONT_MONO, 10 * s, p2.x - 12 * s, y,
+        drawTextRight(mmss(rest or r[4]), FONT_MONO, fs, p2.x - BOX.side * s, y,
           rest and rest > 0 and COLOR_SWAP or COLOR_TITLE)
       end
     end
+    -- Footer under its line, the same gap to the bottom
+    local sep = rowsTop + #rows * ROW_H * s + gap
+    drawSeparator(p1, p2, sep, s)
+    local fy = sep + gap
     local elapsed = sv and math.max(p.total - (sv.untilMs - serverTimeMs()) / 1000, 0) or 0
-    drawText(sv and TEXTS.pitBoxServing or TEXTS.pitBoxConfirm, FONT_TEXT, 10 * s,
-      vec2(p1.x + 14 * s, p2.y - 16 * s), sv and COLOR_SWAP or COLOR_OFF)
-    drawTextRight(string.format('%s / %s', mmss(elapsed), mmss(p.total)), FONT_MONO, 10 * s, p2.x - 12 * s,
-      p2.y - 16 * s, COLOR_TITLE)
+    -- Last line: the start mode (left changes it) and the start (right)
+    local modeSel = not sv and chosen == 'mode'
+    local footer = sv and TEXTS.pitBoxServing
+      or string.format(TEXTS.pitBoxMode, PitBox.isAuto() and TEXTS.pitModeAuto or TEXTS.pitModeManual) .. TEXTS.pitBoxStart
+    drawText(footer, FONT_TEXT, fs, vec2(p1.x + BOX.side * s, fy),
+      sv and COLOR_SWAP or (modeSel and COLOR_SEL or COLOR_OFF))
+    drawTextRight(string.format('%s / %s', mmss(elapsed), mmss(p.total)), FONT_MONO, fs, p2.x - BOX.side * s, fy,
+      COLOR_TITLE)
     Drag.icons('pitbox', p1, p2, s)
   end
 end
 -- ============================================================
 -- Setup status (approved screen 14, 80%: 384 x 224 px at 1080p, bottom left, mirroring the pit stop box) and car status
--- (approved screen 12, 80%: 171 x 283 px at 1080p, right of the pit stop box, in the corner). Only information, shown
+-- (approved screen 12, 80%: 171 px wide at 1080p, right of the pit stop box, in the corner; height fitted to its
+-- content, decision 158). Only information, shown
 -- with the pit stop box. Setup values from the setup spinners (names of the setup file sections; a value the car does
 -- not have shows "-"); the rest from the car state.
 -- ============================================================
@@ -5049,12 +5294,53 @@ local drawStatus
 do
   local num = CarRead.num
   local SETUP_W, SETUP_H, SETUP_LEFT = 384, 224, 235
-  local STATUS_W, STATUS_H, STATUS_RIGHT = 171, 283, 1920 - 1701 - 171
+  -- Setup status layout (decision 158): the size stays; font and line pitch fill it with one gap everywhere: under the
+  -- title line, between the columns, the tyres band and the electronics (each with its line), and to the bottom.
+  -- 13 lines of SETUP.lh (7 columns, 5 tyres band, 1 electronics); SETUP.gap = what is left, shared by the 6 gaps
+  local SETUP = { font = 10, lh = 13, head = 21, side = 14 }
+  SETUP.gap = (SETUP_H - SETUP.head - 13 * SETUP.lh) / 6
+  SETUP.col = (SETUP_W - 2 * SETUP.side) / 3
+  -- Car status: 171 wide; height = the body block ends 8 px above the bottom (decision 158)
+  local STATUS_W, STATUS_H, STATUS_RIGHT = 171, 269, 1920 - 1701 - 171
   local MARGIN = 48
   local COLOR_OFF = rgbm(0.45, 0.48, 0.5, 1)
   local COLOR_OK = rgbm(0.45, 1, 0.55, 1)
   local COLOR_WARN = rgbm(1, 0.85, 0.25, 1)
   local WHEEL = { [0] = 'FL', 'FR', 'RL', 'RR' }
+
+  -- Color of the tyre life, graded (no hard cut, decision 163): green at 100, yellow in the middle of the half life
+  -- band, orange at its end (tyreLife worn), red at 0; between two stops the color blends
+  local COLOR_COLD = rgbm(0.35, 0.65, 1, 1)
+  local function blend(a, b, k)
+    k = math.min(math.max(k, 0), 1)
+    return rgbm(a.r + (b.r - a.r) * k, a.g + (b.g - a.g) * k, a.b + (b.b - a.b) * k, 1)
+  end
+
+  -- Color of the tyre temperature (decision 164), graded along the thermal curve of the compound: ideal green; cold
+  -- side green to blue at edge %; hot side green to yellow at edge % (overheating), then yellow to red down to the
+  -- lowest grip of the hot end (cliff)
+  local function thermalColor(th)
+    local edge = config.tyreTemp.edge
+    if th.side == 'ideal' then return COLOR_OK end
+    local k = (100 - th.grip) / math.max(100 - edge, 0.01)
+    if th.side == 'cold' then return blend(COLOR_OK, COLOR_COLD, k) end
+    if th.grip >= edge then return blend(COLOR_OK, COLOR_WARN, k) end
+    return blend(COLOR_WARN, BORDER_RED, (edge - th.grip) / math.max(edge - th.hotEnd, 0.01))
+  end
+
+  local function lifeColor(life)
+    local ok, worn = config.tyreLife.ok, config.tyreLife.worn
+    local stops = { { 100, COLOR_OK }, { ok, COLOR_OK }, { (ok + worn) / 2, COLOR_WARN }, { worn, COLOR_ORANGE },
+      { 0, BORDER_RED } }
+    for n = 2, #stops do
+      local a, b = stops[n - 1], stops[n]
+      if life >= b[1] then
+        local k = a[1] > b[1] and (a[1] - life) / (a[1] - b[1]) or 0
+        return rgbm(a[2].r + (b[2].r - a[2].r) * k, a[2].g + (b[2].g - a[2].g) * k, a[2].b + (b[2].b - a[2].b) * k, 1)
+      end
+    end
+    return BORDER_RED
+  end
 
   -- Setup spinner value shown (value x displayMultiplier), or '-'
   local function spinners()
@@ -5066,27 +5352,21 @@ do
     return out
   end
 
-  local function textWidth(text, font, size)
-    ui.pushDWriteFont(font)
-    local tw = ui.measureDWriteText(text, size).x
-    ui.popDWriteFont()
-    return tw
-  end
-
   -- Column of rows { line, label, values }: the values start after the widest label of the column and each value after
   -- the widest value of the column, so no label or value runs into the next one
   local function column(p1, s, y0, lh, x, rows)
+    local fs = SETUP.font * s
     local labelW, valueW = 0, 0
     for _, r in ipairs(rows) do
-      labelW = math.max(labelW, textWidth(r[2], FONT_TEXT, 9 * s))
-      for _, v in ipairs(r[3]) do valueW = math.max(valueW, textWidth(tostring(v or '-'), FONT_MONO, 9 * s)) end
+      labelW = math.max(labelW, textWidth(r[2], FONT_TEXT, fs))
+      for _, v in ipairs(r[3]) do valueW = math.max(valueW, textWidth(tostring(v or '-'), FONT_MONO, fs)) end
     end
     local vx = p1.x + x * s + labelW + 7 * s
     for _, r in ipairs(rows) do
       local y = y0 + r[1] * lh
-      drawText(r[2], FONT_TEXT, 9 * s, vec2(p1.x + x * s, y), COLOR_OFF)
+      drawText(r[2], FONT_TEXT, fs, vec2(p1.x + x * s, y), COLOR_OFF)
       for i, v in ipairs(r[3]) do
-        drawText(tostring(v or '-'), FONT_MONO, 9 * s, vec2(vx + (i - 1) * (valueW + 6 * s), y), COLOR_TITLE)
+        drawText(tostring(v or '-'), FONT_MONO, fs, vec2(vx + (i - 1) * (valueW + 6 * s), y), COLOR_TITLE)
       end
     end
   end
@@ -5098,18 +5378,20 @@ do
     Drag.group = 'setup'
     local p2 = vec2(p1.x + SETUP_W * s, p1.y + SETUP_H * s)
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(TEXTS.setupTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
-    drawTextRight(string.format(TEXTS.setupLap, car.lapCount + 1), FONT_MONO, 10 * s, p2.x - 12 * s, p1.y + 5 * s,
-      COLOR_OFF)
-    drawSeparator(p1, p2, p1.y + 21 * s, s)
+    local fs, gap = SETUP.font * s, SETUP.gap * s
+    local c1, c2, c3 = SETUP.side, SETUP.side + SETUP.col, SETUP.side + 2 * SETUP.col
+    drawText(TEXTS.setupTitle, FONT_TITLE, 12 * s, vec2(p1.x + SETUP.side * s, p1.y + 4 * s), COLOR_TITLE)
+    drawTextRight(string.format(TEXTS.setupLap, car.lapCount + 1), FONT_MONO, 10 * s, p2.x - SETUP.side * s,
+      p1.y + 5 * s, COLOR_OFF)
+    drawSeparator(p1, p2, p1.y + SETUP.head * s, s)
     local sp = spinners()
     local wh = car.wheels or {}
-    local y0 = p1.y + 26 * s
-    local lh = 11 * s
+    local lh = SETUP.lh * s
+    local y0 = p1.y + SETUP.head * s + gap
     -- Aero and drive train
-    drawText(TEXTS.setupAero, FONT_TITLE, 9 * s, vec2(p1.x + 14 * s, y0), COLOR_TITLE)
-    drawText(TEXTS.setupDrive, FONT_TITLE, 9 * s, vec2(p1.x + 14 * s, y0 + 2 * lh), COLOR_TITLE)
-    column(p1, s, y0, lh, 14, {
+    drawText(TEXTS.setupAero, FONT_TITLE, fs, vec2(p1.x + c1 * s, y0), COLOR_TITLE)
+    drawText(TEXTS.setupDrive, FONT_TITLE, fs, vec2(p1.x + c1 * s, y0 + 2 * lh), COLOR_TITLE)
+    column(p1, s, y0, lh, c1, {
       { 1, TEXTS.setupWing, { sp.WING_1, sp.WING_2 } },
       { 3, TEXTS.setupDiffPower, { string.format('%.0f%%', num(car.differentialPower) * 100) } },
       { 4, TEXTS.setupDiffCoast, { string.format('%.0f%%', num(car.differentialCoast) * 100) } },
@@ -5118,8 +5400,8 @@ do
         string.format('%.1f', 100 - num(car.brakeBias) * 100) } },
     })
     -- Chassis
-    drawText(TEXTS.setupChassis, FONT_TITLE, 9 * s, vec2(p1.x + 130 * s, y0), COLOR_TITLE)
-    column(p1, s, y0, lh, 130, {
+    drawText(TEXTS.setupChassis, FONT_TITLE, fs, vec2(p1.x + c2 * s, y0), COLOR_TITLE)
+    column(p1, s, y0, lh, c2, {
       { 1, TEXTS.setupHeight, { sp.ROD_LENGTH_LF, sp.ROD_LENGTH_LR } },
       { 2, TEXTS.setupArb, { sp.ARB_FRONT, sp.ARB_REAR } },
       { 3, TEXTS.setupToe .. ' F', { string.format('%.2f', num(wh[0] and wh[0].toeIn)),
@@ -5132,8 +5414,8 @@ do
         string.format('%.1f', num(wh[3] and wh[3].camber)) } },
     })
     -- Suspension
-    drawText(TEXTS.setupSuspension, FONT_TITLE, 9 * s, vec2(p1.x + 250 * s, y0), COLOR_TITLE)
-    column(p1, s, y0, lh, 250, {
+    drawText(TEXTS.setupSuspension, FONT_TITLE, fs, vec2(p1.x + c3 * s, y0), COLOR_TITLE)
+    column(p1, s, y0, lh, c3, {
       { 1, TEXTS.setupSpring .. ' F', { sp.SPRING_RATE_LF, sp.SPRING_RATE_RF } },
       { 2, TEXTS.setupSpring .. ' R', { sp.SPRING_RATE_LR, sp.SPRING_RATE_RR } },
       { 3, TEXTS.setupBump .. ' F', { sp.DAMP_BUMP_LF, sp.DAMP_BUMP_RF } },
@@ -5141,26 +5423,47 @@ do
       { 5, TEXTS.setupRebound .. ' F', { sp.DAMP_REBOUND_LF, sp.DAMP_REBOUND_RF } },
       { 6, TEXTS.setupRebound .. ' R', { sp.DAMP_REBOUND_LR, sp.DAMP_REBOUND_RR } },
     })
-    -- Tyres band: compound fitted; pressure, life and km of each wheel (a tyre can be changed alone)
-    local ty = y0 + 8 * lh
-    drawText(TEXTS.setupTyres, FONT_TITLE, 9 * s, vec2(p1.x + 14 * s, ty), COLOR_TITLE)
-    drawText(tostring(ac.getTyresLongName(0, -1) or '-'), FONT_TEXT, 9 * s, vec2(p1.x + 60 * s, ty), COLOR_TITLE)
+    -- Tyres band, under its line: compound fitted; pressure, life and km of each wheel (a tyre can be changed alone);
+    -- the 4 wheel columns spread to the right side
+    local sep1 = y0 + 7 * lh + gap
+    drawSeparator(p1, p2, sep1, s)
+    local ty = sep1 + gap
+    drawText(TEXTS.setupTyres, FONT_TITLE, fs, vec2(p1.x + c1 * s, ty), COLOR_TITLE)
+    drawText(tostring(ac.getTyresLongName(0, -1) or '-'), FONT_TEXT, fs, vec2(p1.x + 60 * s, ty), COLOR_TITLE)
+    local wx0 = p1.x + 150 * s
+    local wStep = (p2.x - SETUP.side * s - textWidth('99/99', FONT_MONO, fs) - wx0) / 3
     for i = 0, 3 do
-      local x = p1.x + (150 + i * 56) * s
-      local life = (1 - num(wh[i] and wh[i].tyreWear)) * 100
-      drawText(WHEEL[i], FONT_MONO, 9 * s, vec2(x, ty), COLOR_OFF)
-      drawText(string.format('%.1f', num(wh[i] and wh[i].tyrePressure)), FONT_MONO, 9 * s, vec2(x, ty + lh), COLOR_TITLE)
-      drawText(string.format('%.0f%%', life), FONT_MONO, 9 * s, vec2(x, ty + 2 * lh), life < 70 and COLOR_WARN or COLOR_TITLE)
-      drawText(string.format('%.0f', num(wh[i] and wh[i].tyreVirtualKM)), FONT_MONO, 9 * s, vec2(x, ty + 3 * lh),
+      local x = wx0 + i * wStep
+      -- Remaining life by the wear curve of the compound (CarRead.tyreLife), color graded green / yellow / red;
+      -- without a curve, the grip of the tyre (tyreWear) in %, white
+      local life = CarRead.tyreLife(car, i)
+      local color = life and lifeColor(life) or COLOR_TITLE
+      life = life or num(wh[i] and wh[i].tyreWear) * 100
+      drawText(WHEEL[i], FONT_MONO, fs, vec2(x, ty), COLOR_OFF)
+      -- Pressure, colored by the temperature of the tyre (thermal curve of the compound); without it, white
+      local th = CarRead.tyreThermal(car, i)
+      drawText(string.format('%.1f', num(wh[i] and wh[i].tyrePressure)), FONT_MONO, fs, vec2(x, ty + lh),
+        th and thermalColor(th) or COLOR_TITLE)
+      drawText(string.format('%.0f%%', life), FONT_MONO, fs, vec2(x, ty + 2 * lh), color)
+      drawText(string.format('%.0f', num(wh[i] and wh[i].tyreVirtualKM)), FONT_MONO, fs, vec2(x, ty + 3 * lh),
         COLOR_TITLE)
+      -- Laps run / laps expected by the wear curve of the compound, colored by the phase of the curve at the km of the
+      -- tyre (max grip, half life, end of life, graded as the life); without a curve, the laps run, white
+      local laps = state.tyreLaps[i] or 0
+      local lapLife, lapLimit = CarRead.tyreLapLimit(car, i, laps)
+      drawText(lapLife and string.format(TEXTS.setupLapsOf, laps, lapLimit and tostring(lapLimit) or '--')
+        or tostring(laps), FONT_MONO, fs, vec2(x, ty + 4 * lh), lapLife and lifeColor(lapLife) or COLOR_TITLE)
     end
-    drawText(TEXTS.setupPsi, FONT_TEXT, 9 * s, vec2(p1.x + 100 * s, ty + lh), COLOR_OFF)
-    drawText(TEXTS.setupLife, FONT_TEXT, 9 * s, vec2(p1.x + 100 * s, ty + 2 * lh), COLOR_OFF)
-    drawText(TEXTS.setupKm, FONT_TEXT, 9 * s, vec2(p1.x + 100 * s, ty + 3 * lh), COLOR_OFF)
-    -- Electronics
+    drawText(TEXTS.setupPsi, FONT_TEXT, fs, vec2(p1.x + 100 * s, ty + lh), COLOR_OFF)
+    drawText(TEXTS.setupLife, FONT_TEXT, fs, vec2(p1.x + 100 * s, ty + 2 * lh), COLOR_OFF)
+    drawText(TEXTS.setupKm, FONT_TEXT, fs, vec2(p1.x + 100 * s, ty + 3 * lh), COLOR_OFF)
+    drawText(TEXTS.setupLaps, FONT_TEXT, fs, vec2(p1.x + 100 * s, ty + 4 * lh), COLOR_OFF)
+    -- Electronics, under its line; the same gap to the bottom
+    local sep2 = ty + 5 * lh + gap
+    drawSeparator(p1, p2, sep2, s)
     drawText(string.format(TEXTS.setupElectronics, num(car.absMode), num(car.tractionControlMode),
       num(car.tractionControl2), num(car.fuelMap), num(car.currentEngineBrakeSetting), num(car.mgukDelivery),
-      num(car.mgukRecovery)), FONT_MONO, 9 * s, vec2(p1.x + 14 * s, p2.y - 15 * s), COLOR_TITLE)
+      num(car.mgukRecovery)), FONT_MONO, fs, vec2(p1.x + c1 * s, sep2 + gap), COLOR_TITLE)
     Drag.icons('setup', p1, p2, s)
   end
 
@@ -5188,45 +5491,47 @@ do
   -- the end of the body
   -- Body: the nose reaches ahead of the front wheels almost the span of the wishbone base (8); the tail goes back 1/5
   -- of what the nose went forward. The whole car sits 4 higher, clear of the B value below it
-  local F1_BODY = { -6, -36, 6, 33 }   -- { left x, top y, right x, bottom y }
+  -- Measures of the drawing, one table (units of s from the center of the body area)
+  local F1 = {}
+  F1.BODY = { -6, -36, 6, 33 }   -- { left x, top y, right x, bottom y }
   -- The nose narrows 15% in total at its tip, back to the full width where the cockpit starts (y -9.2); flat front with
-  -- slightly rounded corners (radius F1_NOSE_R)
-  local F1_NOSE_HALF, F1_COCKPIT_Y, F1_NOSE_R = 5.1, -9.2, 1.5
+  -- slightly rounded corners (radius F1.NOSE_R)
+  F1.NOSE_HALF, F1.COCKPIT_Y, F1.NOSE_R = 5.1, -9.2, 1.5
   -- Plus 10% more at the tip (0.6 each side), back to nothing at the middle of the front wishbone base (y -21); in
   -- front of the tip, the radiator inlet: a white bar as thick as the steering wheel line
-  local F1_NOSE_EXTRA, F1_EXTRA_Y = 0.6, -21
+  F1.NOSE_EXTRA, F1.EXTRA_Y = 0.6, -21
   -- And 10% more (0.6 each side) from the front point of the front wishbone base (y -25) to the tip
-  local F1_NOSE_EXTRA2, F1_EXTRA2_Y = 0.6, -25
-  local F1_SHIFT = -4
-  local F1_WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }   -- { inner x, outer x, top y, bottom y }
+  F1.NOSE_EXTRA2, F1.EXTRA2_Y = 0.6, -25
+  F1.SHIFT = -4
+  F1.WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }   -- { inner x, outer x, top y, bottom y }
   local function drawF1(cx, cy, s)
     local body = COLOR_TITLE
     local function P(x, y) return vec2(cx + x * s, cy + y * s) end
     -- Half width of the body at y: tapered nose, straight from the cockpit back
-    local noseY = F1_BODY[2] + F1_NOSE_R
+    local noseY = F1.BODY[2] + F1.NOSE_R
     local function half(y)
-      if y >= F1_COCKPIT_Y then return F1_BODY[3] end
-      local k = math.max((y - noseY) / (F1_COCKPIT_Y - noseY), 0)
-      local extra = y < F1_EXTRA_Y and F1_NOSE_EXTRA * (1 - math.max((y - noseY) / (F1_EXTRA_Y - noseY), 0)) or 0
-      if y < F1_EXTRA2_Y then extra = extra + F1_NOSE_EXTRA2 * (1 - math.max((y - noseY) / (F1_EXTRA2_Y - noseY), 0)) end
-      return F1_NOSE_HALF + (F1_BODY[3] - F1_NOSE_HALF) * k - extra
+      if y >= F1.COCKPIT_Y then return F1.BODY[3] end
+      local k = math.max((y - noseY) / (F1.COCKPIT_Y - noseY), 0)
+      local extra = y < F1.EXTRA_Y and F1.NOSE_EXTRA * (1 - math.max((y - noseY) / (F1.EXTRA_Y - noseY), 0)) or 0
+      if y < F1.EXTRA2_Y then extra = extra + F1.NOSE_EXTRA2 * (1 - math.max((y - noseY) / (F1.EXTRA2_Y - noseY), 0)) end
+      return F1.NOSE_HALF + (F1.BODY[3] - F1.NOSE_HALF) * k - extra
     end
     local tip = half(noseY)
     -- Outline: flat nose with rounded corners, tapered sides (two slopes) to the cockpit, straight sides, round tail
-    ui.pathArcTo(P(tip - F1_NOSE_R, noseY), F1_NOSE_R * s, 0, -math.pi / 2, 4)
-    ui.pathArcTo(P(-tip + F1_NOSE_R, noseY), F1_NOSE_R * s, -math.pi / 2, -math.pi, 4)
-    ui.pathLineTo(P(-half(F1_EXTRA2_Y), F1_EXTRA2_Y))
-    ui.pathLineTo(P(-half(F1_EXTRA_Y), F1_EXTRA_Y))
-    ui.pathLineTo(P(-F1_BODY[3], F1_COCKPIT_Y))
-    ui.pathArcTo(P(0, F1_BODY[4] - F1_BODY[3]), F1_BODY[3] * s, math.pi, 0, 12)
-    ui.pathLineTo(P(F1_BODY[3], F1_COCKPIT_Y))
-    ui.pathLineTo(P(half(F1_EXTRA_Y), F1_EXTRA_Y))
-    ui.pathLineTo(P(half(F1_EXTRA2_Y), F1_EXTRA2_Y))
+    ui.pathArcTo(P(tip - F1.NOSE_R, noseY), F1.NOSE_R * s, 0, -math.pi / 2, 4)
+    ui.pathArcTo(P(-tip + F1.NOSE_R, noseY), F1.NOSE_R * s, -math.pi / 2, -math.pi, 4)
+    ui.pathLineTo(P(-half(F1.EXTRA2_Y), F1.EXTRA2_Y))
+    ui.pathLineTo(P(-half(F1.EXTRA_Y), F1.EXTRA_Y))
+    ui.pathLineTo(P(-F1.BODY[3], F1.COCKPIT_Y))
+    ui.pathArcTo(P(0, F1.BODY[4] - F1.BODY[3]), F1.BODY[3] * s, math.pi, 0, 12)
+    ui.pathLineTo(P(F1.BODY[3], F1.COCKPIT_Y))
+    ui.pathLineTo(P(half(F1.EXTRA_Y), F1.EXTRA_Y))
+    ui.pathLineTo(P(half(F1.EXTRA2_Y), F1.EXTRA2_Y))
     ui.pathStroke(body, true, 1)
     -- Radiator inlet: white bar on the front, as thick as the steering wheel line (1 px), almost to the corners
-    local a, b = P(-tip + 0.3, F1_BODY[2]), P(tip - 0.3, F1_BODY[2])
+    local a, b = P(-tip + 0.3, F1.BODY[2]), P(tip - 0.3, F1.BODY[2])
     ui.drawRectFilled(vec2(a.x, a.y - 1), b, rgbm(1, 1, 1, 1))
-    for _, wl in ipairs(F1_WHEELS) do
+    for _, wl in ipairs(F1.WHEELS) do
       local mid = (wl[3] + wl[4]) / 2
       for _, sd in ipairs({ -1, 1 }) do
         local x1, x2 = sd < 0 and -wl[2] or wl[1], sd < 0 and -wl[1] or wl[2]
@@ -5317,7 +5622,9 @@ do
       return v, math.min(v / limit, 1),
         v > limit and COLOR_ORANGE or (v > limit / 2 and COLOR_WARN or (v > 0 and COLOR_OK or COLOR_OFF))
     end
-    local cx, cy = (p1.x + p2.x) / 2, y + 66 * s
+    -- 70: the F bar (cy - 58) 12 px under the Body title, like the content of the other sections; 8 px left under
+    -- the B bar (STATUS_H)
+    local cx, cy = (p1.x + p2.x) / 2, y + 70 * s
     local track = rgbm(1, 1, 1, 0.1)
     local function hbar(yb, k, color)
       local x1, x2 = cx - 30 * s, cx + 30 * s
@@ -5341,20 +5648,20 @@ do
     drawText(string.format('L %.0f', vL), FONT_MONO, 9 * s, vec2(p1.x + 19 * s, cy - 5 * s), cL)
     drawText(string.format('R %.0f', vR), FONT_MONO, 9 * s, vec2(p2.x - 50 * s, cy - 5 * s), cR)
     vbar(p2.x - 15 * s, kR, cR)
-    drawF1(cx, cy + F1_SHIFT * s, s)
+    drawF1(cx, cy + F1.SHIFT * s, s)
     Drag.icons('status', p1, p2, s)
   end
 
-  -- Mode of each screen (Drag): always hidden = never; auto-hide = with the pit stop box (stopped at the pit place or
-  -- during the stop); visible = always
-  local function shown(group)
+  -- Mode of each screen (Drag): always hidden = never; auto-hide = in the pit lane or during the stop (decision 154);
+  -- visible = always
+  local function shown(group, car)
     local mode = Drag.mode(group)
-    return mode == 'visible' or (mode == 'auto' and (PitBox.open or state.pitService ~= nil))
+    return mode == 'visible' or (mode == 'auto' and (car.isInPitlane or PitBox.open or state.pitService ~= nil))
   end
 
   drawStatus = function(car, w, h, s)
-    if shown('setup') then drawSetup(car, w, h, s) end
-    if shown('status') then drawCar(car, w, h, s) end
+    if shown('setup', car) then drawSetup(car, w, h, s) end
+    if shown('status', car) then drawCar(car, w, h, s) end
   end
 end
 function script.drawUI()
@@ -5398,17 +5705,11 @@ function script.drawUI()
   -- at 1080p up to 1.3x (1.23x at 4K), so on a big screen the boxes are bigger but take a smaller part of it.
   local s = math.min(math.max((h / 1080) ^ 0.3, 1), 1.3)
   -- Race Control panel cell widths: measured from their widest text, so no text is cut (the panel width is fixed)
-  local function textW(text, size)
-    ui.pushDWriteFont(FONT_TITLE)
-    local tw = ui.measureDWriteText(text, size).x
-    ui.popDWriteFont()
-    return tw
-  end
   local cellW, fixedW = {}, 0
   for i, c in ipairs(PANEL_CELLS) do
     if c.widest then
-      local vw = textW(c.widest, (c.title and 13 or 15) * s)
-      local tw = c.title and textW(c.title, 10 * s) or 0
+      local vw = textWidth(c.widest, FONT_TITLE, (c.title and 13 or 15) * s)
+      local tw = c.title and textWidth(c.title, FONT_TITLE, 10 * s) or 0
       cellW[i] = math.ceil(math.max(vw, tw) + 16 * s)
       fixedW = fixedW + cellW[i]
     end
@@ -5766,7 +6067,8 @@ function script.drawUI()
 
   -- Own pit stop box, bottom right corner (stopped at the own pit place, or during the stop)
   -- with the setup status (bottom left) and the car status (right of it)
-  if config.mode == 'CSP' then
+  -- Before the opening nothing is on screen (the first thing is the opening): the pit screens wait for it too
+  if config.mode == 'CSP' and Intro.done then
     -- Their own growth on screens bigger than 1080p, slightly more than the panel (screenScale); 1x at 1080p
     local sb = math.min(math.max((h / 1080) ^ config.screenScale.exponent, 1), math.max(config.screenScale.max, 1))
     drawPitBox(ac.getCar(0), w, h, sb)
@@ -5897,6 +6199,7 @@ function script.update(dt)
     PitStops.endChecked = false
     DriverTable.reset()
     WrongWay.reset()
+    PitBox.reset()
     state.swap.swapInfo = nil
     state.tow.jumpPending = false
     state.tow.repairDone = false
@@ -6031,6 +6334,10 @@ function script.update(dt)
     if lineFrame then
       Rules.line(viaPit, g, lapCount)
       l.lastLap = lapCount
+    end
+    -- Laps of each tyre (setup status): one more at each line crossing; a tyre fitted in the pit stop starts at 0
+    if lineFrame then
+      for i = 0, 3 do state.tyreLaps[i] = (state.tyreLaps[i] or 0) + 1 end
     end
     DamageClass.update(car, lineFrame)
     CarState.update(car, lineFrame)
