@@ -462,6 +462,7 @@ local TEXTS = {
     SD1 = 'Exclusion zone cut - zone 1',
     SD2 = 'Exclusion zone cut - zone 2',
     PSE = 'Pit lane speeding',
+    RC = 'Race Control decision',
   },
   -- KMR drive-through reasons (category K<n>); on screen with " (KMR)", in the log with " (issued by KMR)"
   kmrReasons = {
@@ -673,6 +674,7 @@ local state = {
   dtDsqActive = false,
   onJumped = {},
   kmrMessages = {},
+  rcCommands = {},       -- Race Control commands from the server (ACSM live timing), read in script.update
   pitService = nil,       -- own pit stop in progress: { startMs, untilMs, plan } (PitBox)       -- KMR drive-through messages to this driver, read in script.update (KmrDT)
   -- Car damage class (DamageClass): 'normal', 'repair' (orange disc) or 'beyond'; lapsLeft = line crossings left to
   -- do the required repair (nil = none running; kept in the car record)
@@ -1585,6 +1587,11 @@ ac.onChatMessage(function(message, senderCarIndex)
     end
     return true
   end
+  -- Race Control command (RcCommand): only from the server (ACSM live timing, admin); hidden from the chat
+  if senderCarIndex == -1 and message:match('^%s*[Rr][Cc]%s') then
+    state.rcCommands[#state.rcCommands + 1] = message
+    return true
+  end
   if senderCarIndex == -1 and onDriverSwapMessage(message) then return false end
   if senderCarIndex == -1 then
     local kind = classifyServerMessage(message)
@@ -2342,6 +2349,14 @@ do
     -- New connection: the car is new until its record is put back (CarState)
     if CarState.restoring then return end
     local c = classify(car)
+    -- Repair relaxed by a Race Control command: not required again until the car is repaired
+    if r.waived then
+      if c.class ~= 'normal' then
+        r.class = 'normal'
+        return
+      end
+      r.waived = nil
+    end
     -- Line crossing with the repair deadline running
     if lineFrame and r.lapsLeft then
       r.lapsLeft = r.lapsLeft - 1
@@ -3477,6 +3492,129 @@ do
   end
 end
 -- ============================================================
+-- Race Control commands: sent by an admin from the ACSM live timing (send chat to the driver, or broadcast chat to
+-- everyone). Only a message from the server (senderCarIndex = -1) is a command: a line typed in the chat by a driver
+-- is not. The chat handler keeps the line (state.rcCommands, hidden from the chat); it is read here, in script.update.
+--   RC <ACTION> <ID> [value] [- reason]
+--   ID: Car ID of the server (entry list slot, the same as in /kick 4: car.sessionID) or GUID of the driver (17
+--   digits; only while that driver is in the car). The number of the livery is not an ID (it can repeat).
+--   Relaxing:  RELAX <ID> ALL | DT | SD | HOLD | REPAIR | DSQ     UNLOCK <ID>
+--   Penalties: DT <ID> [laps]   HOLD <ID> <seconds>   TELEPORT <ID>   DSQ <ID>   LOCK <ID> <seconds>
+-- Every command goes to the server log ([RC] line) and to the driver's message box; the car record is kept up to date.
+-- ============================================================
+
+local RcCommand = {}
+do
+  local LOCK_MAX_SECONDS = 86400
+
+  -- The command is for this car: Car ID of the server or GUID of the driver in the car
+  local function isMine(id)
+    if #id >= 17 then return id == tostring(ac.getUserSteamID() or '') end
+    return tonumber(id) == ac.getCar(0).sessionID
+  end
+
+  local function done(what, detail)
+    local text = detail and detail ~= '' and (what .. ' - ' .. detail) or what
+    rcLog('Race Control command', text)
+    showNotice(TEXTS.rcTitle, text, nil, SERVER_NOTICE_SECONDS)
+  end
+
+  local function relax(what, reason)
+    local l = state.list
+    local before = listDump()
+    if what == 'ALL' then
+      Rules.zero()
+      l.invalidLap = nil
+    elseif what == 'DT' then
+      if l.items[1] then listRemove(l.items[1]) end
+      listSave()
+    elseif what == 'SD' then
+      state.slowdowns = {}
+      state.cutChecks = {}
+      l.endOfLap = {}
+      listSave()
+    elseif what == 'HOLD' then
+      state.hold = nil
+      physics.lockUserControlsFor(0)
+      PitRecord.save()
+    elseif what == 'REPAIR' then
+      local r = state.repair
+      r.lapsLeft, r.beyondSince, r.class, r.waived = nil, nil, 'normal', true
+    elseif what == 'DSQ' then
+      local game = l.dsqStage == 1
+      l.dsq, l.dsqStage, l.dsqUntil, l.dsqReason = 0, 0, 0, nil
+      l.seq = l.seq + 1
+      state.dtDsqActive, state.pitDsqActive = false, false
+      if game or ac.getCar(0).currentPenaltyType == BLACK_FLAG then physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag) end
+      physics.lockUserControlsFor(0)
+      listSave()
+    else
+      return false
+    end
+    done('Relaxed ' .. what, string.format('before %s%s', before, reason ~= '' and (' - ' .. reason) or ''))
+    return true
+  end
+
+  local function penalty(what, value, reason)
+    local why = reason ~= '' and reason or TEXTS.reason.RC
+    if what == 'DT' then
+      local laps = math.max(math.floor(tonumber(value) or 0), 0)
+      if not listAdd('RC', laps) then return true end
+      Rules.finalize()
+      done('Drive-through DT' .. laps, why)
+    elseif what == 'HOLD' then
+      local seconds = tonumber(value)
+      if not seconds or seconds <= 0 then return false end
+      startHold(seconds, why)
+      done(string.format('Hold %d s', seconds), why)
+    elseif what == 'TELEPORT' then
+      -- Not a driver teleport (no tow hold), but no pit pass either: leaving the pits after it pays nothing
+      state.tow.ownJumpUntil = state.ui.clock + 2
+      state.list.jumped = true
+      physics.teleportCarTo(0, ac.SpawnSet.Pits, true)
+      done('Teleport to the pits', why)
+    elseif what == 'DSQ' then
+      carDsq(1, why)
+      ac.log('race-control: DSQ by Race Control command')
+      showNotice(TEXTS.rcTitle, 'Disqualified - ' .. why, nil, SERVER_NOTICE_SECONDS)
+    elseif what == 'LOCK' then
+      local seconds = tonumber(value)
+      if not seconds or seconds <= 0 then return false end
+      physics.lockUserControlsFor(math.min(seconds, LOCK_MAX_SECONDS))
+      done(string.format('Controls locked %d s', seconds), why)
+    else
+      return false
+    end
+    return true
+  end
+
+  function RcCommand.update()
+    local cmds = state.rcCommands
+    if #cmds == 0 then return end
+    state.rcCommands = {}
+    for _, line in ipairs(cmds) do
+      local body, reason = line, ''
+      local cut = line:find(' - ', 1, true)
+      if cut then body, reason = line:sub(1, cut - 1), line:sub(cut + 3):gsub('^%s+', ''):gsub('%s+$', '') end
+      local action, id, value = body:match('^%s*[Rr][Cc]%s+(%a+)%s+(%d+)%s*(%S*)')
+      if action and isMine(id) then
+        action, value = action:upper(), value:upper()
+        local ok
+        if action == 'RELAX' then ok = relax(value, reason)
+        elseif action == 'UNLOCK' then
+          state.hold = nil
+          physics.lockUserControlsFor(0)
+          PitRecord.save()
+          done('Unlocked', reason)
+          ok = true
+        else ok = penalty(action, value, reason) end
+        ac.log('race-control: command ' .. line .. (ok and '' or ' (not understood)'))
+        if not ok then rcLog('Race Control command not understood', line) end
+      end
+    end
+  end
+end
+-- ============================================================
 -- Slowdown (one per zone)
 -- ============================================================
 
@@ -4379,15 +4517,18 @@ end
 
 -- Box with a flag drawn by the script (black flag, or black flag with orange disc) and three lines of text
 -- Flag box: the flag on the left, title and two lines. Flag: black (DSQ; with disc = black flag with orange disc), or
--- 'dt' = drive-through flag, white with a black diagonal stripe (the game no longer shows its drive-through message)
+-- 'dt' = drive-through flag, split on the diagonal from the bottom left corner to the top right one: white above,
+-- black below (the game no longer shows its drive-through message)
 local function drawFlagBox(p1, p2, s, border, disc, title, titleColor, line1, line2, flag)
   drawPanel(p1, p2, border, s)
   local f1 = vec2(p1.x + 20 * s, p1.y + 12 * s)
   local f2 = vec2(f1.x + 46 * s, f1.y + 32 * s)
   local dt = flag == 'dt'
-  ui.drawRectFilled(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)),
-    dt and rgbm(0.95, 0.95, 0.95, 1) or rgbm(0.02, 0.02, 0.02, 1), px(2 * s))
-  if dt then ui.drawLine(vec2(px(f1.x), px(f2.y)), vec2(px(f2.x), px(f1.y)), rgbm(0.02, 0.02, 0.02, 1), 7 * s) end
+  ui.drawRectFilled(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)), rgbm(0.02, 0.02, 0.02, 1), px(2 * s))
+  if dt then
+    ui.drawTriangleFilled(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f1.y)), vec2(px(f1.x), px(f2.y)),
+      rgbm(0.95, 0.95, 0.95, 1))
+  end
   ui.drawRect(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)), rgbm(0.33, 0.33, 0.33, 1), px(2 * s))
   if disc then ui.drawCircleFilled(vec2(px((f1.x + f2.x) / 2), px((f1.y + f2.y) / 2)), 9 * s, disc, 24) end
   local tx = f2.x + 12 * s
@@ -4645,7 +4786,10 @@ do
   -- right behind it the V8 block with its 8 intake trumpets in two banks, the left bank higher (half a trumpet: the crank
   -- pin offset between the banks); behind the block 4 exhausts, one pair per bank, the central ones longer, all past
   -- the end of the body
-  local F1_BODY = { -6, -30, 6, 32 }   -- { left x, top y, right x, bottom y }
+  -- Body: the nose reaches ahead of the front wheels almost the span of the wishbone base (8); the tail goes back 1/5
+  -- of what the nose went forward. The whole car sits 4 higher, clear of the B value below it
+  local F1_BODY = { -6, -34, 6, 33 }   -- { left x, top y, right x, bottom y }
+  local F1_SHIFT = -4
   local F1_WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }   -- { inner x, outer x, top y, bottom y }
   local function drawF1(cx, cy, s)
     local body = COLOR_TITLE
@@ -4669,7 +4813,7 @@ do
       ui.drawCircle(P(-2, 9 + j * 3.6), 1.3 * s, body, 10, 1)
       ui.drawCircle(P(2, 10.8 + j * 3.6), 1.3 * s, body, 10, 1)
     end
-    for _, ex in ipairs({ { -3, 35 }, { -1.2, 38.5 }, { 1.2, 38.5 }, { 3, 35 } }) do
+    for _, ex in ipairs({ { -3, 36 }, { -1.2, 39.5 }, { 1.2, 39.5 }, { 3, 36 } }) do
       ui.drawSimpleLine(P(ex[1], 24), P(ex[1], ex[2]), body, 1)
     end
   end
@@ -4746,7 +4890,7 @@ do
     drawText(string.format('L %.0f', vL), FONT_MONO, 9 * s, vec2(p1.x + 19 * s, cy - 5 * s), cL)
     drawText(string.format('R %.0f', vR), FONT_MONO, 9 * s, vec2(p2.x - 50 * s, cy - 5 * s), cR)
     vbar(p2.x - 15 * s, kR, cR)
-    drawF1(cx, cy, s)
+    drawF1(cx, cy + F1_SHIFT * s, s)
   end
 
   drawStatus = function(car, w, h, s)
@@ -5383,6 +5527,8 @@ function script.update(dt)
     updateSlowdowns(dt, inPit, lapCount)
     -- KMR drive-throughs received in the chat (race: into the list; practice and qualifying: relaxed)
     KmrDT.update()
+    -- Race Control commands sent by an admin from the ACSM live timing
+    RcCommand.update()
 
     -- Pit pass, even if the exit falls in the same processed frame
     local viaPit = inPit or l.prevInPit
