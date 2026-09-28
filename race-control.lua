@@ -54,8 +54,10 @@
 -- Keys read from the script's own [SCRIPT_n] server section (ac.configValues uses the section that created it).
 -- Every key below can be set in that section; the value here is the default used when the key is missing.
 -- Session prefixes: practice / qualify / race (the session type reported by the game).
--- Same order as config/server/ACSM-CSP.txt: 1. script operation, 2. optional general data, 3. ACSM server,
--- 4. holds, tow and repair, 5. penalty control (pit exit, exclusion zone 1, exclusion zone 2, slowdown).
+-- Same order as config/server/ACSM-CSP.txt (normalized, docs/projeto/Arquitetura — módulos e expansão.md, 5):
+-- 1. script operation, 2. optional general data, 3. driver swap and pit stops, 4. penalty control: pit exit, pit lane
+-- speeding, wrong way, 5. holds, tow and repair, 6. penalty control: disqualification, exclusion zone 1, exclusion
+-- zone 2, slowdown. Each theme whole, in one place.
 -- Struct keys: one key with several fields, read by ac.configValues as one text and split by structKey
 -- (config/settings.lua):
 --   key = field:value | field:value   (no quotes, no commas: the CSP turns a comma-separated value into several values
@@ -135,7 +137,7 @@ local cfg = ac.configValues({
   cockpitExemptSteamIDs = '',
 
   -- ------------------------------------------------------------
-  -- 3. ACSM server: must match the ACSM race settings
+  -- 3. Driver swap and pit stops (the ACSM keys must match the ACSM race settings)
   -- ------------------------------------------------------------
   -- Driver swap panel (green, below the slowdown box; race sessions only). ACSM runs the swap itself: its timer
   -- starts when the driver disconnects and it tells the next driver "please wait ..." / "Free to leave pits in ..."
@@ -154,24 +156,11 @@ local cfg = ac.configValues({
   --   mandatory (valid server setup): the cell shows done | 0. The cell is shown whenever the panel is on, but it
   --   turns the panel on only inside the pit lane. Only with the driver swap on in the session.
   driverSwapRequired = '',
-
-  -- ------------------------------------------------------------
-  -- 4.1 Holds (rule 5): seconds stopped in the pits with locked controls; the hold clears the whole list
-  -- ------------------------------------------------------------
-  -- holdShortSeconds: two pending DT0.
-  holdShortSeconds = 45,
-  -- holdLongSeconds: two pending DT0 when one of them is the PSE that became DT0 crossing the line on track.
-  holdLongSeconds = 90,
-  -- stopAndGo (struct key, see "Struct keys" above): what two pending DT0 give and the stop & go.
-  stopAndGo = '',
   -- wrongDriverSeconds: the penalty is paid only by the driver who caused it; the swap is not allowed while there is
   --   anything to pay. Another driver who enters the car anyway has this many seconds to leave (countdown); not gone:
   --   DSQ, and the original driver cannot come back. 0 = another driver is not allowed (DSQ as he enters). Empty = no
   --   time defined: the new driver takes the penalties over and pays them (not the world standard).
   wrongDriverSeconds = '120',
-  -- dsqBlackFlagLaps: our DSQ (informative) asks the driver to stop at the pit place; not stopped, the game black flag
-  --   (controls locked) comes after this many line crossings.
-  dsqBlackFlagLaps = 3,
   -- pitStopOrder: order of the operations of the own pit stop box (the AC pit menu is off, so the script times the
   --   stop). Same notation as PITS_ORDER of the CSP [EXTRA_RULES]: F fuel, T tyres, R repair, one after the other;
   --   letters inside < > at the same time. F<TR> = fuel first, then tyres and repair together.
@@ -188,16 +177,7 @@ local cfg = ac.configValues({
   pitStopsRequired = 0,
 
   -- ------------------------------------------------------------
-  -- 4.2 Tow and repair, 4.3 car damage: struct keys (see "Struct keys" above)
-  -- ------------------------------------------------------------
-  practiceTow = '',
-  qualifyTow = '',
-  raceTow = '',
-  repairFormula = '',
-  damage = '',
-
-  -- ------------------------------------------------------------
-  -- 5.1 Penalty control: pit exit while closed
+  -- 4.1 Penalty control: pit exit while closed
   -- ------------------------------------------------------------
   -- <session>ClosedSeconds: seconds after the session start during which leaving the pit lane is forbidden.
   --   0 = the pit is never closed. Before the session starts, the pit counts as closed when the value is > 0.
@@ -215,7 +195,55 @@ local cfg = ac.configValues({
   racePenaltyParam = -1,
 
   -- ------------------------------------------------------------
-  -- 5.2 Penalty control: cut zone 1 (category SD1)
+  -- 4.2 Penalty control: pit lane speeding (measured by the script; SPEEDING_PENALTY = NONE on the server)
+  -- ------------------------------------------------------------
+  -- pitSpeedLimit: pit lane speed limit of the rule, km/h (the script's own; SPEED_KMH of [PITS_SPEED_LIMITER] on the
+  --   server only sets the car's limiter and should be the same). pitSpeedTolerance: km/h over it before it is
+  --   speeding. pitSpeedDeadlineLaps: laps to serve the PSE (1 = DT1).
+  pitSpeedLimit = 60,
+  pitSpeedTolerance = 2,
+  pitSpeedDeadlineLaps = 1,
+
+  -- ------------------------------------------------------------
+  -- 4.3 Penalty control: driving the wrong way (ours; ALLOW_WRONG_WAY = 1 in [EXTRA_RULES] turns the CSP one off)
+  -- ------------------------------------------------------------
+  -- wrongWay = maxMeters:30 | penalty:DSQ | showMeters:2 | angle:90
+  --   maxMeters: metres against the direction of the track allowed to manoeuvre; more = penalty. penalty: DSQ (our DSQ,
+  --   usual flow: stop at the pit place or the game black flag at the line; no teleport) or NONE. showMeters: metres
+  --   against the direction of the track from which the wrong way box (no entry sign) is on screen. angle: degrees
+  --   between where the car points and the direction of the track above which it counts (moving back along the
+  --   track); within it the manoeuvre is over and the count is cleared.
+  wrongWay = '',
+
+  -- ------------------------------------------------------------
+  -- 5.1 Two pending DT0: stop & go (SG) or hold (HOLD, rule 5: seconds stopped in the pits with locked controls; the
+  --     hold clears the whole list)
+  -- ------------------------------------------------------------
+  -- stopAndGo (struct key, see "Struct keys" above): what two pending DT0 give and the stop & go.
+  stopAndGo = '',
+  -- holdShortSeconds: two pending DT0.
+  holdShortSeconds = 45,
+  -- holdLongSeconds: two pending DT0 when one of them is the PSE that became DT0 crossing the line on track.
+  holdLongSeconds = 90,
+
+  -- ------------------------------------------------------------
+  -- 5.2 Tow and repair, 5.3 car damage: struct keys (see "Struct keys" above)
+  -- ------------------------------------------------------------
+  practiceTow = '',
+  qualifyTow = '',
+  raceTow = '',
+  repairFormula = '',
+  damage = '',
+
+  -- ------------------------------------------------------------
+  -- 6.1 Penalty control: disqualification
+  -- ------------------------------------------------------------
+  -- dsqBlackFlagLaps: our DSQ (informative) asks the driver to stop at the pit place; not stopped, the game black flag
+  --   (controls locked) comes after this many line crossings.
+  dsqBlackFlagLaps = 3,
+
+  -- ------------------------------------------------------------
+  -- 6.2 Penalty control: cut zone 1 (category SD1)
   -- ------------------------------------------------------------
   -- cutZoneStart / cutZoneEnd: track spline position of the zone, 0..1. Start = end disables the zone.
   --   Start > end means the zone crosses the start/finish line.
@@ -248,7 +276,7 @@ local cfg = ac.configValues({
   cutGainTolerance = 6,
 
   -- ------------------------------------------------------------
-  -- 5.3 Penalty control: cut zone 2 (category SD2), same meaning as zone 1; slowdown 9 s, deadline 18 s
+  -- 6.3 Penalty control: cut zone 2 (category SD2), same meaning as zone 1; slowdown 9 s, deadline 18 s
   -- ------------------------------------------------------------
   cutZone2Start = 0.81,
   cutZone2End = 0.91,
@@ -264,7 +292,7 @@ local cfg = ac.configValues({
   cutZone2GainTolerance = 6,
 
   -- ------------------------------------------------------------
-  -- 5.4 Penalty control: slowdown, both zones
+  -- 6.4 Penalty control: slowdown, both zones
   -- ------------------------------------------------------------
   -- Overlapping slowdowns (zone 2 while zone 1 is still running, or the other way round) are merged into one:
   -- the times add up, with the newest deadline; unpaid, each zone becomes its own DT0.
@@ -284,27 +312,6 @@ local cfg = ac.configValues({
   -- pitSlowdownDeadline / pitSlowdownMaxGas: not used.
   pitSlowdownDeadline = 0,
   pitSlowdownMaxGas = 0,
-
-  -- ------------------------------------------------------------
-  -- 5.5 Penalty control: pit lane speeding (measured by the script; SPEEDING_PENALTY = NONE on the server)
-  -- ------------------------------------------------------------
-  -- pitSpeedLimit: pit lane speed limit of the rule, km/h (the script's own; SPEED_KMH of [PITS_SPEED_LIMITER] on the
-  --   server only sets the car's limiter and should be the same). pitSpeedTolerance: km/h over it before it is
-  --   speeding. pitSpeedDeadlineLaps: laps to serve the PSE (1 = DT1).
-  pitSpeedLimit = 60,
-  pitSpeedTolerance = 2,
-  pitSpeedDeadlineLaps = 1,
-
-  -- ------------------------------------------------------------
-  -- 5.6 Penalty control: driving the wrong way (ours; ALLOW_WRONG_WAY = 1 in [EXTRA_RULES] turns the CSP one off)
-  -- ------------------------------------------------------------
-  -- wrongWay = maxMeters:30 | penalty:DSQ | showMeters:2 | angle:90
-  --   maxMeters: metres against the direction of the track allowed to manoeuvre; more = penalty. penalty: DSQ (our DSQ,
-  --   usual flow: stop at the pit place or the game black flag at the line; no teleport) or NONE. showMeters: metres
-  --   against the direction of the track from which the wrong way box (no entry sign) is on screen. angle: degrees
-  --   between where the car points and the direction of the track above which it counts (moving back along the
-  --   track); within it the manoeuvre is over and the count is cleared.
-  wrongWay = '',
 })
 
 
