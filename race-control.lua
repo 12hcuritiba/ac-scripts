@@ -4788,7 +4788,7 @@ do
   -- the end of the body
   -- Body: the nose reaches ahead of the front wheels almost the span of the wishbone base (8); the tail goes back 1/5
   -- of what the nose went forward. The whole car sits 4 higher, clear of the B value below it
-  local F1_BODY = { -6, -34, 6, 33 }   -- { left x, top y, right x, bottom y }
+  local F1_BODY = { -6, -36, 6, 33 }   -- { left x, top y, right x, bottom y }
   local F1_SHIFT = -4
   local F1_WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }   -- { inner x, outer x, top y, bottom y }
   local function drawF1(cx, cy, s)
