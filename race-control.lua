@@ -58,28 +58,30 @@
 -- Session prefixes: practice / qualify / race (the session type reported by the game).
 -- Same order as config/server/ACSM-CSP.txt: 1. script operation, 2. optional general data, 3. ACSM server,
 -- 4. holds, tow and repair, 5. penalty control (pit exit, exclusion zone 1, exclusion zone 2, slowdown).
--- Struct keys (read by structKey in config/settings.lua, not by ac.configValues): one key with several fields,
---   key = field:value, field:value   (no quotes; the CSP reads the comma list, the script splits each item at ':')
+-- Struct keys: one key with several fields, read by ac.configValues as one text and split by structKey
+-- (config/settings.lua):
+--   key = field:value | field:value   (no quotes, no commas: the CSP turns a comma-separated value into several values
+--   (ac.INIFormat.Extended) and a text read gets only the first one; ';' starts a comment and '[' a section)
 -- A field left out keeps its default. Keys and fields (defaults):
---   stopAndGo = mode:SG, secondsPerDT:30, maxDT:7, deadlineLaps:1, returnSeconds:0
+--   stopAndGo = mode:SG | secondsPerDT:30 | maxDT:7 | deadlineLaps:1 | returnSeconds:0
 --     mode: HOLD = two pending DT0 give the hold (holdShortSeconds / holdLongSeconds); SG = stop & go: stop at the own
 --     pit place and stay stopped (the driver holds the car; no service) for secondsPerDT per drive-through; it holds
 --     the whole list and every later penalty adds secondsPerDT, up to maxDT drive-throughs (one more = DSQ);
 --     deadlineLaps: laps to serve it (1 = this lap or the next, like a DT1); returnSeconds: time the same driver has to
 --     come back after a disconnection while stopped (0 = no limit). Without the key: HOLD.
---   practiceTow = mode:RESET        qualifyTow = mode:TOW, towSeconds:120, repairFactor:1.5
---   raceTow = mode:TOW, towSeconds:120, repairFactor:1.5
+--   practiceTow = mode:RESET        qualifyTow = mode:TOW | towSeconds:120 | repairFactor:1.5
+--   raceTow = mode:TOW | towSeconds:120 | repairFactor:1.5
 --     Back to the pits from the track (tow), per session. TOW = the car is locked in the pits (TeleportToPits) for
 --     towSeconds + repair; repair chosen in the pit menu = repair only. RESET = the tow clears the penalties and the
 --     slowdowns in progress (not a DSQ). NONE = nothing. With TOW, set ENFORCE_BACK_TO_PITS_PENALTY = 0 in
 --     [EXTRA_RULES], or the driver also gets the AC back-to-pits penalty.
---   repairFormula = baseSeconds:180, weightEngine:1.0, weightSuspension:0.5, weightBody:0.25
+--   repairFormula = baseSeconds:180 | weightEngine:1.0 | weightSuspension:0.5 | weightBody:0.25
 --     repair = repairFactor x (baseSeconds x (weightEngine x powertrain + weightSuspension x suspension) + weightBody x
 --     body). Only damage from collisions counts (within COLLISION_DAMAGE_WINDOW seconds after ac.onCarCollision);
 --     powertrain = engine and gearbox together (the larger increase); suspension = increase of the 4 wheels (0..1
 --     each); body = increase of the body damage zones in km/h.
---   damage = toeBent:10, toeBroken:20, camberBent:10, camberBroken:20, bodyRepair:150, maxPunctured:2, repairLaps:2,
---            beyondTowSeconds:180, dsqTowSeconds:180
+--   damage = toeBent:10 | toeBroken:20 | camberBent:10 | camberBroken:20 | bodyRepair:150 | maxPunctured:2 | repairLaps:2 |
+--            beyondTowSeconds:180 | dsqTowSeconds:180
 --     Qualifying and race. Toe and camber over the setup, per wheel, in degrees: over the bent limit = black flag with
 --     orange disc (repair required); over the broken limit = damage beyond the safety limit (stop off track, tow).
 --     bodyRepair: body damage of a side over which the repair is required; maxPunctured: punctured tyres that still
@@ -156,7 +158,8 @@ local cfg = ac.configValues({
   holdShortSeconds = 45,
   -- holdLongSeconds: two pending DT0 when one of them is the PSE that became DT0 crossing the line on track.
   holdLongSeconds = 90,
-  -- stopAndGo (struct key, see "Struct keys" below): what two pending DT0 give and the stop & go.
+  -- stopAndGo (struct key, see "Struct keys" above): what two pending DT0 give and the stop & go.
+  stopAndGo = '',
   -- wrongDriverSeconds: the penalty is paid only by the driver who caused it; the swap is not allowed while there is
   --   anything to pay. Another driver who enters the car anyway has this many seconds to leave (countdown); not gone:
   --   DSQ, and the original driver cannot come back. 0 = another driver is not allowed (DSQ as he enters). Empty = no
@@ -171,8 +174,13 @@ local cfg = ac.configValues({
   pitStopOrder = 'F<TR>',
 
   -- ------------------------------------------------------------
-  -- 4.2 Tow and repair, 4.3 car damage: struct keys (below)
+  -- 4.2 Tow and repair, 4.3 car damage: struct keys (see "Struct keys" above)
   -- ------------------------------------------------------------
+  practiceTow = '',
+  qualifyTow = '',
+  raceTow = '',
+  repairFormula = '',
+  damage = '',
 
   -- ------------------------------------------------------------
   -- 5.1 Penalty control: pit exit while closed
@@ -415,7 +423,7 @@ local TEXTS = {
   swapTitle = 'DRIVER SWAP',
   swapDisconnect = 'Disconnect to perform the driver swap',
   swapWait = 'You are now driving - wait %s before leaving the pits',
-  swapClear = 'You are clear to leave the pits - GO GO GO!',
+  swapClear = 'You are clear to leave the pits - GO GO!',
   swapTimes = 'Elapsed %s / Total %s',
   -- CODE-80 and holds (message box)
   code80 = 'CODE 80 - no penalty can be served until the green flag',
@@ -467,21 +475,18 @@ local function bySession(practice, qualify, race)
   }
 end
 
--- Struct key of this script's section: "key = field:value, field:value" (no quotes), read as the list of its items
--- (ac.INIConfig.onlineExtras, OptionalList) and split at ':'. Fields over the defaults; numbers as numbers, text in
--- upper case; an unknown field goes to the log.
+-- Struct key of this script's section: "key = field:value | field:value" (no quotes, no commas), read by
+-- ac.configValues as one text (cfg) and split here at '|' and ':'. Fields over the defaults; numbers as numbers, text
+-- in upper case; an unknown field goes to the log.
 local function structKey(key, defaults)
   local out = {}
   for k, v in pairs(defaults) do out[k] = v end
-  local ini = ac.INIConfig.onlineExtras()
-  local items = ini and ini:get(__cfgSection__, key, ac.INIConfig.OptionalList)
-  if type(items) ~= 'table' then return out end
-  for _, item in ipairs(items) do
-    local k, v = tostring(item):match('^%s*([%w_]+)%s*:%s*(.-)%s*$')
+  for item in tostring(cfg[key] or ''):gmatch('[^|]+') do
+    local k, v = item:match('^%s*([%w_]+)%s*:%s*(.-)%s*$')
     if k and out[k] ~= nil then
       out[k] = type(out[k]) == 'number' and (tonumber(v) or out[k]) or v:upper()
     else
-      ac.log('race-control: key ' .. key .. ': field not known: ' .. tostring(item))
+      ac.log('race-control: key ' .. key .. ': field not known: ' .. item:match('^%s*(.-)%s*$'))
     end
   end
   return out
@@ -711,7 +716,11 @@ ac.log('race-control: section=' .. tostring(__cfgSection__)
   .. ' mode=' .. config.mode
   .. ' physics.allowed=' .. tostring(physics.allowed())
   .. ' ' .. table.concat(zoneLog, ' '))
-
+-- Struct keys as the server sent them (one text each) and the stop & go mode in force
+for _, key in ipairs({ 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage' }) do
+  ac.log('race-control: key ' .. key .. ' = ' .. tostring(cfg[key]))
+end
+ac.log('race-control: stopAndGo mode in force: ' .. (config.sg and 'SG' or 'HOLD'))
 -- ============================================================
 -- Utilities
 -- ============================================================
