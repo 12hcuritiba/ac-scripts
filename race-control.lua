@@ -118,6 +118,11 @@ local cfg = ac.configValues({
   -- code80FreezeDeadlines: 1 = deadlines stop: the line crossing does not take laps from the drive-throughs nor
   --   disqualify, and the slowdown deadline stops. 0 = deadlines keep running.
   code80FreezeDeadlines = 1,
+  -- screenScale = exponent:0.45 | max:1.5
+  --   Size of the pit stop box, setup status and car status on screens bigger than 1080p: (height / 1080) ^ exponent,
+  --   from 1x at 1080p (the approved size) up to max. The Race Control panel keeps its own growth (^0.3, up to 1.3x),
+  --   so these screens grow slightly more on a big screen (1440p: 1.14x; 4K: 1.37x).
+  screenScale = '',
 
   -- ------------------------------------------------------------
   -- 2. General data (optional, filled in by the organizer)
@@ -125,7 +130,8 @@ local cfg = ac.configValues({
   -- raceControlSteamID: Steam ID of the race director client, logged in as admin. In any mode it sends the ban of an
   --   edited record file (/ban <car ID>); in 'KMR' mode it also checks every car. Empty = nobody.
   raceControlSteamID = '',
-  -- cockpitExemptSteamIDs: Steam IDs not forced (for example, Race Control / broadcast), separated by semicolons.
+  -- cockpitExemptSteamIDs: Steam IDs not forced (for example, Race Control / broadcast), separated by '|' (not ';':
+  --   it starts a comment in the INI; not ',': the CSP splits the value there and the script gets only the first).
   cockpitExemptSteamIDs = '',
 
   -- ------------------------------------------------------------
@@ -410,7 +416,6 @@ local TEXTS = {
   sgBoxResume = 'Stop at your pit place to resume',
   sgServed = 'Stop & go served',
   sgLimit = 'Stop & go limit - more than %d penalties',
-  sgDsqStop = 'Disqualified - stop at your pit',
   swapBlocked = 'Swap not allowed - serve the penalties first',
   wrongDriverTitle = 'WRONG DRIVER',
   wrongDriverLeave = 'Penalties of another driver pending - leave the car',
@@ -471,6 +476,13 @@ local TEXTS = {
   dsqGame = "You've been disqualified - %s.",
   dsqBlackFlag = 'Black flag',
   dsqDtReason = 'Drive-through not served',
+  -- drive-through flag box
+  dtTitle = 'DRIVE-THROUGH',
+  dtMore = '  +%d',
+  dtThisLap = 'Serve it this lap',
+  dtNextLap = 'Serve it this lap or the next',
+  dtWithinLaps = 'Serve it within %d laps',
+  dtOverdue = 'OVERDUE - serve it at the next pit pass',
   pitWindowDsq = 'Mandatory pit stop missed',
   swapEarlyDsq = 'Left the pits before the driver swap time',
   swapsMissingDsq = 'Driver swaps missing (%d of %d)',
@@ -533,6 +545,7 @@ local STOP_AND_GO = structKey('stopAndGo', { mode = 'HOLD', secondsPerDT = 30, m
 local TOW_RULE = { mode = 'TOW', towSeconds = 120, repairFactor = 1.5 }
 local REPAIR_FORMULA = structKey('repairFormula', { baseSeconds = 180, weightEngine = 1.0, weightSuspension = 0.5,
   weightBody = 0.25 })
+local SCREEN_SCALE = structKey('screenScale', { exponent = 0.45, max = 1.5 })
 local DAMAGE = structKey('damage', { toeBent = 10, toeBroken = 20, camberBent = 10, camberBroken = 20, bodyRepair = 150,
   maxPunctured = 2, repairLaps = 2, beyondTowSeconds = 180, dsqTowSeconds = 180 })
 
@@ -582,6 +595,7 @@ local config = {
   pitWindowEnd = tonumber(cfg.pitWindowEndMinutes) or 0,
   pitSpeedDeadlineLaps = math.floor(tonumber(cfg.pitSpeedDeadlineLaps) or 1),
   code80Freeze = tonumber(cfg.code80FreezeDeadlines) == 1,
+  screenScale = SCREEN_SCALE,
   -- Tow per session: mode ('TOW', 'RESET', 'NONE'), towSeconds, repairFactor
   tow = bySession(
     structKey('practiceTow', { mode = 'RESET', towSeconds = 0, repairFactor = 0 }),
@@ -762,7 +776,7 @@ ac.log('race-control: section=' .. tostring(__cfgSection__)
   .. ' physics.allowed=' .. tostring(physics.allowed())
   .. ' ' .. table.concat(zoneLog, ' '))
 -- Struct keys as the server sent them (one text each) and the stop & go mode in force
-for _, key in ipairs({ 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage' }) do
+for _, key in ipairs({ 'screenScale', 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage' }) do
   ac.log('race-control: key ' .. key .. ' = ' .. tostring(cfg[key]))
 end
 ac.log('race-control: stopAndGo mode in force: ' .. (config.sg and 'SG' or 'HOLD'))
@@ -1720,8 +1734,6 @@ local function sgCount(it) return tonumber(it.cat:match('^SG(%d+)$')) or 0 end
 -- KMR categories held by the stop & go: kind suffix "x<n>x<n>..." (for the served lines in the log)
 local function sgKmrSuffix(it) return it.kind:match('(x[%dx]+)$') or '' end
 local function sgSeconds(it) return sgCount(it) * config.sgSecondsPerDT end
--- More drive-throughs than a stop & go can hold: DSQ at the pit place or at the line (never on track)
-local function sgOver(it) return sgCount(it) > config.sgMaxDT end
 
 -- Reason of a category in the log: the KMR ones say who issued them
 local function reasonLog(cat)
@@ -1730,10 +1742,14 @@ local function reasonLog(cat)
 end
 
 -- Given lap = current lap; expire lap = given lap + deadline (the DSQ applies when that lap ends unpaid).
--- With a stop & go in the list, a new penalty is added to it (+secondsPerDT), with no new item; over maxDT: DSQ
--- at the pit place or at the line.
+-- With a stop & go in the list, a new penalty is added to it (+secondsPerDT), with no new item; over maxDT: DSQ at
+-- once (rule 21). After a DSQ a new infraction is only logged (decision 17).
 local function listAdd(cat, laps)
   local l = state.list
+  if state.dtDsqActive or state.pitDsqActive then
+    ac.log(string.format('race-control: %s after the DSQ: logged, not applied', cat))
+    return nil
+  end
   local sg = config.sg and sgItem()
   if sg then
     local n = sgCount(sg) + 1
@@ -2388,6 +2404,8 @@ local PitStops = {
   line = 0,               -- lines of the pit stop table in this session (ID)
   otherInPitlane = {},    -- [carIndex] = another car in the pit lane in the previous frame
   endChecked = false,     -- end of the race already checked
+  lastIsInPit = nil,      -- car.isInPit in the previous frame (log of the changes)
+  stopLogged = false,     -- stop in the pit lane without isInPit already logged in this pass
 }
 -- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
 do
@@ -2510,6 +2528,24 @@ do
       PitStops.otherInPitlane[i] = inP
     end
     local inPit = car.isInPitlane
+    -- What the game reports at the pit place: every change of car.isInPit, and a stop in the pit lane without it, with
+    -- the speed and the distance to the own pit position (car.pitTransform)
+    local dist = -1
+    if car.position and car.pitTransform and car.pitTransform.position then
+      local a, b = car.position, car.pitTransform.position
+      dist = math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2)
+    end
+    if car.isInPit ~= PitStops.lastIsInPit then
+      ac.log(string.format('race-control: isInPit %s (speed %.2f km/h, %.2f m from the pit position)',
+        tostring(car.isInPit), car.speedKmh, dist))
+      PitStops.lastIsInPit = car.isInPit
+    end
+    if inPit and not car.isInPit and car.speedKmh < 0.5 and not PitStops.stopLogged then
+      PitStops.stopLogged = true
+      ac.log(string.format('race-control: stopped in the pit lane without isInPit (speed %.2f km/h, %.2f m from the pit position)',
+        car.speedKmh, dist))
+    end
+    if not inPit or car.speedKmh > 5 then PitStops.stopLogged = false end
     if PitStops.wasInPitlane == nil then
       PitStops.wasInPitlane = inPit
       -- Already in the pits at the start (connection, driver swap): a pass without entry time
@@ -2906,7 +2942,7 @@ function PitSpeed.update(car, inPit, lapCount)
   local before = listDump()
   listAdd('PSE', math.max(config.pitSpeedDeadlineLaps - lost, 0))
   ac.log(string.format('race-control: PSE pit exit %.1f km/h before=%s after=%s', speed, before, listDump()))
-  rcLog('Drive-through', TEXTS.reason.PSE)
+  rcLog('Drive-through', string.format('%s - %.1f km/h', TEXTS.reason.PSE, speed))
   Rules.finalize()
 end
 -- Rule 6: DT0 unpaid when the lap ends: DSQ (true). Practice and qualifying (rule 25): no DSQ; the laps are invalid
@@ -2949,20 +2985,11 @@ function Rules.sgForm()
   listSave()
 end
 
--- More penalties than a stop & go can hold: disqualified, never on track. The driver is told to stop at the pit place
--- before the line; stopped there, the black flag with the controls locked (StopAndGo.update); not stopped, the black
--- flag at the line (Rules.line)
+-- More penalties than a stop & go can hold: our DSQ at once (rule 21). The game black flag comes as in every DSQ
+-- (DsqFlow): stopped at the pit place, or at the dsqBlackFlagLaps-th line; never in the middle of the track
 function Rules.sgOverLimit(n)
-  ac.log(string.format('race-control: stop & go limit exceeded (%d DT): DSQ at the pit place or at the line', n))
-  rcLog('Stop & go limit', string.format(TEXTS.sgLimit, config.sgMaxDT))
-end
-
--- DSQ of the stop & go over the limit
-function Rules.sgLimit(where)
-  local sg = sgItem()
-  local n = sg and sgCount(sg) or 0
+  ac.log(string.format('race-control: DSQ, stop & go limit exceeded (%d DT)', n))
   carDsq(1, string.format(TEXTS.sgLimit, config.sgMaxDT))
-  ac.log(string.format('race-control: DSQ, stop & go limit (%d DT), %s', n, where))
 end
 
 -- After any list change: rule 3 (order), rule 5 (two DT0 = hold, or stop & go; during CODE-80 it waits for the green
@@ -3000,13 +3027,6 @@ function Rules.line(viaPit, g, lapCount)
   local l = state.list
   if g.t == BLACK_FLAG then
     Rules.zero()
-    return
-  end
-  -- Stop & go over the limit not stopped at the pit place: DSQ at this line, on track or in the pits, also during CODE-80
-  local sgHead = l.items[1]
-  if sgHead and sgHead.kind:sub(1, 2) == 'SG' and sgOver(sgHead) then
-    l.curLap = lapCount
-    Rules.sgLimit(viaPit and 'at the line via pit' or 'at the line on track')
     return
   end
   local before = listDump()
@@ -3126,8 +3146,7 @@ end
 -- Interrupted (the driver disconnects while stopped): the time served stays in the car record; the same driver coming
 -- back resumes it where it stopped (stopAndGo returnSeconds: time limit to come back, 0 = no limit). Another driver: the wrong
 -- driver rule.
--- Over the limit (stopAndGo maxDT): stopped at the pit place, the black flag with the controls locked; not stopped, the black
--- flag at the line (Rules.line).
+-- Over the limit (stopAndGo maxDT): our DSQ at once (Rules.sgOverLimit, rule 21).
 -- ============================================================
 
 local StopAndGo = {
@@ -3232,12 +3251,6 @@ do
       checkInterrupted(sg)
       sg = sgItem()
       if not sg then return end
-    end
-    -- Over the limit, stopped at the pit place: black flag with the controls locked
-    if sgOver(sg) then
-      StopAndGo.stopping = false
-      if CarRead.parked(car) then Rules.sgLimit('stopped at the pit place') end
-      return
     end
     -- Only the driver who caused it serves it
     if state.list.wrong then
@@ -3394,7 +3407,8 @@ end
 -- Drive-through of the KMR. The KMR stays as it is (drive_through_no_kick on): it gives the DT and tells the driver in
 -- the chat. In the race, the script puts that DT in the list (category K<n>, deadline from the message) and it follows
 -- these rules: paid by a pit pass, added to the stop & go, DSQ if not served. In practice and qualifying the KMR DT
--- (carried by the KMR to the next race) is relaxed: not in the list, only in the log.
+-- (carried by the KMR to the next race) is relaxed: not in the list, only in the log. Except the pit exit line crossing
+-- (K1): always a DT0 in the list, in every session, whatever deadline the KMR message gives (rule 24).
 -- Messages (KMR language file v1.6f): "Penalty: drive-through before the end of this lap <reason>." = DT0;
 -- "Penalty: drive-through within <n> lap(s) <reason>." = DT<n>; "... to clear during the next race <reason>." = relaxed.
 -- The chat handler only keeps the message (state.kmrMessages); it is read here, in script.update.
@@ -3448,7 +3462,8 @@ do
       if laps then
         local cat = category(low)
         local base = TEXTS.kmrReasons[cat]
-        if laps == 'next race' or sim.raceSessionType ~= ac.SessionType.Race then
+        if cat == 'K1' then laps = 0 end
+        if cat ~= 'K1' and (laps == 'next race' or sim.raceSessionType ~= ac.SessionType.Race) then
           ac.log('race-control: KMR drive-through relaxed (' .. cat .. '): ' .. text)
           rcLog('Drive-through relaxed', base .. ' - issued by KMR for the next race, not carried over by Race Control')
         elseif not (state.dtDsqActive or state.pitDsqActive) then
@@ -3708,6 +3723,8 @@ local function updateZonePassages()
               pass.nextIdx = pass.nextIdx + 1
             end
             if car.wheelsOutside > zone.maxWheelsOut then pass.dirty = true end
+            -- Loss of control anywhere in the zone passage: a cut in it is discarded
+            if car.speedKmh > SPIN_MIN_SPEED_KMH and driftAngle(car) > config.cutSpinAngle then pass.spun = true end
             if not inZone then
               state.zonePass[zi] = nil
               if not pass.dirty and pass.nextIdx > GAIN_SAMPLES then
@@ -3735,7 +3752,7 @@ local function updateCutChecks()
     local inZone = isInZone(zone, car.splinePosition)
     local p = inZone and zoneProgress(zone, car.splinePosition) or 1
     local elapsed = sim.time - cc.t0
-    local limit = refAt(cc.ref, p) * (1 + zone.gainTolerance / 100)
+    local limit = cc.ref and refAt(cc.ref, p) * (1 + zone.gainTolerance / 100) or 0
     cc.margin = limit > 0 and (elapsed / limit - 1) or 0
     -- Meter value: follows the margin smoothly (LIFT_SMOOTH_SECONDS), so it can be read
     local k = cc.lastT and math.min((sim.time - cc.lastT) / 1000 / LIFT_SMOOTH_SECONDS, 1) or 1
@@ -3749,6 +3766,10 @@ local function updateCutChecks()
       state.cutChecks[zi] = nil
       if cc.spun then
         ac.log(string.format('race-control: cut %s discarded: spin', zone.category))
+      elseif not cc.ref then
+        -- No reference yet: slowdown (the car is back on track without a spin)
+        startSlowdown(zone, cc.rule, cc.lapCount)
+        queueChat(TEXTS.cut.SLOWDOWN)
       elseif elapsed >= limit then
         ac.log(string.format('race-control: cut %s discarded: %.3f s, limit %.3f s', zone.category,
           elapsed / 1000, limit / 1000))
@@ -3773,15 +3794,18 @@ local function checkCutZone(zoneIndex, zone, lapCount)
   end
   if not state.cutPassPenalized[zoneIndex] and car.wheelsOutside > zone.maxWheelsOut then
     state.cutPassPenalized[zoneIndex] = true
+    -- After the DSQ a new infraction is only logged (decision 17)
+    if state.dtDsqActive or state.pitDsqActive then
+      ac.log(string.format('race-control: cut %s after the DSQ: logged, not applied', zone.category))
+      return
+    end
     local ref = state.zoneRef[zoneIndex]
     local pass = state.zonePass[zoneIndex]
-    if r.penalty == 'SLOWDOWN' and ref and pass then
-      -- Reference available: the gain decides when the car is back on track
-      state.cutChecks[zoneIndex] = { zone = zone, rule = r, lapCount = lapCount, t0 = pass.t0, ref = ref,
-        margin = 0, spun = false }
-    elseif r.penalty == 'SLOWDOWN' then
-      startSlowdown(zone, r, lapCount)
-      queueChat(TEXTS.cut.SLOWDOWN)
+    if r.penalty == 'SLOWDOWN' then
+      -- Decided when the car is back on track: a spin in the zone passage discards the cut; with a reference, the gain
+      -- decides (gain filter); without one, slowdown
+      state.cutChecks[zoneIndex] = { zone = zone, rule = r, lapCount = lapCount, t0 = pass and pass.t0 or sim.time,
+        ref = pass and ref or nil, margin = 0, spun = pass and pass.spun or false }
     elseif r.penalty == 'DT' then
       rcLog('Drive-through', TEXTS.reason[zone.category])
       if car.isInPitlane then Rules.slowdownEndOfLap(zone.category) else Rules.slowdownMidLap(zone.category) end
@@ -3817,9 +3841,8 @@ local function itemPriority(it)
   return string.format('DT%d', math.max(it.laps, 0))
 end
 
--- Stop & go (red): over the limit, stopped at the pit place, interrupted, last lap or pending
+-- Stop & go (red): stopped at the pit place, interrupted, last lap, overdue or pending
 local function sgText(it)
-  if sgOver(it) then return TEXTS.sgDsqStop end
   if StopAndGo.stopping then return string.format(TEXTS.sgStopped, mmss(StopAndGo.remainingMs(it) / 1000)) end
   if StopAndGo.resume then return string.format(TEXTS.sgInterrupted, mmss(StopAndGo.remainingMs(it) / 1000)) end
   -- Practice and qualifying: the deadline over does not disqualify (rule 25), the stop & go is overdue
@@ -4270,11 +4293,16 @@ local function drawPanel(p1, p2, border, s, alpha)
 end
 
 -- Box with a flag drawn by the script (black flag, or black flag with orange disc) and three lines of text
-local function drawFlagBox(p1, p2, s, border, disc, title, titleColor, line1, line2)
+-- Flag box: the flag on the left, title and two lines. Flag: black (DSQ; with disc = black flag with orange disc), or
+-- 'dt' = drive-through flag, white with a black diagonal stripe (the game no longer shows its drive-through message)
+local function drawFlagBox(p1, p2, s, border, disc, title, titleColor, line1, line2, flag)
   drawPanel(p1, p2, border, s)
   local f1 = vec2(p1.x + 20 * s, p1.y + 12 * s)
   local f2 = vec2(f1.x + 46 * s, f1.y + 32 * s)
-  ui.drawRectFilled(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)), rgbm(0.02, 0.02, 0.02, 1), px(2 * s))
+  local dt = flag == 'dt'
+  ui.drawRectFilled(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)),
+    dt and rgbm(0.95, 0.95, 0.95, 1) or rgbm(0.02, 0.02, 0.02, 1), px(2 * s))
+  if dt then ui.drawLine(vec2(px(f1.x), px(f2.y)), vec2(px(f2.x), px(f1.y)), rgbm(0.02, 0.02, 0.02, 1), 7 * s) end
   ui.drawRect(vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y)), rgbm(0.33, 0.33, 0.33, 1), px(2 * s))
   if disc then ui.drawCircleFilled(vec2(px((f1.x + f2.x) / 2), px((f1.y + f2.y) / 2)), 9 * s, disc, 24) end
   local tx = f2.x + 12 * s
@@ -4407,10 +4435,28 @@ do
     return out
   end
 
-  local function row(p1, s, y, x, label, values, color)
-    drawText(label, FONT_TEXT, 9 * s, vec2(p1.x + x * s, y), COLOR_OFF)
-    for i, v in ipairs(values) do
-      drawText(tostring(v or '-'), FONT_MONO, 9 * s, vec2(p1.x + (x + 44 + (i - 1) * 26) * s, y), color or COLOR_TITLE)
+  local function textWidth(text, font, size)
+    ui.pushDWriteFont(font)
+    local tw = ui.measureDWriteText(text, size).x
+    ui.popDWriteFont()
+    return tw
+  end
+
+  -- Column of rows { line, label, values }: the values start after the widest label of the column and each value after
+  -- the widest value of the column, so no label or value runs into the next one
+  local function column(p1, s, y0, lh, x, rows)
+    local labelW, valueW = 0, 0
+    for _, r in ipairs(rows) do
+      labelW = math.max(labelW, textWidth(r[2], FONT_TEXT, 9 * s))
+      for _, v in ipairs(r[3]) do valueW = math.max(valueW, textWidth(tostring(v or '-'), FONT_MONO, 9 * s)) end
+    end
+    local vx = p1.x + x * s + labelW + 7 * s
+    for _, r in ipairs(rows) do
+      local y = y0 + r[1] * lh
+      drawText(r[2], FONT_TEXT, 9 * s, vec2(p1.x + x * s, y), COLOR_OFF)
+      for i, v in ipairs(r[3]) do
+        drawText(tostring(v or '-'), FONT_MONO, 9 * s, vec2(vx + (i - 1) * (valueW + 6 * s), y), COLOR_TITLE)
+      end
     end
   end
 
@@ -4429,33 +4475,39 @@ do
     local lh = 11 * s
     -- Aero and drive train
     drawText(TEXTS.setupAero, FONT_TITLE, 9 * s, vec2(p1.x + 14 * s, y0), COLOR_TITLE)
-    row(p1, s, y0 + lh, 14, TEXTS.setupWing, { sp.WING_1, sp.WING_2 })
     drawText(TEXTS.setupDrive, FONT_TITLE, 9 * s, vec2(p1.x + 14 * s, y0 + 2 * lh), COLOR_TITLE)
-    row(p1, s, y0 + 3 * lh, 14, TEXTS.setupDiffPower, { string.format('%.0f%%', num(car.differentialPower) * 100) })
-    row(p1, s, y0 + 4 * lh, 14, TEXTS.setupDiffCoast, { string.format('%.0f%%', num(car.differentialCoast) * 100) })
-    row(p1, s, y0 + 5 * lh, 14, TEXTS.setupPreload, { string.format('%.0f', num(car.differentialPreload)) })
-    row(p1, s, y0 + 6 * lh, 14, TEXTS.setupBrakeBias, { string.format('%.1f', num(car.brakeBias) * 100),
-      string.format('%.1f', 100 - num(car.brakeBias) * 100) })
+    column(p1, s, y0, lh, 14, {
+      { 1, TEXTS.setupWing, { sp.WING_1, sp.WING_2 } },
+      { 3, TEXTS.setupDiffPower, { string.format('%.0f%%', num(car.differentialPower) * 100) } },
+      { 4, TEXTS.setupDiffCoast, { string.format('%.0f%%', num(car.differentialCoast) * 100) } },
+      { 5, TEXTS.setupPreload, { string.format('%.0f', num(car.differentialPreload)) } },
+      { 6, TEXTS.setupBrakeBias, { string.format('%.1f', num(car.brakeBias) * 100),
+        string.format('%.1f', 100 - num(car.brakeBias) * 100) } },
+    })
     -- Chassis
     drawText(TEXTS.setupChassis, FONT_TITLE, 9 * s, vec2(p1.x + 130 * s, y0), COLOR_TITLE)
-    row(p1, s, y0 + lh, 130, TEXTS.setupHeight, { sp.ROD_LENGTH_LF, sp.ROD_LENGTH_LR })
-    row(p1, s, y0 + 2 * lh, 130, TEXTS.setupArb, { sp.ARB_FRONT, sp.ARB_REAR })
-    row(p1, s, y0 + 3 * lh, 130, TEXTS.setupToe .. ' F', { string.format('%.2f', num(wh[0] and wh[0].toeIn)),
-      string.format('%.2f', num(wh[1] and wh[1].toeIn)) })
-    row(p1, s, y0 + 4 * lh, 130, TEXTS.setupToe .. ' R', { string.format('%.2f', num(wh[2] and wh[2].toeIn)),
-      string.format('%.2f', num(wh[3] and wh[3].toeIn)) })
-    row(p1, s, y0 + 5 * lh, 130, TEXTS.setupCamber .. ' F', { string.format('%.1f', num(wh[0] and wh[0].camber)),
-      string.format('%.1f', num(wh[1] and wh[1].camber)) })
-    row(p1, s, y0 + 6 * lh, 130, TEXTS.setupCamber .. ' R', { string.format('%.1f', num(wh[2] and wh[2].camber)),
-      string.format('%.1f', num(wh[3] and wh[3].camber)) })
+    column(p1, s, y0, lh, 130, {
+      { 1, TEXTS.setupHeight, { sp.ROD_LENGTH_LF, sp.ROD_LENGTH_LR } },
+      { 2, TEXTS.setupArb, { sp.ARB_FRONT, sp.ARB_REAR } },
+      { 3, TEXTS.setupToe .. ' F', { string.format('%.2f', num(wh[0] and wh[0].toeIn)),
+        string.format('%.2f', num(wh[1] and wh[1].toeIn)) } },
+      { 4, TEXTS.setupToe .. ' R', { string.format('%.2f', num(wh[2] and wh[2].toeIn)),
+        string.format('%.2f', num(wh[3] and wh[3].toeIn)) } },
+      { 5, TEXTS.setupCamber .. ' F', { string.format('%.1f', num(wh[0] and wh[0].camber)),
+        string.format('%.1f', num(wh[1] and wh[1].camber)) } },
+      { 6, TEXTS.setupCamber .. ' R', { string.format('%.1f', num(wh[2] and wh[2].camber)),
+        string.format('%.1f', num(wh[3] and wh[3].camber)) } },
+    })
     -- Suspension
     drawText(TEXTS.setupSuspension, FONT_TITLE, 9 * s, vec2(p1.x + 250 * s, y0), COLOR_TITLE)
-    row(p1, s, y0 + lh, 250, TEXTS.setupSpring .. ' F', { sp.SPRING_RATE_LF, sp.SPRING_RATE_RF })
-    row(p1, s, y0 + 2 * lh, 250, TEXTS.setupSpring .. ' R', { sp.SPRING_RATE_LR, sp.SPRING_RATE_RR })
-    row(p1, s, y0 + 3 * lh, 250, TEXTS.setupBump .. ' F', { sp.DAMP_BUMP_LF, sp.DAMP_BUMP_RF })
-    row(p1, s, y0 + 4 * lh, 250, TEXTS.setupBump .. ' R', { sp.DAMP_BUMP_LR, sp.DAMP_BUMP_RR })
-    row(p1, s, y0 + 5 * lh, 250, TEXTS.setupRebound .. ' F', { sp.DAMP_REBOUND_LF, sp.DAMP_REBOUND_RF })
-    row(p1, s, y0 + 6 * lh, 250, TEXTS.setupRebound .. ' R', { sp.DAMP_REBOUND_LR, sp.DAMP_REBOUND_RR })
+    column(p1, s, y0, lh, 250, {
+      { 1, TEXTS.setupSpring .. ' F', { sp.SPRING_RATE_LF, sp.SPRING_RATE_RF } },
+      { 2, TEXTS.setupSpring .. ' R', { sp.SPRING_RATE_LR, sp.SPRING_RATE_RR } },
+      { 3, TEXTS.setupBump .. ' F', { sp.DAMP_BUMP_LF, sp.DAMP_BUMP_RF } },
+      { 4, TEXTS.setupBump .. ' R', { sp.DAMP_BUMP_LR, sp.DAMP_BUMP_RR } },
+      { 5, TEXTS.setupRebound .. ' F', { sp.DAMP_REBOUND_LF, sp.DAMP_REBOUND_RF } },
+      { 6, TEXTS.setupRebound .. ' R', { sp.DAMP_REBOUND_LR, sp.DAMP_REBOUND_RR } },
+    })
     -- Tyres band: compound fitted; pressure, life and km of each wheel (a tyre can be changed alone)
     local ty = y0 + 8 * lh
     drawText(TEXTS.setupTyres, FONT_TITLE, 9 * s, vec2(p1.x + 14 * s, ty), COLOR_TITLE)
@@ -4491,6 +4543,42 @@ do
       if dev > math.min(d.toeBent, d.camberBent) then return string.format(TEXTS.statusBent, dev), COLOR_ORANGE end
     end
     return string.format('%.0f%%', pct), COLOR_OK
+  end
+
+  -- 1960s F1 seen from above, nose up (units of s from the center of the body area):
+  -- cigar body as approved (only the cylinder in front of the nose removed); front wheels slightly narrower than the
+  -- rear; triangular wishbones (apex at the
+  -- wheel, base on the body); cockpit around the middle of the body, with the steering wheel line inside its front edge;
+  -- right behind it the V8 block with its 8 intake trumpets in two banks, the left bank higher (half a trumpet: the crank
+  -- pin offset between the banks); behind the block 4 exhausts, one pair per bank, the central ones longer, all past
+  -- the end of the body
+  local F1_BODY = { -6, -30, 6, 32 }   -- { left x, top y, right x, bottom y }
+  local F1_WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }   -- { inner x, outer x, top y, bottom y }
+  local function drawF1(cx, cy, s)
+    local body = COLOR_TITLE
+    local function P(x, y) return vec2(cx + x * s, cy + y * s) end
+    ui.drawRect(P(F1_BODY[1], F1_BODY[2]), P(F1_BODY[3], F1_BODY[4]), body, 6 * s, nil, 1)
+    for _, wl in ipairs(F1_WHEELS) do
+      local mid = (wl[3] + wl[4]) / 2
+      for _, sd in ipairs({ -1, 1 }) do
+        local x1, x2 = sd < 0 and -wl[2] or wl[1], sd < 0 and -wl[1] or wl[2]
+        ui.drawRectFilled(P(x1, wl[3]), P(x2, wl[4]), body, 2 * s)
+        ui.drawLine(P(sd * wl[1], mid), P(sd * F1_BODY[3], mid - 4), body, 1)
+        ui.drawLine(P(sd * wl[1], mid), P(sd * F1_BODY[3], mid + 4), body, 1)
+      end
+    end
+    -- Cockpit and steering wheel
+    ui.drawRect(P(-4, -9.2), P(4, 5.2), body, 2 * s, nil, 1)
+    ui.drawSimpleLine(P(-2.5, -7), P(2.5, -7), body, 1)
+    -- Engine block, intake trumpets (left bank higher) and exhausts
+    ui.drawRect(P(-4, 6.5), P(4, 24), body, 0, nil, 1)
+    for j = 0, 3 do
+      ui.drawCircle(P(-2, 9 + j * 3.6), 1.3 * s, body, 10, 1)
+      ui.drawCircle(P(2, 10.8 + j * 3.6), 1.3 * s, body, 10, 1)
+    end
+    for _, ex in ipairs({ { -3, 35 }, { -1.2, 38.5 }, { 1.2, 38.5 }, { 3, 35 } }) do
+      ui.drawSimpleLine(P(ex[1], 24), P(ex[1], ex[2]), body, 1)
+    end
   end
 
   local function drawCar(car, w, h, s)
@@ -4563,18 +4651,7 @@ do
     drawText(string.format('L %.0f', vL), FONT_MONO, 9 * s, vec2(p1.x + 19 * s, cy - 5 * s), cL)
     drawText(string.format('R %.0f', vR), FONT_MONO, 9 * s, vec2(p2.x - 50 * s, cy - 5 * s), cR)
     vbar(p2.x - 15 * s, kR, cR)
-    -- 1960s F1 outline: long cigar body with a pointed nose, cockpit opening, wheels out of the body
-    local body = COLOR_TITLE
-    ui.drawRect(vec2(px(cx - 6 * s), px(cy - 30 * s)), vec2(px(cx + 6 * s), px(cy + 32 * s)), body, px(6 * s), nil, 1)
-    ui.drawRect(vec2(px(cx - 3 * s), px(cy - 38 * s)), vec2(px(cx + 3 * s), px(cy - 28 * s)), body, px(3 * s), nil, 1)
-    ui.drawRect(vec2(px(cx - 4 * s), px(cy - 2 * s)), vec2(px(cx + 4 * s), px(cy + 10 * s)), body, px(3 * s), nil, 1)
-    for _, wy in ipairs({ -26, 16 }) do
-      local wh = wy < 0 and 12 or 15
-      ui.drawRectFilled(vec2(px(cx - 17 * s), px(cy + wy * s)), vec2(px(cx - 10 * s), px(cy + (wy + wh) * s)), body, px(2 * s))
-      ui.drawRectFilled(vec2(px(cx + 10 * s), px(cy + wy * s)), vec2(px(cx + 17 * s), px(cy + (wy + wh) * s)), body, px(2 * s))
-      ui.drawSimpleLine(vec2(px(cx - 10 * s), px(cy + (wy + wh / 2) * s)), vec2(px(cx - 6 * s), px(cy + (wy + wh / 2) * s)), body, 1)
-      ui.drawSimpleLine(vec2(px(cx + 6 * s), px(cy + (wy + wh / 2) * s)), vec2(px(cx + 10 * s), px(cy + (wy + wh / 2) * s)), body, 1)
-    end
+    drawF1(cx, cy, s)
   end
 
   drawStatus = function(car, w, h, s)
@@ -4599,9 +4676,13 @@ function script.drawUI()
   if dsqText then
     -- Same style as the native AC message: one line, centered on screen, red with a dark outline
     local scale = h / 1080
-    local fontSize = 26 * scale
+    local fontSize = 16 * math.min(math.max(scale ^ 0.3, 1), 1.3)
     ui.pushDWriteFont('Segoe UI;Weight=Bold')
     local textSize = ui.measureDWriteText(dsqText, fontSize)
+    if textSize.x > w * 0.6 then
+      fontSize = fontSize * w * 0.6 / textSize.x
+      textSize = ui.measureDWriteText(dsqText, fontSize)
+    end
     local pos = vec2(w * 0.5 - textSize.x * 0.5, h * 0.5 + 7 * scale - textSize.y * 0.5)
     local outline = rgbm(0.1, 0, 0, 1)
     local o = 1.5 * scale
@@ -4729,7 +4810,7 @@ function script.drawUI()
   -- advantage still left over the reference x (1 + tolerance): red while the car is faster than allowed, empty when
   -- slower. It only disappears when the car is back on track (never in the middle, so it does not blink).
   local cc
-  for _, check in pairs(state.cutChecks) do cc = check end
+  for _, check in pairs(state.cutChecks) do if check.ref then cc = check end end
   if cc then
     local p1 = vec2(x, ySd)
     local p2 = vec2(x + boxW, ySd + sdH)
@@ -4893,6 +4974,18 @@ function script.drawUI()
     end
     yNext = p2.y + gap
   end
+  -- Drive-through flag (the game no longer shows its drive-through message): the drive-through to serve now, with the
+  -- reason and the deadline; +n = more drive-throughs in the list
+  local dtHead = dl.items[1]
+  if not cc and dl.dsq == 0 and dtHead and dtHead.kind:sub(1, 2) ~= 'SG' then
+    local p2 = vec2(x + boxW, yNext + sdH)
+    local more = #dl.items > 1 and string.format(TEXTS.dtMore, #dl.items - 1) or ''
+    local deadline = dtHead.laps < 0 and TEXTS.dtOverdue or dtHead.laps == 0 and TEXTS.dtThisLap
+      or dtHead.laps == 1 and TEXTS.dtNextLap or string.format(TEXTS.dtWithinLaps, dtHead.laps)
+    drawFlagBox(vec2(x, yNext), p2, s, BORDER_BASE, nil, TEXTS.dtTitle .. more, COLOR_TITLE,
+      TEXTS.reason[dtHead.cat] or dtHead.cat, deadline, 'dt')
+    yNext = p2.y + gap
+  end
   if not cc and dl.dsq > 0 and dl.dsqStage ~= 1 then
     local p2 = vec2(x + boxW, yNext + sdH)
     drawFlagBox(vec2(x, yNext), p2, s, BORDER_RED, nil, TEXTS.dsqTitle, BORDER_RED, dl.dsqReason,
@@ -4954,8 +5047,10 @@ function script.drawUI()
   -- Own pit stop box, bottom right corner (stopped at the own pit place, or during the stop)
   -- with the setup status (bottom left) and the car status (right of it)
   if config.mode == 'CSP' then
-    drawPitBox(ac.getCar(0), w, h, s)
-    drawStatus(ac.getCar(0), w, h, s)
+    -- Their own growth on screens bigger than 1080p, slightly more than the panel (screenScale); 1x at 1080p
+    local sb = math.min(math.max((h / 1080) ^ config.screenScale.exponent, 1), math.max(config.screenScale.max, 1))
+    drawPitBox(ac.getCar(0), w, h, sb)
+    drawStatus(ac.getCar(0), w, h, sb)
   end
 end
 -- ============================================================
@@ -4971,7 +5066,7 @@ local CarControls = {
 }
 do
   local me = tostring(ac.getUserSteamID() or '')
-  for id in tostring(cfg.cockpitExemptSteamIDs or ''):gmatch('[^;]+') do
+  for id in tostring(cfg.cockpitExemptSteamIDs or ''):gmatch('[^|]+') do
     if id:match('^%s*(.-)%s*$') == me and me ~= '' then CarControls.exempt = true end
   end
 end
@@ -5083,6 +5178,13 @@ function script.update(dt)
     l.endOfLap = {}
     l.lastLap = lapCount
     l.prevInPit = inPit
+    -- A DSQ belongs to its session: the controls locked and the game black flag of the session before are released
+    -- (Rules.sessionSync puts them back if the record of this session has a DSQ)
+    physics.lockUserControlsFor(0)
+    if g.t == BLACK_FLAG then
+      physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag)
+      g = { t = 0, p = 0 }
+    end
     l.prevGame = { t = g.t, p = g.p }
     -- Sync with the game on session start or reload
     Rules.sessionSync(g)
