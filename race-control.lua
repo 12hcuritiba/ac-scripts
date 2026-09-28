@@ -3463,7 +3463,7 @@ end
 -- is ours. Wrong way = the car points more than wrongWay angle (default 90 degrees) away from the direction of the
 -- track (car.look against the AI spline direction at the car, ac.trackProgressToWorldCoordinate) and moves back along
 -- the track. The distance driven like that is added up (position along the spline x sim.trackLengthM); pointing back
--- within the angle ends the manoeuvre and clears it. Reversing with the car pointing the right way is not counted (the
+-- within the angle, or stopping, ends the manoeuvre and clears it. Reversing with the car pointing the right way is not counted (the
 -- KMR reverse gear rule), nor a spin sliding forward. Up to maxMeters (default 30) is a manoeuvre; more = our DSQ in
 -- the usual flow (stop at the pit place, or the game black flag at the line; no teleport). Not counted in the pit
 -- lane nor across a teleport or a car reset.
@@ -3473,6 +3473,7 @@ local WrongWay = { prev = nil, back = 0 }
 do
   local JUMP_M = 100             -- a jump this big in one frame is a teleport or a car reset, not driving
   local AHEAD_M = 2              -- the direction of the track: from the car's point to this many metres ahead
+  local STOPPED_KMH = 1          -- below this the car is stopped: the count is cleared
 
   function WrongWay.reset()
     WrongWay.prev, WrongWay.back = nil, 0
@@ -3491,7 +3492,18 @@ do
     return math.deg(math.acos(math.min(math.max((dx * f.x + dz * f.z) / (n1 * n2), -1), 1)))
   end
 
+  -- The game's own wrong way: its icon on screen hidden (SDK ac.disableExtraHUDElements 'wrongWay') and its penalty
+  -- off (SDK physics.setWrongWayPenalty; ALLOW_WRONG_WAY = 1 on the server too). Once
+  local gameOff = false
+
   function WrongWay.update(car)
+    if not gameOff then
+      gameOff = true
+      ac.disableExtraHUDElements('wrongWay', true)
+      if physics.setWrongWayPenalty then physics.setWrongWayPenalty(false) end
+      ac.log('race-control: game wrong way icon hidden and penalty off (it was ' .. tostring(sim.wrongWayPenaltyEnabled)
+        .. ')')
+    end
     local rule = config.wrongWay
     local len = tonumber(sim.trackLengthM) or 0
     if rule.penalty ~= 'DSQ' or len <= 0 or car.isInPitlane or state.dtDsqActive or state.pitDsqActive then
@@ -3509,7 +3521,8 @@ do
       WrongWay.back = 0
       return
     end
-    if heading(car, len) <= rule.angle then
+    -- The manoeuvre ends pointing back within the angle, or with the car stopped (decision 146)
+    if heading(car, len) <= rule.angle or car.speedKmh < STOPPED_KMH then
       WrongWay.back = 0
     elseif m < 0 then
       WrongWay.back = WrongWay.back - m
@@ -4073,7 +4086,8 @@ local function updateCutChecks()
     cc.shown = cc.shown and (cc.shown + (cc.margin - cc.shown) * k) or cc.margin
     cc.lastT = sim.time
     if car.speedKmh > SPIN_MIN_SPEED_KMH and driftAngle(car) > config.cutSpinAngle then cc.spun = true end
-    local back = car.wheelsOutside <= zone.maxWheelsOut
+    -- Back on track = the four wheels on it (one wheel back is not back: a loss of control on the way back counts)
+    local back = car.wheelsOutside == 0
     if cc.given then
       -- No reference: the slowdown was given at the cut; a spin before the car is back on track cancels it
       if cc.spun then
@@ -5112,6 +5126,8 @@ do
   -- Plus 10% more at the tip (0.6 each side), back to nothing at the middle of the front wishbone base (y -21); in
   -- front of the tip, the radiator inlet: a white bar as thick as the steering wheel line
   local F1_NOSE_EXTRA, F1_EXTRA_Y = 0.6, -21
+  -- And 10% more (0.6 each side) from the front point of the front wishbone base (y -25) to the tip
+  local F1_NOSE_EXTRA2, F1_EXTRA2_Y = 0.6, -25
   local F1_SHIFT = -4
   local F1_WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }   -- { inner x, outer x, top y, bottom y }
   local function drawF1(cx, cy, s)
@@ -5123,20 +5139,23 @@ do
       if y >= F1_COCKPIT_Y then return F1_BODY[3] end
       local k = math.max((y - noseY) / (F1_COCKPIT_Y - noseY), 0)
       local extra = y < F1_EXTRA_Y and F1_NOSE_EXTRA * (1 - math.max((y - noseY) / (F1_EXTRA_Y - noseY), 0)) or 0
+      if y < F1_EXTRA2_Y then extra = extra + F1_NOSE_EXTRA2 * (1 - math.max((y - noseY) / (F1_EXTRA2_Y - noseY), 0)) end
       return F1_NOSE_HALF + (F1_BODY[3] - F1_NOSE_HALF) * k - extra
     end
     local tip = half(noseY)
     -- Outline: flat nose with rounded corners, tapered sides (two slopes) to the cockpit, straight sides, round tail
     ui.pathArcTo(P(tip - F1_NOSE_R, noseY), F1_NOSE_R * s, 0, -math.pi / 2, 4)
     ui.pathArcTo(P(-tip + F1_NOSE_R, noseY), F1_NOSE_R * s, -math.pi / 2, -math.pi, 4)
+    ui.pathLineTo(P(-half(F1_EXTRA2_Y), F1_EXTRA2_Y))
     ui.pathLineTo(P(-half(F1_EXTRA_Y), F1_EXTRA_Y))
     ui.pathLineTo(P(-F1_BODY[3], F1_COCKPIT_Y))
     ui.pathArcTo(P(0, F1_BODY[4] - F1_BODY[3]), F1_BODY[3] * s, math.pi, 0, 12)
     ui.pathLineTo(P(F1_BODY[3], F1_COCKPIT_Y))
     ui.pathLineTo(P(half(F1_EXTRA_Y), F1_EXTRA_Y))
+    ui.pathLineTo(P(half(F1_EXTRA2_Y), F1_EXTRA2_Y))
     ui.pathStroke(body, true, 1)
-    -- Radiator inlet: white bar on the flat front, as thick as the steering wheel line (1 px)
-    local a, b = P(-tip + F1_NOSE_R, F1_BODY[2]), P(tip - F1_NOSE_R, F1_BODY[2])
+    -- Radiator inlet: white bar on the front, as thick as the steering wheel line (1 px), almost to the corners
+    local a, b = P(-tip + 0.3, F1_BODY[2]), P(tip - 0.3, F1_BODY[2])
     ui.drawRectFilled(vec2(a.x, a.y - 1), b, rgbm(1, 1, 1, 1))
     for _, wl in ipairs(F1_WHEELS) do
       local mid = (wl[3] + wl[4]) / 2
@@ -5592,16 +5611,6 @@ function script.drawUI()
     end
     yNext = p2.y + gap
   end
-  -- Wrong way (rule 33): while the car goes against the direction of the track, the no entry sign with the metres so
-  -- far and the limit
-  local ww = WrongWay.back or 0
-  if stackOn and not cc and dl.dsq == 0 and ww >= config.wrongWay.showMeters and ww > 0 then
-    local p2 = vec2(x + boxW, yNext + sdH)
-    local lim = config.wrongWay.maxMeters
-    drawFlagBox(vec2(x, yNext), p2, s, BORDER_RED, nil, TEXTS.wrongWayTitle, BORDER_RED,
-      string.format(TEXTS.wrongWayTurn, ww, lim), string.format(TEXTS.wrongWayLimit, lim), 'noentry')
-    yNext = p2.y + gap
-  end
   -- Drive-through flag (the game no longer shows its drive-through message): the drive-through to serve now, with the
   -- reason and the deadline; +n = more drive-throughs in the list
   local dtHead = dl.items[1]
@@ -5638,6 +5647,16 @@ function script.drawUI()
     yNext = p2.y + gap
   end
 
+  -- Wrong way (rule 33), below the flag boxes: while the car goes against the direction of the track, the no entry sign with the metres so
+  -- far and the limit
+  local ww = WrongWay.back or 0
+  if stackOn and not cc and dl.dsq == 0 and ww >= config.wrongWay.showMeters and ww > 0 then
+    local p2 = vec2(x + boxW, yNext + sdH)
+    local lim = config.wrongWay.maxMeters
+    drawFlagBox(vec2(x, yNext), p2, s, BORDER_RED, nil, TEXTS.wrongWayTitle, BORDER_RED,
+      string.format(TEXTS.wrongWayTurn, ww, lim), string.format(TEXTS.wrongWayLimit, lim), 'noentry')
+    yNext = p2.y + gap
+  end
   -- Driver swap panel (green), below the slowdown and damage boxes; also the wrong driver countdown
   if config.swapOn() or state.list.wrong then
     local sw = state.swap
