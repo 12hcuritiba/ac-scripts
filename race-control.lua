@@ -82,11 +82,14 @@
 --     body). Only damage from collisions counts (within COLLISION_DAMAGE_WINDOW seconds after ac.onCarCollision);
 --     powertrain = engine and gearbox together (the larger increase); suspension = increase of the 4 wheels (0..1
 --     each); body = increase of the body damage zones in km/h.
---   damage = toeBent:10 | toeBroken:20 | camberBent:10 | camberBroken:20 | bodyRepair:150 | maxPunctured:2 | repairLaps:2 |
+--   damage = toeBent:10 | toeBroken:20 | camberBent:10 | camberBroken:20 | bodyRepair:150 | powertrainRepair:45 |
+--            maxPunctured:2 | repairLaps:2 |
 --            beyondTowSeconds:180 | dsqTowSeconds:180
 --     Qualifying and race. Toe and camber over the setup, per wheel, in degrees: over the bent limit = black flag with
 --     orange disc (repair required); over the broken limit = damage beyond the safety limit (stop off track, tow).
---     bodyRepair: body damage of a side over which the repair is required; maxPunctured: punctured tyres that still
+--     bodyRepair: body damage of a side over which the repair is required; powertrainRepair: powertrain damage in %
+--     (the larger of engine, 1 - life / 1000, and gearbox) from which the repair is required (a blown engine or a
+--     broken gearbox is beyond the safety limit: the game does not stop the car before); maxPunctured: punctured tyres that still
 --     drive (the repair changes the 4; more = beyond the limit); repairLaps: line crossings to do the required
 --     repair (not done by the last one = DSQ at the line). Beyond the safety limit, internal timers (not shown):
 --     beyondTowSeconds without the tow = DSQ (safety hazard) that asks for the tow; dsqTowSeconds more = game black
@@ -305,7 +308,8 @@ local cfg = ac.configValues({
   practiceSlowdownUnpaidPenalty = 'DT',
   qualifySlowdownUnpaidPenalty = 'DT',
   raceSlowdownUnpaidPenalty = 'DT',
-  -- cutSpinAngle: degrees between where the car points and where it moves; above it during the cut = spin, cut discarded
+  -- cutSpinAngle: degrees between where the car points and the way of the track at the car; above it during the cut =
+  --   spin, cut discarded
   cutSpinAngle = 90,
   -- <session>SlowdownUnpaidParam: not used (the DT is always DT0).
   practiceSlowdownUnpaidParam = 0,
@@ -455,6 +459,10 @@ local TEXTS = {
   damageBeyondTitle = 'DAMAGE BEYOND SAFETY LIMIT',
   damageBeyond = 'Stop off track and return to pits (tow)',
   damageWheel = 'Wheel missing - %s',
+  damageEngine = 'Engine blown',
+  damageGearbox = 'Gearbox broken',
+  damagePowertrain = 'Powertrain damage %.0f%%',
+  damagePowertrainLimit = 'repair from %d%%',
   -- DSQ (black flag drawn by the script until the game black flag)
   dsqTitle = 'DISQUALIFIED',
   dsqStop = 'Stop at your pit before the line',
@@ -574,6 +582,7 @@ local REPAIR_FORMULA = structKey('repairFormula', { baseSeconds = 180, weightEng
 local SCREEN_SCALE = structKey('screenScale', { exponent = 0.45, max = 1.5 })
 local WRONG_WAY = structKey('wrongWay', { maxMeters = 30, penalty = 'DSQ', showMeters = 2, angle = 90 })
 local DAMAGE = structKey('damage', { toeBent = 10, toeBroken = 20, camberBent = 10, camberBroken = 20, bodyRepair = 150,
+  powertrainRepair = 45,
   maxPunctured = 2, repairLaps = 2, beyondTowSeconds = 180, dsqTowSeconds = 180 })
 
 local function makeZone(category, startPos, endPos, maxWheelsOut, rules, deadline, maxGas, gainTolerance)
@@ -641,6 +650,7 @@ local config = {
     camberBent = DAMAGE.camberBent,
     camberBroken = DAMAGE.camberBroken,
     bodyRepair = DAMAGE.bodyRepair,
+    powertrainRepair = DAMAGE.powertrainRepair,
     maxPunctured = DAMAGE.maxPunctured,
     repairLaps = DAMAGE.repairLaps,
   },
@@ -890,6 +900,44 @@ end
 function CarRead.parked(car) return car.isInPit end
 -- Moving: any speed
 function CarRead.moving(car) return car.speedKmh > 0 end
+
+-- Movement of the car, from documented world readings only: where it is frame to frame (SDK car.position: "Car position
+-- in the world"), where it points (car.look: "Vector facing forward") and where a point is on the track
+-- (ac.worldCoordinateToTrackProgress: "Finds nearest point on track AI spline and returns its normalized position").
+-- Read once a frame (CarRead.updateMotion, script.update). The reference of every angle is the way of the track at
+-- the car (CarRead.trackAngle), never the car's own movement: used by the spin check and the wrong way rule.
+CarRead.motion = { x = nil, z = nil, dx = 0, dz = 0, dist = 0 }
+-- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
+do
+local MOTION_JUMP_M = 50     -- a move this big in one frame is a teleport or a car reset, not driving
+local TRACK_PROBE_M = 10     -- the direction along the track is read this many metres away from the car
+
+function CarRead.updateMotion(car)
+  local m, p = CarRead.motion, car.position
+  if m.x then
+    m.dx, m.dz = p.x - m.x, p.z - m.z
+    m.dist = math.sqrt(m.dx * m.dx + m.dz * m.dz)
+    if m.dist > MOTION_JUMP_M then m.dx, m.dz, m.dist = 0, 0, 0 end
+  end
+  m.x, m.z = p.x, p.z
+end
+
+-- Angle between a direction on the ground (x, z) and the way of the track at the car, degrees (0 = the way of the
+-- track, 180 = against it): how much the track progress changes TRACK_PROBE_M metres along that direction; nil when
+-- it cannot be read (no AI spline)
+function CarRead.trackAngle(car, x, z)
+  local len = tonumber(sim.trackLengthM) or 0
+  local n = math.sqrt(x * x + z * z)
+  if len <= 0 or n <= 0 then return nil end
+  local p = car.position
+  local a = ac.worldCoordinateToTrackProgress(p)
+  local b = ac.worldCoordinateToTrackProgress(vec3(p.x + x / n * TRACK_PROBE_M, p.y, p.z + z / n * TRACK_PROBE_M))
+  if not a or not b or a < 0 or b < 0 then return nil end
+  local d = b - a
+  if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
+  return math.deg(math.acos(math.min(math.max(d * len / TRACK_PROBE_M, -1), 1)))
+end
+end
 
 -- Seconds as m:ss
 local function mmss(seconds)
@@ -1250,6 +1298,8 @@ local DICT = {
   green = { 'green flag', 'bandeira verde' },   -- end of CODE-80; checked first
   ended = { 'ended' },              -- with VSC / virtual safety car: end of CODE-80 (KMR: "Virtual Safety Car ended!")
   rolling = { 'rolling start', 'formation lap' },
+  -- KMR penalty word, English and Portuguese (KMR language files en.json / pt.json)
+  penalty = { 'penalty', 'penalidade' },
 }
 
 -- Kinds that start CODE-80
@@ -1288,9 +1338,13 @@ local function classifyServerMessage(message)
   local name = tostring(ac.getDriverName(0) or '')
   if hasAny(low, DICT.driveThrough) then
     if name ~= '' and message:find(name, 1, true) then return 'DT' end
-    -- "Other Name: ..." is the KMR line of another driver (also after that driver left)
+    -- "Other Name: ..." is the KMR line of another driver (also after that driver left); "Penalty: ..." and
+    -- "Penalidade: ..." are the KMR messages to this car (en.json / pt.json)
     local head = message:match('^%s*([^:]+):%s')
-    if low:find('penalty', 1, true) and not head and not namesAnother(message) then return 'DT' end
+    if head and hasAny(head:lower(), DICT.penalty) then head = nil end
+    if hasAny(low, DICT.penalty) and not head and not namesAnother(message) then
+      return 'DT'
+    end
   end
   return nil
 end
@@ -1906,6 +1960,20 @@ local function carDsq(kind, reason, mode, detail)
   rcLog('Disqualified', detail and (reason .. ' - ' .. detail) or reason)
 end
 
+-- The DSQ taken off (Race Control command RC RELAX DSQ; practice at the pit place, decision 148): our DSQ and the game
+-- black flag, controls released, the car record written
+local function carDsqClear(why)
+  local l = state.list
+  local game = l.dsqStage == 1 or ac.getCar(0).currentPenaltyType == BLACK_FLAG
+  l.dsq, l.dsqStage, l.dsqUntil, l.dsqReason = 0, 0, 0, nil
+  l.seq = l.seq + 1
+  state.dtDsqActive, state.pitDsqActive = false, false
+  if game then physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag) end
+  physics.lockUserControlsFor(0)
+  listSave()
+  ac.log('race-control: disqualification cleared (' .. why .. ')')
+end
+
 -- Game black flag (the game DSQ): always with the controls locked; the car cannot go back to the race
 local DSQ_LOCK_SECONDS = 86400
 local function dsqGameFlag(why, rcReason, inGame)
@@ -2398,6 +2466,18 @@ do
         first = first or i
       end
     end
+    -- Powertrain (engine and gearbox as one: the larger damage of the two, decision 153): from powertrainRepair % the
+    -- repair is required; a blown engine (engineLifeLeft 0 or below; 1000 = whole) or a broken gearbox (gearboxDamage 1)
+    -- does not drive: beyond the safety limit (the game does not stop the car before)
+    local powertrain = math.max((1000 - num(car.engineLifeLeft)) / 10, num(car.gearboxDamage) * 100)   -- %
+    if num(car.engineLifeLeft) <= 0 then
+      consider('beyond', TEXTS.damageEngine, '')
+    elseif num(car.gearboxDamage) >= 1 then
+      consider('beyond', TEXTS.damageGearbox, '')
+    elseif powertrain >= config.damage.powertrainRepair then
+      consider('repair', string.format(TEXTS.damagePowertrain, powertrain),
+        string.format(TEXTS.damagePowertrainLimit, config.damage.powertrainRepair))
+    end
     if blown > config.damage.maxPunctured then
       consider('beyond', string.format(TEXTS.damageTyres, blown),
         string.format(TEXTS.damageTyresAllowed, blown, config.damage.maxPunctured))
@@ -2408,10 +2488,17 @@ do
     return worst
   end
 
+  -- Practice, the car at its pit place (after the tow, back to the session, or driven in): the repair deadline and the
+  -- beyond-the-limit timer start again (decision 152)
+  function DamageClass.reset()
+    local r = state.repair
+    r.lapsLeft, r.beyondSince, r.class = nil, nil, 'normal'
+  end
+
+  -- Every session (decision 152)
   function DamageClass.update(car, lineFrame)
     local r = state.repair
-    local race = sim.raceSessionType == ac.SessionType.Race or sim.raceSessionType == ac.SessionType.Qualify
-    if not race or state.dtDsqActive or state.pitDsqActive then
+    if state.dtDsqActive or state.pitDsqActive then
       r.class = 'normal'
       return
     end
@@ -3461,45 +3548,27 @@ do
   end
 end
 -- ============================================================
--- Driving the wrong way (rule 33). The CSP penalty is off on the server ([EXTRA_RULES] ALLOW_WRONG_WAY = 1): the rule
--- is ours. Wrong way = the car points more than wrongWay angle (default 90 degrees) away from the direction of the
--- track (car.look against the AI spline direction at the car, ac.trackProgressToWorldCoordinate) and moves back along
--- the track. The distance driven like that is added up (position along the spline x sim.trackLengthM); pointing back
--- within the angle, or stopping, ends the manoeuvre and clears it. Reversing with the car pointing the right way is not counted (the
--- KMR reverse gear rule), nor a spin sliding forward. Up to maxMeters (default 30) is a manoeuvre; more = our DSQ in
--- the usual flow (stop at the pit place, or the game black flag at the line; no teleport). Not counted in the pit
--- lane nor across a teleport or a car reset.
+-- Driving the wrong way (rule 33). The game's penalty is off (ALLOW_WRONG_WAY = 1 on the server, and below): the rule
+-- is ours. Wrong way = the car points and moves more than wrongWay angle (default 90 degrees) away from the way of the
+-- track (CarRead.trackAngle, from the car's world position and ac.worldCoordinateToTrackProgress). The distance
+-- actually driven like that is added up (CarRead.motion); pointing the way of the track within the angle, or stopping,
+-- ends the manoeuvre and clears it. Reversing with the car pointing the right way is not counted (the KMR reverse
+-- gear rule), nor a spin sliding the right way. Up to maxMeters (default 30) is a manoeuvre; more = our DSQ in the
+-- usual flow (stop at the pit place, or the game black flag at the line; no teleport). Not counted in the pit lane
+-- nor across a teleport or a car reset (a jump is not a move).
 -- ============================================================
 
-local WrongWay = { prev = nil, back = 0 }
+local WrongWay = { back = 0 }
 do
-  local JUMP_M = 100             -- a jump this big in one frame is a teleport or a car reset, not driving
-  -- The direction of the track: from this many metres behind the car to this many ahead (the AI spline is made of
-  -- points a few metres apart: two positions close together can give the same point)
-  local SPAN_M = 10
   local STOPPED_KMH = 1          -- below this the car is stopped: the count is cleared
-
-  function WrongWay.reset()
-    WrongWay.prev, WrongWay.back = nil, 0
-  end
-
-  -- Angle between where the car points and the direction of the track at the car, degrees (0 = the right way);
-  -- nil when it cannot be told (then the count stays as it is)
-  local function heading(car, len)
-    local p = car.splinePosition
-    local a = ac.trackProgressToWorldCoordinate((p - SPAN_M / len) % 1)
-    local b = ac.trackProgressToWorldCoordinate((p + SPAN_M / len) % 1)
-    if not a or not b then return nil end
-    local dx, dz = b.x - a.x, b.z - a.z
-    local f = car.look
-    local n1, n2 = math.sqrt(dx * dx + dz * dz), math.sqrt(f.x * f.x + f.z * f.z)
-    if n1 <= 0 or n2 <= 0 then return nil end
-    return math.deg(math.acos(math.min(math.max((dx * f.x + dz * f.z) / (n1 * n2), -1), 1)))
-  end
 
   -- The game's own wrong way: its icon on screen hidden (SDK ac.disableExtraHUDElements 'wrongWay') and its penalty
   -- off (SDK physics.setWrongWayPenalty; ALLOW_WRONG_WAY = 1 on the server too). Once
   local gameOff = false
+
+  function WrongWay.reset()
+    WrongWay.back = 0
+  end
 
   function WrongWay.update(car)
     if not gameOff then
@@ -3510,39 +3579,27 @@ do
         .. ')')
     end
     local rule = config.wrongWay
-    local len = tonumber(sim.trackLengthM) or 0
-    if rule.penalty ~= 'DSQ' or len <= 0 or car.isInPitlane or state.dtDsqActive or state.pitDsqActive then
+    if rule.penalty ~= 'DSQ' or car.isInPitlane or state.dtDsqActive or state.pitDsqActive then
       WrongWay.reset()
       return
     end
-    local pos = car.splinePosition
-    local prev = WrongWay.prev
-    WrongWay.prev = pos
-    if not prev then return end
-    local d = pos - prev
-    if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end    -- across the line
-    local m = d * len
-    if math.abs(m) > JUMP_M then
-      WrongWay.back = 0
-      return
-    end
-    -- The manoeuvre ends pointing back within the angle, or with the car stopped (decision 146)
-    local angle = heading(car, len)
+    local m = CarRead.motion
+    local pointing = CarRead.trackAngle(car, car.look.x, car.look.z)
+    local moving = m.dist > 0 and CarRead.trackAngle(car, m.dx, m.dz) or nil
     local before = WrongWay.back
-    if (angle and angle <= rule.angle) or car.speedKmh < STOPPED_KMH then
+    if car.speedKmh < STOPPED_KMH or (pointing and pointing <= rule.angle) then
+      -- The manoeuvre ends pointing the way of the track within the angle, or with the car stopped (decision 146)
       WrongWay.back = 0
-      -- Audit: every manoeuvre shown on screen that ends, with why
       if before >= rule.showMeters then
-        rcLog('Wrong way cleared', string.format('%.0f m - %s', before, angle and angle <= rule.angle
-          and string.format('back within %d deg (%.0f deg)', rule.angle, angle) or 'car stopped'))
+        rcLog('Wrong way cleared', string.format('%.0f m - %s', before, car.speedKmh < STOPPED_KMH and 'car stopped'
+          or string.format('back within %d deg (%.0f deg)', rule.angle, pointing)))
       end
-    elseif not angle then
-      -- direction of the track not known here: going forward along the track ends it, going back keeps it
-      if m > 0 then WrongWay.back = 0 end
-    elseif m < 0 then
-      WrongWay.back = WrongWay.back - m
+    elseif pointing and moving and moving > rule.angle then
+      -- Pointing and moving against the track: the distance driven counts (reversing with the car pointing the right
+      -- way is the KMR reverse gear rule; a spin sliding the right way does not count)
+      WrongWay.back = WrongWay.back + m.dist
       if before < rule.showMeters and WrongWay.back >= rule.showMeters then
-        rcLog('Wrong way', string.format('%.0f deg from the track - %.0f m', angle, WrongWay.back))
+        rcLog('Wrong way', string.format('%.0f deg from the track - %.0f m', pointing, WrongWay.back))
       end
     end
     if WrongWay.back > rule.maxMeters then
@@ -3606,8 +3663,11 @@ end
 -- these rules: paid by a pit pass, added to the stop & go, DSQ if not served. In practice and qualifying the KMR DT
 -- (carried by the KMR to the next race) is relaxed: not in the list, only in the log. Except the pit exit line crossing
 -- (K1): always a DT0 in the list, in every session, whatever deadline the KMR message gives (rule 24).
--- Messages (KMR language file v1.6f): "Penalty: drive-through before the end of this lap <reason>." = DT0;
--- "Penalty: drive-through within <n> lap(s) <reason>." = DT<n>; "... to clear during the next race <reason>." = relaxed.
+-- Messages (KMR language files v1.6f, language/en.json and pt.json: the KMR sends each driver the message in the
+-- driver's language, so the game chat can be in Portuguese while the server log is in English):
+--   "Penalty: drive-through before the end of this lap <reason>." / "Penalidade: drive-through antes do final desta
+--   volta <reason>." = DT0; "... within <n> ..." / "... dentro de no maximo <n> ..." = DT<n>; "... to clear during the
+--   next race <reason>." / "... a ser pago na proxima corrida <reason>." = relaxed (except the pit exit line).
 -- The chat handler only keeps the message (state.kmrMessages); it is read here, in script.update.
 -- ============================================================
 
@@ -3615,22 +3675,23 @@ local KmrDT = {}
 -- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
 do
   -- Reason of the message -> category (TEXTS.kmrReasons)
+  -- English and Portuguese reason of each category (for_* entries of en.json / pt.json, lower case, no accents)
   local KMR_REASONS = {
-    { 'crossing the pit exit line', 'K1' },
-    { 'pit lane speeding', 'K2' },
-    { 'reaching the infraction limit', 'K3' },
-    { 'colliding with a car that was lapping you', 'K4' },
-    { 'colliding with a car in the hotlap', 'K5' },
-    { 'disturbing another driver hotlap', 'K6' },
-    { 'driving in reverse gear', 'K7' },
-    { 'parking the car in proximity of the track', 'K8' },
-    { 'too many collisions', 'K9' },
-    { 'speeding during the virtual safety car', 'K10' },
-    { 'slowing down too much during the virtual safety car', 'K11' },
-    { 'violating the overtake restriction', 'K12' },
-    { 'cutting', 'K13' },
-    { 'ignoring the blue flags', 'K14' },
-    { 'rejoining the track at high speed', 'K15' },
+    { 'crossing the pit exit line', 'K1' }, { 'por cruzar o pitlane na pista', 'K1' },
+    { 'pit lane speeding', 'K2' }, { 'excesso de velocidade no pit lane', 'K2' },
+    { 'reaching the infraction limit', 'K3' }, { 'atingir o limite de infracoes', 'K3' },
+    { 'colliding with a car that was lapping you', 'K4' }, { 'estava lhe aplicando uma volta', 'K4' },
+    { 'colliding with a car in the hotlap', 'K5' }, { 'colidir com um carro em volta rapida', 'K5' },
+    { 'disturbing another driver hotlap', 'K6' }, { 'atrapalhar a volta rapida', 'K6' },
+    { 'driving in reverse gear', 'K7' }, { 'pilotar em marcha re', 'K7' },
+    { 'parking the car in proximity of the track', 'K8' }, { 'parar o carro nas proximidades da pista', 'K8' },
+    { 'too many collisions', 'K9' }, { 'muitas colisoes', 'K9' },
+    { 'speeding during the virtual safety car', 'K10' }, { 'excesso de velocidade durante o safety car virtual', 'K10' },
+    { 'slowing down too much during the virtual safety car', 'K11' }, { 'lento durante muito tempo no safety car virtual', 'K11' },
+    { 'violating the overtake restriction', 'K12' }, { 'violar a restricao de ultrapassagem', 'K12' },
+    { 'cutting', 'K13' }, { 'por cortar', 'K13' },
+    { 'ignoring the blue flags', 'K14' }, { 'ignorar a bandeira azul', 'K14' },
+    { 'rejoining the track at high speed', 'K15' }, { 'retornar a pista em alta velocidade', 'K15' },
   }
 
   local function category(low)
@@ -3642,9 +3703,9 @@ do
 
   -- Deadline of the message: laps (0 = this lap), 'next race', or nil (not a DT given now)
   local function deadline(low)
-    if low:find('next race', 1, true) then return 'next race' end
-    if low:find('this lap', 1, true) then return 0 end
-    local n = low:match('within (%d+) lap')
+    if low:find('next race', 1, true) or low:find('proxima corrida', 1, true) then return 'next race' end
+    if low:find('this lap', 1, true) or low:find('desta volta', 1, true) then return 0 end
+    local n = low:match('within (%d+) lap') or low:match('dentro de no maximo (%d+)')
     if n then return tonumber(n) end
     return nil
   end
@@ -3657,7 +3718,7 @@ do
       local text = m.text
       local via = ' - chat sender ' .. tostring(m.sender)
       local low = text:lower()
-      local laps = low:find('penalty', 1, true) and deadline(low)
+      local laps = hasAny(low, DICT.penalty) and deadline(low)
       if laps then
         local cat = category(low)
         local base = TEXTS.kmrReasons[cat]
@@ -3730,13 +3791,7 @@ do
       local r = state.repair
       r.lapsLeft, r.beyondSince, r.class, r.waived = nil, nil, 'normal', true
     elseif what == 'DSQ' then
-      local game = l.dsqStage == 1
-      l.dsq, l.dsqStage, l.dsqUntil, l.dsqReason = 0, 0, 0, nil
-      l.seq = l.seq + 1
-      state.dtDsqActive, state.pitDsqActive = false, false
-      if game or ac.getCar(0).currentPenaltyType == BLACK_FLAG then physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag) end
-      physics.lockUserControlsFor(0)
-      listSave()
+      carDsqClear('Race Control command')
     else
       return false
     end
@@ -4030,15 +4085,11 @@ local function refAt(ref, p)
   return ref[i] + (ref[i + 1] - ref[i]) * (x - i)
 end
 
--- Angle between where the car points and where it moves, in degrees (0 = straight, 180 = backwards), on the ground
--- plane, from the world vectors the SDK documents: car.look ("Vector facing forward") and car.velocity ("Car velocity in
--- m/s"); the axes of car.localVelocity are not documented
-local function driftAngle(car)
-  local v, f = car.velocity, car.look
-  local speed = math.sqrt(v.x * v.x + v.z * v.z)
-  local len = math.sqrt(f.x * f.x + f.z * f.z)
-  if speed <= 0 or len <= 0 then return 0 end
-  return math.deg(math.acos(math.min(math.max((v.x * f.x + v.z * f.z) / (speed * len), -1), 1)))
+-- Spin (loss of control): the car pointing more than cutSpinAngle away from the way of the track at the car
+-- (CarRead.trackAngle: the reference is the track, not the car's own movement), above SPIN_MIN_SPEED_KMH
+local function spinning(car)
+  local angle = CarRead.trackAngle(car, car.look.x, car.look.z)
+  return car.speedKmh > SPIN_MIN_SPEED_KMH and angle ~= nil and angle > config.cutSpinAngle
 end
 
 -- Records the passage through each zone; a clean, complete and faster passage becomes the reference
@@ -4069,7 +4120,7 @@ local function updateZonePassages()
             end
             if car.wheelsOutside > zone.maxWheelsOut then pass.dirty = true end
             -- Loss of control anywhere in the zone passage: a cut in it is discarded
-            if car.speedKmh > SPIN_MIN_SPEED_KMH and driftAngle(car) > config.cutSpinAngle then pass.spun = true end
+            if spinning(car) then pass.spun = true end
             if not inZone then
               state.zonePass[zi] = nil
               if not pass.dirty and pass.nextIdx > GAIN_SAMPLES then
@@ -4103,7 +4154,7 @@ local function updateCutChecks()
     local k = cc.lastT and math.min((sim.time - cc.lastT) / 1000 / LIFT_SMOOTH_SECONDS, 1) or 1
     cc.shown = cc.shown and (cc.shown + (cc.margin - cc.shown) * k) or cc.margin
     cc.lastT = sim.time
-    if car.speedKmh > SPIN_MIN_SPEED_KMH and driftAngle(car) > config.cutSpinAngle then cc.spun = true end
+    if spinning(car) then cc.spun = true end
     -- Back on track = the four wheels on it (one wheel back is not back: a loss of control on the way back counts)
     local back = car.wheelsOutside == 0
     if cc.given then
@@ -5228,8 +5279,10 @@ do
     drawText(TEXTS.statusPowertrain, FONT_TEXT, 9 * s, vec2(p1.x + 12 * s, y), COLOR_OFF)
     local engine = num(car.engineLifeLeft)
     drawText(TEXTS.statusEngine, FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, y + 12 * s), COLOR_TITLE)
-    drawText(engine >= 1000 and TEXTS.statusOk or string.format('%.0f%%', engine / 10), FONT_MONO, 9 * s,
-      vec2(p1.x + 12 * s, y + 23 * s), engine >= 1000 and COLOR_OK or COLOR_WARN)
+    -- engineLifeLeft: 1000 = whole; 0 or below = blown (the game goes under 0)
+    drawText(engine >= 1000 and TEXTS.statusOk or (engine <= 0 and TEXTS.statusBrokenShort)
+      or string.format('%.0f%%', engine / 10), FONT_MONO, 9 * s, vec2(p1.x + 12 * s, y + 23 * s),
+      engine >= 1000 and COLOR_OK or (engine <= 0 and BORDER_RED or COLOR_WARN))
     -- Columns measured from their widest text (title or value), so ENGINE, GEARBOX and BOP fit in the same width
     local function colW(title, widest)
       return math.max(textWidth(title, FONT_TITLE, 9 * s), textWidth(widest, FONT_MONO, 9 * s)) + 10 * s
@@ -5759,6 +5812,8 @@ function script.update(dt)
   local lapCount = car.lapCount
   state.ui.clock = state.ui.clock + dt
   CarControls.update(dt)
+  -- Movement of the car (position frame to frame): shared by the spin check and the wrong way rule
+  CarRead.updateMotion(car)
   OnlineQueue.update()
   RecordSync.update()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
@@ -5926,16 +5981,12 @@ function script.update(dt)
     -- flag is taken off and the controls released after the tow (forced or by the driver) or back to the session; the
     -- DSQ rules themselves do not change
     local practice = sim.raceSessionType == ac.SessionType.Practice
+    if practice and CarRead.parked(car) then DamageClass.reset() end
     if practice and CarRead.parked(car) and dsqActive and (config.tow[ac.SessionType.Practice].clearDsq or 0) == 1 then
-      l.dsq, l.dsqStage, l.dsqUntil, l.dsqReason = 0, 0, 0, nil
-      l.seq = l.seq + 1
-      state.dtDsqActive, state.pitDsqActive = false, false
-      if g.t == BLACK_FLAG then physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag) end
-      physics.lockUserControlsFor(0)
+      carDsqClear('practice, car at its pit place')
       Rules.zero()
       l.invalidLap = nil
       dsqActive = false
-      ac.log('race-control: practice, car at its pit place: disqualification cleared')
       rcLog('Pit', 'Practice - disqualification cleared at the pit place')
     elseif practice and CarRead.parked(car) and not dsqActive
         and (#l.items > 0 or next(state.slowdowns) or #l.endOfLap > 0) then
