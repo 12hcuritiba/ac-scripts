@@ -413,43 +413,54 @@ local TEXTS = {
   -- setup status (approved screen 14) and car status (approved screen 12)
   setupTitle = 'SETUP STATUS',
   setupLap = 'Lap %d',
-  setupAero = 'Aero',
+  setupAero = 'AERO',
   setupWing = 'Wing',
-  setupDrive = 'Drive train',
+  setupDrive = 'DRIVE TRAIN',
   setupDiffPower = 'Diff power',
   setupDiffCoast = 'Diff coast',
   setupPreload = 'Preload',
+  setupPreloadValue = '%.0f Nm',
   setupBrakeBias = 'Brake bias',
-  setupChassis = 'Chassis',
+  setupChassis = 'CHASSIS',
   setupHeight = 'Height',
+  setupHeaveHeight = 'Heave height',
+  setupDeploy = 'Deploy',
+  setupErs = 'ERS / Rec.',
   setupArb = 'ARB',
   setupToe = 'Toe',
   setupCamber = 'Camber',
-  setupSuspension = 'Suspension',
+  setupSuspension = 'SUSPENSION',
   setupSpring = 'Spring',
-  setupBump = 'Bump',
-  setupRebound = 'Reb.',
-  setupTyres = 'Tyres',
+  setupAxes = 'F/R',
+  setupBumpSlow = 'Bump S',
+  setupReboundSlow = 'Reb. S',
+  setupBumpFast = 'Bump F',
+  setupReboundFast = 'Reb. F',
+  setupHeaveSpring = 'Heave spring',
+  setupHeaveBumpSlow = 'Heave bump S',
+  setupHeaveReboundSlow = 'Heave reb. S',
+  setupHeaveBumpFast = 'Heave bump F',
+  setupHeaveReboundFast = 'Heave reb. F',
+  setupTyres = 'TYRES',
   setupPsi = 'PSI',
   setupLife = 'Life',
   setupKm = 'Km',
   setupLaps = 'Laps',
   setupLapsOf = '%d/%s',
-  setupElectronics = 'ABS %d  TC %d  TC2 %d  MAP %d  EB %d  ERS %d  REC %d',
   statusTitle = 'CAR STATUS',
   statusRepair = 'REPAIR',
   statusBeyond = 'UNSAFE',
-  statusWheels = 'Wheels & suspension',
+  statusWheels = 'WHEELS & SUSPENSION',
   statusPunct = 'PUNCT',
   statusBent = 'BENT +%.0f°',
   statusBroken = 'BROKEN +%.0f°',
   statusBrokenShort = 'BROKEN',
-  statusPowertrain = 'Powertrain',
+  statusPowertrain = 'POWERTRAIN',
   statusEngine = 'ENGINE',
   statusGearbox = 'GEARBOX',
   statusBop = 'BOP',
   statusOk = 'OK',
-  statusBody = 'Body',
+  statusBody = 'BODY',
   -- stop & go box (approved screens 3 and 4)
   sgBoxTitle = 'STOP & GO',
   sgBoxStay = 'Stay stopped - no service during stop & go',
@@ -5396,15 +5407,22 @@ local drawStatus
 -- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
 do
   local num = CarRead.num
-  local SETUP_W, SETUP_H, SETUP_LEFT = 384, 224, 235
-  -- Setup status layout (decision 158): the size stays; font and line pitch fill it with one gap everywhere: under the
-  -- title line, between the columns, the tyres band and the electronics (each with its line), and to the bottom.
-  -- 13 lines of SETUP.lh (7 columns, 5 tyres band, 1 electronics); SETUP.gap = what is left, shared by the 6 gaps
-  local SETUP = { font = 10, lh = 13, head = 21, side = 14 }
-  SETUP.gap = (SETUP_H - SETUP.head - 13 * SETUP.lh) / 6
-  SETUP.col = (SETUP_W - 2 * SETUP.side) / 3
-  -- Car status: 171 wide; height = the body block ends 8 px above the bottom (decision 158)
-  local STATUS_W, STATUS_H, STATUS_RIGHT = 171, 269, 1920 - 1701 - 171
+  -- Setup status layout (approved screen 14, decisions 158, 176 and 177): the size of the approved screen (384 x 224)
+  -- plus one line of the tyres band (Laps). 16 lines of SETUP.lh: 9 of the three areas (Aero and Drive train, Chassis,
+  -- Suspension), 6 of the tyres band (title and compound, wheels, PSI, Life, Km, Laps), 1 of the electronics; SETUP.gap
+  -- = what is left, shared by the 6 gaps (under the title line, above and under the line of the tyres band and of the
+  -- electronics, to the bottom). Area titles in a larger bold font. A suspension with more lines than the other areas
+  -- (heave) makes the screen taller by those lines (upwards); areas that need more than the width make it wider (to the
+  -- right, clear of the pit stop box). Measures at 1080p: vertical line between the areas (colGap), value columns of
+  -- the two-column areas at least valueW, gap of the front and rear pairs of the suspension (pairGap), the label column
+  -- of the tyres band (tyreLabelW) and the gap of its wheel columns
+  local SETUP = { font = 9.5, title = 10, lh = 12, head = 21, side = 14, colGap = 11, valueW = 22, pairGap = 7,
+    tyreLabelW = 46, wheelGap = 6, rows = 9 }
+  local SETUP_W, SETUP_H, SETUP_LEFT = 384, 224 + SETUP.lh, 235
+  SETUP.gap = (SETUP_H - SETUP.head - 16 * SETUP.lh) / 6
+  SETUP.axisColor = rgbm(0.29, 0.31, 0.33, 1)   -- F / R letters and wheel names
+  -- Car status: 171 wide; height from its blocks (drawCar, decision 178)
+  local STATUS_W, STATUS_RIGHT = 171, 1920 - 1701 - 171
   local MARGIN = 48
   local COLOR_OFF = rgbm(0.45, 0.48, 0.5, 1)
   local COLOR_OK = rgbm(0.45, 1, 0.55, 1)
@@ -5445,9 +5463,9 @@ do
     return BORDER_RED
   end
 
-  -- Setup spinner value shown (value x displayMultiplier), or '-'
+  -- Setup spinner value shown (value x displayMultiplier); '-' for a spinner the car does not have
   local function spinners()
-    local out = {}
+    local out = setmetatable({}, { __index = function() return '-' end })
     for _, sp in ipairs(ac.getSetupSpinners() or {}) do
       local v = num(sp.value) * (tonumber(sp.displayMultiplier) or 1)
       out[tostring(sp.name):upper()] = (math.floor(v) == v) and tostring(v) or string.format('%.1f', v)
@@ -5455,119 +5473,223 @@ do
     return out
   end
 
-  -- Column of rows { line, label, values }: the values start after the widest label of the column and each value after
-  -- the widest value of the column, so no label or value runs into the next one
-  local function column(p1, s, y0, lh, x, rows)
-    local fs = SETUP.font * s
-    local labelW, valueW = 0, 0
-    for _, r in ipairs(rows) do
-      labelW = math.max(labelW, textWidth(r[2], FONT_TEXT, fs))
-      for _, v in ipairs(r[3]) do valueW = math.max(valueW, textWidth(tostring(v or '-'), FONT_MONO, fs)) end
+  -- Areas of the setup (approved screen 14, decision 177). An area is a list of items: { title = text }, or
+  -- { label, { { axis, values }, ... } } with one line per axis group. Label on the left, axis (F / R, F/R) in its own
+  -- column, values right-aligned in value columns at the right edge of the area: cols = 2 (the wheels of an axle; one
+  -- value spans both) or 4 (the four wheels, front pair and rear pair; two values = front and rear, under the right
+  -- column of each pair). The value columns are as wide as the widest value, so nothing runs into the axis
+  local Area = {}
+
+  -- Lines of an area: a line whose values are all '-' (the car does not have it) is left out; the label goes on the
+  -- first line kept; an item with no line kept is left out, and a title with no item kept under it too
+  function Area.rows(items)
+    local rows = {}
+    for _, it in ipairs(items) do
+      if it.title then
+        if rows[#rows] and rows[#rows].title then rows[#rows] = nil end
+        rows[#rows + 1] = it
+      else
+        local label = it[1]
+        for _, ln in ipairs(it[2]) do
+          local has = false
+          for _, v in ipairs(ln[2]) do if v ~= '-' then has = true end end
+          if has then
+            rows[#rows + 1] = { label, ln[1], ln[2] }
+            label = nil
+          end
+        end
+      end
     end
-    local vx = p1.x + x * s + labelW + 7 * s
+    if rows[#rows] and rows[#rows].title then rows[#rows] = nil end
+    return rows
+  end
+
+  -- Measures of an area and the width it needs
+  function Area.measure(rows, cols, s)
+    local fs = SETUP.font * s
+    local m = { rows = rows, cols = cols, gapV = 4 * s, pairGap = cols == 4 and SETUP.pairGap * s or 0,
+      valueW = cols == 2 and SETUP.valueW * s or 0, labelW = 0, axisW = 0, titleW = 0 }
     for _, r in ipairs(rows) do
-      local y = y0 + r[1] * lh
-      drawText(r[2], FONT_TEXT, fs, vec2(p1.x + x * s, y), COLOR_OFF)
-      for i, v in ipairs(r[3]) do
-        drawText(tostring(v or '-'), FONT_MONO, fs, vec2(vx + (i - 1) * (valueW + 6 * s), y), COLOR_TITLE)
+      if r.title then
+        m.titleW = math.max(m.titleW, textWidth(r.title, FONT_TITLE, SETUP.title * s))
+      else
+        if r[1] then m.labelW = math.max(m.labelW, textWidth(r[1], FONT_TEXT, fs)) end
+        if r[2] then m.axisW = math.max(m.axisW, textWidth(r[2], FONT_MONO, fs)) end
+        for _, v in ipairs(r[3]) do
+          local tw = textWidth(tostring(v), FONT_MONO, fs)
+          m.valueW = math.max(m.valueW, #r[3] == 1 and (tw - (cols - 1) * m.gapV - m.pairGap) / cols or tw)
+        end
+      end
+    end
+    local span = cols * m.valueW + (cols - 1) * m.gapV + m.pairGap
+    m.need = math.max(m.titleW, m.labelW + 6 * s + m.axisW + 3 * s + span)
+    return m
+  end
+
+  function Area.draw(m, x1, x2, y0, lh, s)
+    local fs = SETUP.font * s
+    local function right(c)
+      return x2 - (m.cols - c) * (m.valueW + m.gapV) - ((m.cols == 4 and c <= 2) and m.pairGap or 0)
+    end
+    local axisX = right(1) - m.valueW - 3 * s - m.axisW
+    for n, r in ipairs(m.rows) do
+      local y = y0 + (n - 1) * lh
+      if r.title then
+        drawText(r.title, FONT_TITLE, SETUP.title * s, vec2(x1, y - (SETUP.title - SETUP.font) * s / 2), COLOR_DIM)
+      else
+        if r[1] then drawText(r[1], FONT_TEXT, fs, vec2(x1, y), COLOR_OFF) end
+        if r[2] then drawText(r[2], FONT_MONO, fs, vec2(axisX, y), SETUP.axisColor) end
+        local vals = r[3]
+        local at = #vals == 1 and { m.cols } or (#vals == 2 and m.cols == 4 and { 2, 4 }) or nil
+        for i, v in ipairs(vals) do
+          drawTextRight(tostring(v), FONT_MONO, fs, right(at and at[i] or i), y, COLOR_TITLE)
+        end
       end
     end
   end
 
   local function drawSetup(car, w, h, s)
-    local k = h / 1080
-    local o = Drag.offset('setup', h)
-    local p1 = vec2(math.floor(SETUP_LEFT * k + o.x), math.floor(h - MARGIN * k - SETUP_H * s + o.y))
-    Drag.group = 'setup'
-    local p2 = vec2(p1.x + SETUP_W * s, p1.y + SETUP_H * s)
-    drawPanel(p1, p2, BORDER_BASE, s)
-    local fs, gap = SETUP.font * s, SETUP.gap * s
-    local c1, c2, c3 = SETUP.side, SETUP.side + SETUP.col, SETUP.side + 2 * SETUP.col
-    drawText(TEXTS.setupTitle, FONT_TITLE, 12 * s, vec2(p1.x + SETUP.side * s, p1.y + 4 * s), COLOR_TITLE)
-    drawTextRight(string.format(TEXTS.setupLap, car.lapCount + 1), FONT_MONO, 10 * s, p2.x - SETUP.side * s,
-      p1.y + 5 * s, COLOR_OFF)
-    drawSeparator(p1, p2, p1.y + SETUP.head * s, s)
     local sp = spinners()
     local wh = car.wheels or {}
-    local lh = SETUP.lh * s
+    local function f(fmt, v) return string.format(fmt, num(v)) end
+    -- The four wheels of a setup item (LF, RF, LR, RR) and the heave of the two axles (HF, HR)
+    local function four(name) return { sp[name .. 'LF'], sp[name .. 'RF'], sp[name .. 'LR'], sp[name .. 'RR'] } end
+    local function heave(name) return { sp[name .. 'HF'], sp[name .. 'HR'] } end
+    local T = TEXTS
+    -- MGU-K of a hybrid car (decision 179), what the game gives for every car: deploy (the MGU-K delivery program, the
+    -- deploy map: 1 to count), ERS (battery charge, kersCharge 0 to 1) and recovery (0 to 10 = 0 to 100%). '-' on a car
+    -- without MGU-K (not shown)
+    local hybrid = num(car.mgukDeliveryCount) > 0 or car.kersPresent == true
+    local deploy, ers, recovery = '-', '-', '-'
+    if hybrid then
+      deploy = string.format('%d/%d', num(car.mgukDelivery) + 1, num(car.mgukDeliveryCount))
+      ers = string.format('%.0f%%', num(car.kersCharge) * 100)
+      recovery = string.format('%d%%', num(car.mgukRecovery) * 10)
+    end
+    local areas = {
+      Area.measure(Area.rows({
+        { title = T.setupAero },
+        { T.setupWing, { { T.setupAxes, { sp.WING_1, sp.WING_2 } } } },
+        { title = T.setupDrive },
+        { T.setupDiffPower, { { nil, { f('%.0f%%', num(car.differentialPower) * 100) } } } },
+        { T.setupDiffCoast, { { nil, { f('%.0f%%', num(car.differentialCoast) * 100) } } } },
+        { T.setupPreload, { { nil, { f(T.setupPreloadValue, car.differentialPreload) } } } },
+        -- Brake bias front / rear in one (48/52, the front first); brake migration % under it (decision 179)
+        { T.setupBrakeBias, { { nil, { string.format('%.0f/%.0f', num(car.brakeBias) * 100,
+          100 - num(car.brakeBias) * 100) } } } },
+        -- MGU-K under the drive train (decision 179)
+        { T.setupDeploy, { { nil, { deploy } } } },
+        { T.setupErs, { { nil, { ers, recovery } } } },
+      }), 2, s),
+      Area.measure(Area.rows({
+        { title = T.setupChassis },
+        -- Order (decision 179): camber, toe, ARB, height, heave height
+        { T.setupCamber, { { 'F', { f('%.1f', wh[0] and wh[0].camber), f('%.1f', wh[1] and wh[1].camber) } },
+          { 'R', { f('%.1f', wh[2] and wh[2].camber), f('%.1f', wh[3] and wh[3].camber) } } } },
+        { T.setupToe, { { 'F', { f('%.2f', wh[0] and wh[0].toeIn), f('%.2f', wh[1] and wh[1].toeIn) } },
+          { 'R', { f('%.2f', wh[2] and wh[2].toeIn), f('%.2f', wh[3] and wh[3].toeIn) } } } },
+        { T.setupArb, { { T.setupAxes, { sp.ARB_FRONT, sp.ARB_REAR } } } },
+        { T.setupHeight, { { T.setupAxes, { sp.ROD_LENGTH_LF, sp.ROD_LENGTH_LR } } } },
+        { T.setupHeaveHeight, { { T.setupAxes, { sp.ROD_LENGTH_HF, sp.ROD_LENGTH_HR } } } },
+      }), 2, s),
+      -- Suspension, one line per item (decision 177): the four wheels (front pair, rear pair); heave front and rear
+      Area.measure(Area.rows({
+        { title = T.setupSuspension },
+        { T.setupSpring, { { T.setupAxes, four('SPRING_RATE_') } } },
+        { T.setupBumpSlow, { { T.setupAxes, four('DAMP_BUMP_') } } },
+        { T.setupReboundSlow, { { T.setupAxes, four('DAMP_REBOUND_') } } },
+        { T.setupBumpFast, { { T.setupAxes, four('DAMP_FAST_BUMP_') } } },
+        { T.setupReboundFast, { { T.setupAxes, four('DAMP_FAST_REBOUND_') } } },
+        { T.setupHeaveSpring, { { T.setupAxes, heave('SPRING_RATE_') } } },
+        { T.setupHeaveBumpSlow, { { T.setupAxes, heave('DAMP_BUMP_') } } },
+        { T.setupHeaveReboundSlow, { { T.setupAxes, heave('DAMP_REBOUND_') } } },
+        { T.setupHeaveBumpFast, { { T.setupAxes, heave('DAMP_FAST_BUMP_') } } },
+        { T.setupHeaveReboundFast, { { T.setupAxes, heave('DAMP_FAST_REBOUND_') } } },
+      }), 4, s),
+    }
+    -- Widths: each area what it needs plus an equal share of what is left; the screen wider when they need more
+    local colGap = SETUP.colGap * s
+    local inner = (SETUP_W - 2 * SETUP.side) * s - 2 * colGap
+    local need, rowsTop = 0, SETUP.rows
+    for _, m in ipairs(areas) do
+      need = need + m.need
+      rowsTop = math.max(rowsTop, #m.rows)
+    end
+    local extra = math.max(inner - need, 0) / 3
+    local boxW = SETUP_W * s + math.max(need - inner, 0)
+    local boxH = (SETUP_H + (rowsTop - SETUP.rows) * SETUP.lh) * s
+    local k = h / 1080
+    local o = Drag.offset('setup', h)
+    local p1 = vec2(math.floor(SETUP_LEFT * k + o.x), math.floor(h - MARGIN * k - boxH + o.y))
+    Drag.group = 'setup'
+    local p2 = vec2(p1.x + boxW, p1.y + boxH)
+    drawPanel(p1, p2, BORDER_BASE, s)
+    local fs, gap, lh = SETUP.font * s, SETUP.gap * s, SETUP.lh * s
+    local x0, xr = p1.x + SETUP.side * s, p2.x - SETUP.side * s
+    drawText(TEXTS.setupTitle, FONT_TITLE, 12 * s, vec2(x0, p1.y + 4 * s), COLOR_TITLE)
+    drawTextRight(string.format(TEXTS.setupLap, car.lapCount + 1), FONT_MONO, 11 * s, xr, p1.y + 5 * s, COLOR_TITLE)
+    drawSeparator(p1, p2, p1.y + SETUP.head * s, s)
     local y0 = p1.y + SETUP.head * s + gap
-    -- Aero and drive train
-    drawText(TEXTS.setupAero, FONT_TITLE, fs, vec2(p1.x + c1 * s, y0), COLOR_TITLE)
-    drawText(TEXTS.setupDrive, FONT_TITLE, fs, vec2(p1.x + c1 * s, y0 + 2 * lh), COLOR_TITLE)
-    column(p1, s, y0, lh, c1, {
-      { 1, TEXTS.setupWing, { sp.WING_1, sp.WING_2 } },
-      { 3, TEXTS.setupDiffPower, { string.format('%.0f%%', num(car.differentialPower) * 100) } },
-      { 4, TEXTS.setupDiffCoast, { string.format('%.0f%%', num(car.differentialCoast) * 100) } },
-      { 5, TEXTS.setupPreload, { string.format('%.0f', num(car.differentialPreload)) } },
-      { 6, TEXTS.setupBrakeBias, { string.format('%.1f', num(car.brakeBias) * 100),
-        string.format('%.1f', 100 - num(car.brakeBias) * 100) } },
-    })
-    -- Chassis
-    drawText(TEXTS.setupChassis, FONT_TITLE, fs, vec2(p1.x + c2 * s, y0), COLOR_TITLE)
-    column(p1, s, y0, lh, c2, {
-      { 1, TEXTS.setupHeight, { sp.ROD_LENGTH_LF, sp.ROD_LENGTH_LR } },
-      { 2, TEXTS.setupArb, { sp.ARB_FRONT, sp.ARB_REAR } },
-      { 3, TEXTS.setupToe .. ' F', { string.format('%.2f', num(wh[0] and wh[0].toeIn)),
-        string.format('%.2f', num(wh[1] and wh[1].toeIn)) } },
-      { 4, TEXTS.setupToe .. ' R', { string.format('%.2f', num(wh[2] and wh[2].toeIn)),
-        string.format('%.2f', num(wh[3] and wh[3].toeIn)) } },
-      { 5, TEXTS.setupCamber .. ' F', { string.format('%.1f', num(wh[0] and wh[0].camber)),
-        string.format('%.1f', num(wh[1] and wh[1].camber)) } },
-      { 6, TEXTS.setupCamber .. ' R', { string.format('%.1f', num(wh[2] and wh[2].camber)),
-        string.format('%.1f', num(wh[3] and wh[3].camber)) } },
-    })
-    -- Suspension
-    drawText(TEXTS.setupSuspension, FONT_TITLE, fs, vec2(p1.x + c3 * s, y0), COLOR_TITLE)
-    column(p1, s, y0, lh, c3, {
-      { 1, TEXTS.setupSpring .. ' F', { sp.SPRING_RATE_LF, sp.SPRING_RATE_RF } },
-      { 2, TEXTS.setupSpring .. ' R', { sp.SPRING_RATE_LR, sp.SPRING_RATE_RR } },
-      { 3, TEXTS.setupBump .. ' F', { sp.DAMP_BUMP_LF, sp.DAMP_BUMP_RF } },
-      { 4, TEXTS.setupBump .. ' R', { sp.DAMP_BUMP_LR, sp.DAMP_BUMP_RR } },
-      { 5, TEXTS.setupRebound .. ' F', { sp.DAMP_REBOUND_LF, sp.DAMP_REBOUND_RF } },
-      { 6, TEXTS.setupRebound .. ' R', { sp.DAMP_REBOUND_LR, sp.DAMP_REBOUND_RR } },
-    })
-    -- Tyres band, under its line: compound fitted; pressure, life and km of each wheel (a tyre can be changed alone);
-    -- the 4 wheel columns spread to the right side
-    local sep1 = y0 + 7 * lh + gap
+    -- The three areas, a vertical line between them
+    local ax = x0
+    for i, m in ipairs(areas) do
+      local aw = m.need + extra
+      if i > 1 then
+        local lx = math.floor(ax - colGap / 2 + 0.5)
+        ui.drawSimpleLine(vec2(lx, y0), vec2(lx, y0 + rowsTop * lh - 2 * s), rgbm(1, 1, 1, 0.12), 1)
+      end
+      Area.draw(m, ax, ax + aw, y0, lh, s)
+      ax = ax + aw + colGap
+    end
+    -- Tyres band, under its line (a tyre can be changed alone): title and compound fitted; the wheels on the line below;
+    -- PSI, Life, Km and Laps left-aligned under the title, the values right-aligned in 4 equal wheel columns
+    local sep1 = y0 + rowsTop * lh + gap
     drawSeparator(p1, p2, sep1, s)
     local ty = sep1 + gap
-    drawText(TEXTS.setupTyres, FONT_TITLE, fs, vec2(p1.x + c1 * s, ty), COLOR_TITLE)
-    drawText(tostring(ac.getTyresLongName(0, -1) or '-'), FONT_TEXT, fs, vec2(p1.x + 60 * s, ty), COLOR_TITLE)
-    local wx0 = p1.x + 150 * s
-    local wStep = (p2.x - SETUP.side * s - textWidth('99/99', FONT_MONO, fs) - wx0) / 3
+    drawText(TEXTS.setupTyres, FONT_TITLE, SETUP.title * s, vec2(x0, ty - (SETUP.title - SETUP.font) * s / 2), COLOR_DIM)
+    local wx1 = x0 + (SETUP.tyreLabelW + SETUP.wheelGap) * s
+    drawText(tostring(ac.getTyresLongName(0, -1) or '-'), FONT_MONO, fs, vec2(wx1, ty), COLOR_TITLE)
+    local wGap = SETUP.wheelGap * s
+    local cw = (xr - wx1 - 3 * wGap) / 4
     for i = 0, 3 do
-      local x = wx0 + i * wStep
+      local x = wx1 + (i + 1) * cw + i * wGap
       -- Remaining life by the wear curve of the compound at the virtual km of the tyre taken at the last line
       -- (CarRead.tyreLife, TyreUse), color graded green / yellow / red; without a curve, 100 - the wear of the game
       -- (tyreWear, 0 to 1) in %, white
       local life = CarRead.tyreLife(car, i, state.tyreLineKm[i] or 0)
       local color = life and lifeColor(life) or COLOR_TITLE
       life = life or (1 - num(wh[i] and wh[i].tyreWear)) * 100
-      drawText(WHEEL[i], FONT_MONO, fs, vec2(x, ty), COLOR_OFF)
+      drawTextRight(WHEEL[i], FONT_MONO, fs, x, ty + lh, SETUP.axisColor)
       -- Pressure, colored by the temperature of the tyre (thermal curve of the compound); without it, white
       local th = CarRead.tyreThermal(car, i)
-      drawText(string.format('%.1f', num(wh[i] and wh[i].tyrePressure)), FONT_MONO, fs, vec2(x, ty + lh),
+      drawTextRight(string.format('%.1f', num(wh[i] and wh[i].tyrePressure)), FONT_MONO, fs, x, ty + 2 * lh,
         th and thermalColor(th) or COLOR_TITLE)
-      drawText(string.format('%.0f%%', life), FONT_MONO, fs, vec2(x, ty + 2 * lh), color)
+      drawTextRight(string.format('%.0f%%', life), FONT_MONO, fs, x, ty + 3 * lh, color)
       -- km driven by the tyre (TyreUse; the virtual km of the game is not a distance)
-      drawText(string.format('%.1f', state.tyreKm[i] or 0), FONT_MONO, fs, vec2(x, ty + 3 * lh), COLOR_TITLE)
+      drawTextRight(string.format('%.1f', state.tyreKm[i] or 0), FONT_MONO, fs, x, ty + 4 * lh, COLOR_TITLE)
       -- Laps run / laps expected by the wear curve of the compound, colored by the phase of the curve at the km of the
       -- tyre (max grip, half life, end of life, graded as the life); without a curve, the laps run, white
       local laps = state.tyreLaps[i] or 0
       local lapLife, lapLimit = CarRead.tyreLapLimit(car, i, laps, state.tyreLineKm[i] or 0)
-      drawText(lapLife and string.format(TEXTS.setupLapsOf, laps, lapLimit and tostring(lapLimit) or '--')
-        or tostring(laps), FONT_MONO, fs, vec2(x, ty + 4 * lh), lapLife and lifeColor(lapLife) or COLOR_TITLE)
+      drawTextRight(lapLife and string.format(TEXTS.setupLapsOf, laps, lapLimit and tostring(lapLimit) or '--')
+        or tostring(laps), FONT_MONO, fs, x, ty + 5 * lh, lapLife and lifeColor(lapLife) or COLOR_TITLE)
     end
-    drawText(TEXTS.setupPsi, FONT_TEXT, fs, vec2(p1.x + 100 * s, ty + lh), COLOR_OFF)
-    drawText(TEXTS.setupLife, FONT_TEXT, fs, vec2(p1.x + 100 * s, ty + 2 * lh), COLOR_OFF)
-    drawText(TEXTS.setupKm, FONT_TEXT, fs, vec2(p1.x + 100 * s, ty + 3 * lh), COLOR_OFF)
-    drawText(TEXTS.setupLaps, FONT_TEXT, fs, vec2(p1.x + 100 * s, ty + 4 * lh), COLOR_OFF)
-    -- Electronics, under its line; the same gap to the bottom
-    local sep2 = ty + 5 * lh + gap
+    drawText(TEXTS.setupPsi, FONT_TEXT, fs, vec2(x0, ty + 2 * lh), COLOR_OFF)
+    drawText(TEXTS.setupLife, FONT_TEXT, fs, vec2(x0, ty + 3 * lh), COLOR_OFF)
+    drawText(TEXTS.setupKm, FONT_TEXT, fs, vec2(x0, ty + 4 * lh), COLOR_OFF)
+    drawText(TEXTS.setupLaps, FONT_TEXT, fs, vec2(x0, ty + 5 * lh), COLOR_OFF)
+    -- Electronics, under its line: each name dim and its value bright; the same gap to the bottom
+    local sep2 = ty + 6 * lh + gap
     drawSeparator(p1, p2, sep2, s)
-    drawText(string.format(TEXTS.setupElectronics, num(car.absMode), num(car.tractionControlMode),
-      num(car.tractionControl2), num(car.fuelMap), num(car.currentEngineBrakeSetting), num(car.mgukDelivery),
-      num(car.mgukRecovery)), FONT_MONO, fs, vec2(p1.x + c1 * s, sep2 + gap), COLOR_TITLE)
+    local ex = x0
+    for _, e in ipairs({ { 'ABS', car.absMode }, { 'TC', car.tractionControlMode }, { 'TC2', car.tractionControl2 },
+        { 'EB', car.currentEngineBrakeSetting }, { 'MAP', car.fuelMap } }) do
+      drawText(e[1], FONT_MONO, fs, vec2(ex, sep2 + gap), COLOR_OFF)
+      ex = ex + textWidth(e[1] .. ' ', FONT_MONO, fs)
+      local v = string.format('%d', num(e[2]))
+      drawText(v, FONT_MONO, fs, vec2(ex, sep2 + gap), COLOR_TITLE)
+      ex = ex + textWidth(v, FONT_MONO, fs) + 9 * s
+    end
     Drag.icons('setup', p1, p2, s)
   end
 
@@ -5659,76 +5781,94 @@ do
   end
 
   local function drawCar(car, w, h, s)
+    -- Layout (approved screen 12, decision 178), px at 1080p: title line; WHEELS & SUSPENSION (2 x 2 tiles);
+    -- hairline; POWERTRAIN (ENGINE and GEARBOX tiles, the BOP strip under them); hairline; BODY (bars and the car:
+    -- 135 from its title to the bottom). Block titles as in the setup status (capitals, bold, SETUP.title)
+    -- title: the block title (SETUP.title, baseline about 11 under its top) and the same 5 px gap as under the chips
+    -- Fonts in the style of the pit stop box (decision 178): names Segoe SemiBold, values Consolas, 9; block titles
+    -- as in the setup status (capitals, SETUP.title)
+    local L = { head = 21, gap = 5, title = 16, tileH = 25, tileGap = 4, bopH = 15, side = 14, font = 9 }
+    -- BODY: from its title the F bar (L.title below it, like the chips), the car, the B bar and 8 px to the bottom
+    L.body = L.title + 58 + 54 + 3 + 8
+    local bodyTop = L.head + L.gap + L.title + 2 * L.tileH + L.tileGap + 2 * L.gap + L.title + L.tileH + L.tileGap
+      + L.bopH + 2 * L.gap
+    local statusH = bodyTop + L.body
     local k = h / 1080
     local o = Drag.offset('status', h)
-    local p1 = vec2(math.floor(w - STATUS_RIGHT * k - STATUS_W * s + o.x), math.floor(h - MARGIN * k - STATUS_H * s + o.y))
+    local p1 = vec2(math.floor(w - STATUS_RIGHT * k - STATUS_W * s + o.x), math.floor(h - MARGIN * k - statusH * s + o.y))
     Drag.group = 'status'
-    local p2 = vec2(p1.x + STATUS_W * s, p1.y + STATUS_H * s)
+    local p2 = vec2(p1.x + STATUS_W * s, p1.y + statusH * s)
     local rp = state.repair
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(TEXTS.statusTitle, FONT_TITLE, 12 * s, vec2(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.statusTitle, FONT_TITLE, 12 * s, vec2(p1.x + L.side * s, p1.y + 4 * s), COLOR_TITLE)
     if rp.class == 'repair' then
-      drawTextRight(TEXTS.statusRepair, FONT_TITLE, 10 * s, p2.x - 10 * s, p1.y + 5 * s, COLOR_ORANGE)
+      drawTextRight(TEXTS.statusRepair, FONT_MONO, 11 * s, p2.x - L.side * s, p1.y + 5 * s, COLOR_ORANGE)
     elseif rp.class == 'beyond' then
-      drawTextRight(TEXTS.statusBeyond, FONT_TITLE, 10 * s, p2.x - 10 * s, p1.y + 5 * s, BORDER_RED)
+      drawTextRight(TEXTS.statusBeyond, FONT_MONO, 11 * s, p2.x - L.side * s, p1.y + 5 * s, BORDER_RED)
     end
-    drawSeparator(p1, p2, p1.y + 21 * s, s)
-    -- Wheels & suspension: one tile per wheel
-    local y = p1.y + 26 * s
-    drawText(TEXTS.statusWheels, FONT_TEXT, 9 * s, vec2(p1.x + 12 * s, y), COLOR_OFF)
+    drawSeparator(p1, p2, p1.y + L.head * s, s)
+    local x1, x2 = p1.x + L.side * s, p2.x - L.side * s
+    local tileW = (x2 - x1 - L.tileGap * s) / 2
+    local function blockTitle(text, y)
+      drawText(text, FONT_TITLE, SETUP.title * s, vec2(x1, y), COLOR_DIM)
+    end
+    -- Tile (chip) of the approved screen: border, lamp of the state on the left, name on top and value below. The color
+    -- of the state lights the lamp and the value; repair (orange) and unsafe (red) also tint the border and the inside
+    local function tile(tx, ty, tw, name, value, color)
+      local strong = color == COLOR_ORANGE or color == BORDER_RED
+      local q1, q2 = vec2(px(tx), px(ty)), vec2(px(tx + tw), px(ty + L.tileH * s))
+      if strong then ui.drawRectFilled(q1, q2, rgbm(color.r, color.g, color.b, 0.1), 3 * s) end
+      local border = (strong or color == COLOR_WARN) and rgbm(color.r, color.g, color.b, 0.65) or rgbm(0.23, 0.25, 0.27, 1)
+      ui.drawRect(q1, q2, border, 3 * s, nil, 1)
+      ui.drawCircleFilled(vec2(px(tx + 8 * s), px(ty + L.tileH * s / 2)), 3 * s, color, 12)
+      drawText(name, FONT_TEXT, L.font * s, vec2(tx + 15 * s, ty + 2 * s), COLOR_TITLE)
+      drawText(value, FONT_MONO, L.font * s, vec2(tx + 15 * s, ty + 13 * s), color)
+    end
+    -- WHEELS & SUSPENSION: one tile per wheel
+    local y = p1.y + (L.head + L.gap) * s
+    blockTitle(TEXTS.statusWheels, y)
+    y = y + L.title * s
     for i = 0, 3 do
-      local tx = p1.x + (12 + (i % 2) * 76) * s
-      local ty = y + (12 + math.floor(i / 2) * 26) * s
       local text, color = wheelTile(car, i)
-      drawText(WHEEL[i], FONT_TITLE, 9 * s, vec2(tx, ty), COLOR_TITLE)
-      drawText(text, FONT_MONO, 9 * s, vec2(tx, ty + 11 * s), color)
+      tile(x1 + (i % 2) * (tileW + L.tileGap * s), y + math.floor(i / 2) * (L.tileH + L.tileGap) * s, tileW, WHEEL[i],
+        text, color)
     end
-    -- Powertrain
-    y = y + 68 * s
-    drawText(TEXTS.statusPowertrain, FONT_TEXT, 9 * s, vec2(p1.x + 12 * s, y), COLOR_OFF)
+    y = y + (2 * L.tileH + L.tileGap + L.gap) * s
+    drawSeparator(p1, p2, y, s)
+    y = y + L.gap * s
+    -- POWERTRAIN: engine (engineLifeLeft: 1000 = whole; 0 or below = blown, the game goes under 0) and gearbox tiles
+    blockTitle(TEXTS.statusPowertrain, y)
+    y = y + L.title * s
     local engine = num(car.engineLifeLeft)
-    drawText(TEXTS.statusEngine, FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, y + 12 * s), COLOR_TITLE)
-    -- engineLifeLeft: 1000 = whole; 0 or below = blown (the game goes under 0)
-    drawText(engine >= 1000 and TEXTS.statusOk or (engine <= 0 and TEXTS.statusBrokenShort)
-      or string.format('%.0f%%', engine / 10), FONT_MONO, 9 * s, vec2(p1.x + 12 * s, y + 23 * s),
+    tile(x1, y, tileW, TEXTS.statusEngine, engine >= 1000 and TEXTS.statusOk
+      or (engine <= 0 and TEXTS.statusBrokenShort or string.format('%.0f%%', engine / 10)),
       engine >= 1000 and COLOR_OK or (engine <= 0 and BORDER_RED or COLOR_WARN))
-    -- Columns measured from their widest text (title or value), so ENGINE, GEARBOX and BOP fit in the same width
-    local function colW(title, widest)
-      return math.max(textWidth(title, FONT_TITLE, 9 * s), textWidth(widest, FONT_MONO, 9 * s)) + 10 * s
-    end
-    local xGear = p1.x + 12 * s + colW(TEXTS.statusEngine, '100%')
-    local xBop = xGear + colW(TEXTS.statusGearbox, TEXTS.statusBrokenShort)
     local gear = num(car.gearboxDamage)
-    drawText(TEXTS.statusGearbox, FONT_TITLE, 9 * s, vec2(xGear, y + 12 * s), COLOR_TITLE)
-    drawText(gear >= 1 and TEXTS.statusBrokenShort or (gear > 0 and string.format('%.0f%%', (1 - gear) * 100)
-      or TEXTS.statusOk), FONT_MONO, 9 * s, vec2(xGear, y + 23 * s), gear >= 1 and BORDER_RED
-      or (gear > 0 and COLOR_WARN or COLOR_OK))
-    -- Balance of performance set by the organizer (ballast kg, restrictor %); '-' when none. Two lines if one does not fit
+    tile(x1 + tileW + L.tileGap * s, y, tileW, TEXTS.statusGearbox, gear >= 1 and TEXTS.statusBrokenShort
+      or (gear > 0 and string.format('%.0f%%', (1 - gear) * 100) or TEXTS.statusOk),
+      gear >= 1 and BORDER_RED or (gear > 0 and COLOR_WARN or COLOR_OK))
+    y = y + (L.tileH + L.tileGap) * s
+    -- BOP strip: balance of performance set by the organizer (ballast kg, restrictor %); '-' when none
     local kg, rs = num(car.ballast), num(car.restrictor)
-    drawText(TEXTS.statusBop, FONT_TITLE, 9 * s, vec2(xBop, y + 12 * s), COLOR_TITLE)
-    local kgText, rsText = string.format('%.0f kg', kg), string.format('%.0f%%', rs)
-    if kg == 0 and rs == 0 then
-      drawText('-', FONT_MONO, 9 * s, vec2(xBop, y + 23 * s), COLOR_OFF)
-    elseif xBop + textWidth(kgText .. ' ' .. rsText, FONT_MONO, 9 * s) <= p2.x - 10 * s then
-      drawText(kgText .. ' ' .. rsText, FONT_MONO, 9 * s, vec2(xBop, y + 23 * s), COLOR_TITLE)
-    else
-      drawText(kgText, FONT_MONO, 9 * s, vec2(xBop, y + 21 * s), COLOR_TITLE)
-      drawText(rsText, FONT_MONO, 9 * s, vec2(xBop, y + 30 * s), COLOR_TITLE)
-    end
-    -- Body (approved screen 12): F bar and value on top, the car outline (a 1960s F1: cigar body, wheels outside) in the
+    ui.drawRect(vec2(px(x1), px(y)), vec2(px(x2), px(y + L.bopH * s)), rgbm(0.23, 0.25, 0.27, 1), 3 * s, nil, 1)
+    drawText(TEXTS.statusBop, FONT_TEXT, L.font * s, vec2(x1 + 6 * s, y + 2 * s), COLOR_TITLE)
+    drawTextRight((kg == 0 and rs == 0) and '-' or string.format('%.0f kg  %.0f%%', kg, rs), FONT_MONO, L.font * s,
+      x2 - 6 * s, y + 2 * s, (kg == 0 and rs == 0) and COLOR_OFF or COLOR_TITLE)
+    y = y + (L.bopH + L.gap) * s
+    drawSeparator(p1, p2, y, s)
+    y = y + L.gap * s
+    -- BODY (approved screen 12): F bar and value on top, the car outline (a 1960s F1: cigar body, wheels outside) in the
     -- middle, B value and bar at the bottom; L and R values beside the car, their bars outside them. Bar = damage of the
     -- side over the repair limit (bodyRepair); color: over the limit orange, over half yellow, some damage green
-    y = y + 40 * s
-    drawText(TEXTS.statusBody, FONT_TEXT, 9 * s, vec2(p1.x + 12 * s, y), COLOR_OFF)
+    blockTitle(TEXTS.statusBody, y)
     local limit = config.damage.bodyRepair
     local function side(i)
       local v = num(car.damage[i])
       return v, math.min(v / limit, 1),
         v > limit and COLOR_ORANGE or (v > limit / 2 and COLOR_WARN or (v > 0 and COLOR_OK or COLOR_OFF))
     end
-    -- 70: the F bar (cy - 58) 12 px under the Body title, like the content of the other sections; 8 px left under
-    -- the B bar (STATUS_H)
-    local cx, cy = (p1.x + p2.x) / 2, y + 70 * s
+    -- The F bar (cy - 58) L.title under the BODY title, like the chips; 8 px left under the B bar (L.body)
+    local cx, cy = (p1.x + p2.x) / 2, y + (L.title + 58) * s
     local track = rgbm(1, 1, 1, 0.1)
     local function hbar(yb, k, color)
       local x1, x2 = cx - 30 * s, cx + 30 * s
@@ -5745,12 +5885,14 @@ do
     local vL, kL, cL = side(2)
     local vR, kR, cR = side(3)
     hbar(cy - 58 * s, kF, cF)
-    drawText(string.format('F %.0f', vF), FONT_MONO, 9 * s, vec2(cx - 12 * s, cy - 53 * s), cF)
-    drawText(string.format('B %.0f', vB), FONT_MONO, 9 * s, vec2(cx - 12 * s, cy + 40 * s), cB)
+    local bf = L.font * s
+    local fText, bText = string.format('F %.0f', vF), string.format('B %.0f', vB)
+    drawText(fText, FONT_MONO, bf, vec2(cx - textWidth(fText, FONT_MONO, bf) / 2, cy - 53 * s), cF)
+    drawText(bText, FONT_MONO, bf, vec2(cx - textWidth(bText, FONT_MONO, bf) / 2, cy + 40 * s), cB)
     hbar(cy + 54 * s, kB, cB)
     vbar(p1.x + 12 * s, kL, cL)
-    drawText(string.format('L %.0f', vL), FONT_MONO, 9 * s, vec2(p1.x + 19 * s, cy - 5 * s), cL)
-    drawText(string.format('R %.0f', vR), FONT_MONO, 9 * s, vec2(p2.x - 50 * s, cy - 5 * s), cR)
+    drawText(string.format('L %.0f', vL), FONT_MONO, bf, vec2(p1.x + 19 * s, cy - 6 * s), cL)
+    drawTextRight(string.format('R %.0f', vR), FONT_MONO, bf, p2.x - 19 * s, cy - 6 * s, cR)
     vbar(p2.x - 15 * s, kR, cR)
     drawF1(cx, cy + F1.SHIFT * s, s)
     Drag.icons('status', p1, p2, s)
