@@ -4241,6 +4241,90 @@ do
   end
 end
 -- ============================================================
+-- Screens moved by the driver with the mouse: click on a screen, hold and drag (move cursor, the four arrows).
+-- Double click puts it back in its place. Groups: 'panel' (Race Control panel with the boxes below it, moved together),
+-- 'pitbox' (pit stop box), 'setup' (setup status), 'status' (car status). The position is an offset from the default
+-- place, in px at 1080p (the same place on any resolution), kept in this computer (ac.storage) for every session.
+-- ============================================================
+
+local Drag = {}
+do
+  local GROUPS = { 'panel', 'pitbox', 'setup', 'status' }
+  local layout = {}
+  for _, g in ipairs(GROUPS) do layout[g .. 'X'] = 0; layout[g .. 'Y'] = 0 end
+  local stored = ac.storage(layout, 'screen_')
+  local offsets = {}
+  for _, g in ipairs(GROUPS) do offsets[g] = vec2(tonumber(stored[g .. 'X']) or 0, tonumber(stored[g .. 'Y']) or 0) end
+
+  Drag.group = nil       -- group of the boxes being drawn now (drawPanel registers their area)
+  local rects = {}       -- area of each group drawn in this frame: { min = vec2, max = vec2 }
+  local active           -- { group, grab = mouse - offset (px), min, max, offset (px) at the start }
+
+  -- Offset of a group in px on this screen
+  function Drag.offset(group, h)
+    local o = offsets[group]
+    return vec2(o.x * h / 1080, o.y * h / 1080)
+  end
+
+  -- Area drawn by the current group (called by drawPanel)
+  function Drag.hit(p1, p2)
+    local g = Drag.group
+    if not g then return end
+    local r = rects[g]
+    if r then
+      r.min = vec2(math.min(r.min.x, p1.x), math.min(r.min.y, p1.y))
+      r.max = vec2(math.max(r.max.x, p2.x), math.max(r.max.y, p2.y))
+    else
+      rects[g] = { min = vec2(p1.x, p1.y), max = vec2(p2.x, p2.y) }
+    end
+  end
+
+  local function save(g)
+    stored[g .. 'X'] = offsets[g].x
+    stored[g .. 'Y'] = offsets[g].y
+  end
+
+  -- End of the frame: hover shows the move cursor; click, hold and drag moves the group (kept on screen); release keeps
+  -- the place; double click puts it back
+  function Drag.finish(w, h)
+    Drag.group = nil
+    local k = h / 1080
+    local m = ui.mousePos()
+    if active then
+      local a = active
+      if ui.mouseDown() then
+        local nx = math.min(math.max(m.x - a.grab.x, a.o.x - a.min.x), a.o.x + w - a.max.x)
+        local ny = math.min(math.max(m.y - a.grab.y, a.o.y - a.min.y), a.o.y + h - a.max.y)
+        offsets[a.group] = vec2(nx / k, ny / k)
+      else
+        save(a.group)
+        active = nil
+      end
+      ui.setMouseCursor(ui.MouseCursor.ResizeAll)
+      ui.captureMouse(true)
+      rects = {}
+      return
+    end
+    if m.x >= 0 then
+      for g, r in pairs(rects) do
+        if m.x >= r.min.x and m.x <= r.max.x and m.y >= r.min.y and m.y <= r.max.y then
+          ui.setMouseCursor(ui.MouseCursor.ResizeAll)
+          ui.captureMouse(true)
+          if ui.mouseDoubleClicked() then
+            offsets[g] = vec2(0, 0)
+            save(g)
+          elseif ui.mouseClicked() then
+            local o = Drag.offset(g, h)
+            active = { group = g, grab = vec2(m.x - o.x, m.y - o.y), min = r.min, max = r.max, o = o }
+          end
+          break
+        end
+      end
+    end
+    rects = {}
+  end
+end
+-- ============================================================
 -- Callbacks
 -- ============================================================
 
@@ -4278,6 +4362,7 @@ end
 
 -- alpha (optional, default 1): the whole panel fades with it (opening)
 local function drawPanel(p1, p2, border, s, alpha)
+  Drag.hit(p1, p2)
   local a = alpha or 1
   local r = px(8 * s)
   local o = px(3 * s)
@@ -4334,6 +4419,8 @@ local drawPitBox
 do
   local BOX_W, BOX_H = 288, 195          -- px at 1080p (80% size)
   local BOX_RIGHT, BOX_BOTTOM = 1920 - 1397 - 288, 48
+  -- Car status on its right (status_draw.lua: 171 px wide, 48 px from the right edge at 1080p) and the gap between them
+  local STATUS_W, STATUS_RIGHT, STATUS_GAP = 171, 48, 1920 - 1397 - 288 - 48 - 171
   local ROW_H = 15
   local COLOR_SEL = rgbm(1, 0.85, 0.25, 1)
   local COLOR_OFF = rgbm(0.45, 0.48, 0.5, 1)
@@ -4352,7 +4439,11 @@ do
     if not PitBox.open and not sv then return end
     local k = h / 1080
     local bw, bh = BOX_W * s, BOX_H * s
-    local p1 = vec2(math.floor(w - (BOX_RIGHT * k) - bw), math.floor(h - BOX_BOTTOM * k - bh))
+    local o = Drag.offset('pitbox', h)
+    -- Its right edge never over the car status, whatever the size of both (screenScale, screens below 1080p)
+    local right = math.min(w - BOX_RIGHT * k, w - STATUS_RIGHT * k - STATUS_W * s - STATUS_GAP * k)
+    local p1 = vec2(math.floor(right - bw + o.x), math.floor(h - BOX_BOTTOM * k - bh + o.y))
+    Drag.group = 'pitbox'
     local p2 = vec2(p1.x + bw, p1.y + bh)
     local p = PitBox.plan(car)
     if sv then p.total = (sv.untilMs - sv.startMs) / 1000 end
@@ -4462,7 +4553,9 @@ do
 
   local function drawSetup(car, w, h, s)
     local k = h / 1080
-    local p1 = vec2(math.floor(SETUP_LEFT * k), math.floor(h - MARGIN * k - SETUP_H * s))
+    local o = Drag.offset('setup', h)
+    local p1 = vec2(math.floor(SETUP_LEFT * k + o.x), math.floor(h - MARGIN * k - SETUP_H * s + o.y))
+    Drag.group = 'setup'
     local p2 = vec2(p1.x + SETUP_W * s, p1.y + SETUP_H * s)
     drawPanel(p1, p2, BORDER_BASE, s)
     drawText(TEXTS.setupTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
@@ -4583,7 +4676,9 @@ do
 
   local function drawCar(car, w, h, s)
     local k = h / 1080
-    local p1 = vec2(math.floor(w - STATUS_RIGHT * k - STATUS_W * s), math.floor(h - MARGIN * k - STATUS_H * s))
+    local o = Drag.offset('status', h)
+    local p1 = vec2(math.floor(w - STATUS_RIGHT * k - STATUS_W * s + o.x), math.floor(h - MARGIN * k - STATUS_H * s + o.y))
+    Drag.group = 'status'
     local p2 = vec2(p1.x + STATUS_W * s, p1.y + STATUS_H * s)
     local rp = state.repair
     drawPanel(p1, p2, BORDER_BASE, s)
@@ -4718,9 +4813,12 @@ function script.drawUI()
   local boxW = math.floor(PANEL_WIDTH * s)
   local msgH, sdH = math.floor(66 * s), math.floor(56 * s)
   local gap = math.floor(6 * s)
-  local x = math.floor(w * 0.5 - boxW * 0.5)
+  -- Moved by the driver: the panel and the boxes below it go together (Drag)
+  Drag.group = 'panel'
+  local po = Drag.offset('panel', h)
+  local x = math.floor(w * 0.5 - boxW * 0.5 + po.x)
   -- 10 px lower than 18% of the height: clear of the AC virtual mirror
-  local yMsg = math.floor(h * 0.18 + 10 * s)
+  local yMsg = math.floor(h * 0.18 + 10 * s + po.y)
   local ySd = yMsg + msgH + gap
 
   -- Notice timing (new penalty / server message): ends after its time or when its penalty leaves the list
@@ -5052,6 +5150,8 @@ function script.drawUI()
     drawPitBox(ac.getCar(0), w, h, sb)
     drawStatus(ac.getCar(0), w, h, sb)
   end
+  -- Mouse: move cursor over a screen, click, hold and drag to move it; double click puts it back
+  Drag.finish(w, h)
 end
 -- ============================================================
 -- Car controls: cockpit camera forced by the server (key forceCockpit)
