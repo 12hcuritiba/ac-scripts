@@ -1573,10 +1573,20 @@ local function updateSwapRelay()
 end
 
 -- Chat: Race Control lines are for the server log only, hidden from the chat of every client. Server messages
--- (senderCarIndex = -1, KMR or ACSM) that match the dictionary are also shown in the penalty message box, and the
+-- (fromServer: KMR or ACSM) that match the dictionary are also shown in the penalty message box, and the
 -- ACSM driver swap messages feed the driver swap panel; everything stays in the chat.
+-- A message from the server: -1 (SDK: "or -1 if message comes from server"; a broadcast, e.g. VSC), or a sender that
+-- is no connected car: a message the server sends to one car (ACSM chat to the driver, udp SendChat; KMR messages to
+-- the driver) arrives with no name in the chat. A driver's message always comes from the driver's own car.
+local function fromServer(sender)
+  if sender == nil or sender < 0 then return true end
+  local c = ac.getCar(sender)
+  return not c or not c.isConnected
+end
+
 ac.onChatMessage(function(message, senderCarIndex)
   if type(message) ~= 'string' then return false end
+  local server = fromServer(senderCarIndex)
   if message:sub(1, #TEXTS.rcPrefix) == TEXTS.rcPrefix then
     -- Race director client (admin): an edited record file is banned (/ban <car ID>, ACSM)
     local car = config.isDirector and message:find(TEXTS.editedFile, 1, true)
@@ -1588,12 +1598,15 @@ ac.onChatMessage(function(message, senderCarIndex)
     return true
   end
   -- Race Control command (RcCommand): only from the server (ACSM live timing, admin); hidden from the chat
-  if senderCarIndex == -1 and message:match('^%s*[Rr][Cc]%s') then
-    state.rcCommands[#state.rcCommands + 1] = message
+  -- ACSM broadcast chat puts "(account name) " before the text
+  local command = server and (message:match('^%s*%b()%s*([Rr][Cc]%s.*)$') or message:match('^%s*([Rr][Cc]%s.*)$'))
+  if command then
+    ac.log(string.format('race-control: command received (sender %s): %s', tostring(senderCarIndex), command))
+    state.rcCommands[#state.rcCommands + 1] = command
     return true
   end
-  if senderCarIndex == -1 and onDriverSwapMessage(message) then return false end
-  if senderCarIndex == -1 then
+  if server and onDriverSwapMessage(message) then return false end
+  if server then
     local kind = classifyServerMessage(message)
     if kind == 'DT' then
       local prefix = tostring(ac.getDriverName(0) or '') .. ':'
@@ -3493,8 +3506,9 @@ do
 end
 -- ============================================================
 -- Race Control commands: sent by an admin from the ACSM live timing (send chat to the driver, or broadcast chat to
--- everyone). Only a message from the server (senderCarIndex = -1) is a command: a line typed in the chat by a driver
--- is not. The chat handler keeps the line (state.rcCommands, hidden from the chat); it is read here, in script.update.
+-- everyone; a broadcast comes with "(account name) " before it). Only a message from the server is a command (chat.lua,
+-- fromServer): a line typed in the chat by a driver is not. The chat handler keeps the line (state.rcCommands, hidden
+-- from the chat); it is read here, in script.update.
 --   RC <ACTION> <ID> [value] [- reason]
 --   ID: Car ID of the server (entry list slot, the same as in /kick 4: car.sessionID) or GUID of the driver (17
 --   digits; only while that driver is in the car). The number of the livery is not an ID (it can repeat).
@@ -4789,19 +4803,33 @@ do
   -- Body: the nose reaches ahead of the front wheels almost the span of the wishbone base (8); the tail goes back 1/5
   -- of what the nose went forward. The whole car sits 4 higher, clear of the B value below it
   local F1_BODY = { -6, -36, 6, 33 }   -- { left x, top y, right x, bottom y }
+  -- The nose narrows 10% in total at its tip, back to the full width where the cockpit starts (y -9.2)
+  local F1_NOSE_HALF, F1_COCKPIT_Y = 5.4, -9.2
   local F1_SHIFT = -4
   local F1_WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }   -- { inner x, outer x, top y, bottom y }
   local function drawF1(cx, cy, s)
     local body = COLOR_TITLE
     local function P(x, y) return vec2(cx + x * s, cy + y * s) end
-    ui.drawRect(P(F1_BODY[1], F1_BODY[2]), P(F1_BODY[3], F1_BODY[4]), body, 6 * s, nil, 1)
+    -- Half width of the body at y: tapered nose, straight from the cockpit back
+    local noseY = F1_BODY[2] + F1_NOSE_HALF
+    local function half(y)
+      if y >= F1_COCKPIT_Y then return F1_BODY[3] end
+      local k = math.max((y - noseY) / (F1_COCKPIT_Y - noseY), 0)
+      return F1_NOSE_HALF + (F1_BODY[3] - F1_NOSE_HALF) * k
+    end
+    -- Outline: round nose tip, tapered sides to the cockpit, straight sides, round tail
+    ui.pathArcTo(P(0, noseY), F1_NOSE_HALF * s, 0, -math.pi, 12)
+    ui.pathLineTo(P(-F1_BODY[3], F1_COCKPIT_Y))
+    ui.pathArcTo(P(0, F1_BODY[4] - F1_BODY[3]), F1_BODY[3] * s, math.pi, 0, 12)
+    ui.pathLineTo(P(F1_BODY[3], F1_COCKPIT_Y))
+    ui.pathStroke(body, true, 1)
     for _, wl in ipairs(F1_WHEELS) do
       local mid = (wl[3] + wl[4]) / 2
       for _, sd in ipairs({ -1, 1 }) do
         local x1, x2 = sd < 0 and -wl[2] or wl[1], sd < 0 and -wl[1] or wl[2]
         ui.drawRectFilled(P(x1, wl[3]), P(x2, wl[4]), body, 2 * s)
-        ui.drawLine(P(sd * wl[1], mid), P(sd * F1_BODY[3], mid - 4), body, 1)
-        ui.drawLine(P(sd * wl[1], mid), P(sd * F1_BODY[3], mid + 4), body, 1)
+        ui.drawLine(P(sd * wl[1], mid), P(sd * half(mid - 4), mid - 4), body, 1)
+        ui.drawLine(P(sd * wl[1], mid), P(sd * half(mid + 4), mid + 4), body, 1)
       end
     end
     -- Cockpit and steering wheel
