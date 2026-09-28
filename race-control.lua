@@ -294,6 +294,14 @@ local cfg = ac.configValues({
   pitSpeedLimit = 60,
   pitSpeedTolerance = 2,
   pitSpeedDeadlineLaps = 1,
+
+  -- ------------------------------------------------------------
+  -- 5.6 Penalty control: driving the wrong way (ours; ALLOW_WRONG_WAY = 1 in [EXTRA_RULES] turns the CSP one off)
+  -- ------------------------------------------------------------
+  -- wrongWay = maxMeters:30 | penalty:DSQ
+  --   maxMeters: metres against the direction of the track allowed to manoeuvre; more = penalty. penalty: DSQ (our DSQ,
+  --   usual flow: stop at the pit place or the game black flag at the line; no teleport) or NONE.
+  wrongWay = '',
 })
 
 
@@ -478,6 +486,7 @@ local TEXTS = {
   dsqGame = "You've been disqualified - %s.",
   dsqBlackFlag = 'Black flag',
   dsqDtReason = 'Drive-through not served',
+  wrongWayDsq = 'Driving the wrong way',
   -- drive-through flag box
   dtTitle = 'DRIVE-THROUGH',
   dtMore = '  +%d',
@@ -548,6 +557,7 @@ local TOW_RULE = { mode = 'TOW', towSeconds = 120, repairFactor = 1.5 }
 local REPAIR_FORMULA = structKey('repairFormula', { baseSeconds = 180, weightEngine = 1.0, weightSuspension = 0.5,
   weightBody = 0.25 })
 local SCREEN_SCALE = structKey('screenScale', { exponent = 0.45, max = 1.5 })
+local WRONG_WAY = structKey('wrongWay', { maxMeters = 30, penalty = 'DSQ' })
 local DAMAGE = structKey('damage', { toeBent = 10, toeBroken = 20, camberBent = 10, camberBroken = 20, bodyRepair = 150,
   maxPunctured = 2, repairLaps = 2, beyondTowSeconds = 180, dsqTowSeconds = 180 })
 
@@ -598,6 +608,7 @@ local config = {
   pitSpeedDeadlineLaps = math.floor(tonumber(cfg.pitSpeedDeadlineLaps) or 1),
   code80Freeze = tonumber(cfg.code80FreezeDeadlines) == 1,
   screenScale = SCREEN_SCALE,
+  wrongWay = WRONG_WAY,
   -- Tow per session: mode ('TOW', 'RESET', 'NONE'), towSeconds, repairFactor
   tow = bySession(
     structKey('practiceTow', { mode = 'RESET', towSeconds = 0, repairFactor = 0 }),
@@ -779,7 +790,7 @@ ac.log('race-control: section=' .. tostring(__cfgSection__)
   .. ' physics.allowed=' .. tostring(physics.allowed())
   .. ' ' .. table.concat(zoneLog, ' '))
 -- Struct keys as the server sent them (one text each) and the stop & go mode in force
-for _, key in ipairs({ 'screenScale', 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage' }) do
+for _, key in ipairs({ 'screenScale', 'wrongWay', 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage' }) do
   ac.log('race-control: key ' .. key .. ' = ' .. tostring(cfg[key]))
 end
 ac.log('race-control: stopAndGo mode in force: ' .. (config.sg and 'SG' or 'HOLD'))
@@ -1236,8 +1247,20 @@ local function hasAny(text, words)
   return false
 end
 
--- Classifies a server message: 'GREEN FLAG', 'VSC', 'SC', 'CODE-80', 'ROLLING START', 'DT' (only when it names this
--- driver) or nil
+-- Another connected driver named in the message
+local function namesAnother(message)
+  for i = 1, (sim.carsCount or 1) - 1 do
+    local c = ac.getCar(i)
+    local n = c and c.isConnected and ac.getDriverName(i)
+    if n and n ~= '' and message:find(n, 1, true) then return true end
+  end
+  return false
+end
+
+-- Classifies a server message: 'GREEN FLAG', 'VSC', 'SC', 'CODE-80', 'ROLLING START', 'DT' or nil. DT: a drive-through
+-- that names this driver, or a drive-through penalty sent to this car without a name (the KMR message in the game chat
+-- has no name: "drive-through penalty to clear during the next race for ..."; the name is only in the KMR log), as long
+-- as it names no other connected driver
 local function classifyServerMessage(message)
   local low = message:lower()
   if hasAny(low, DICT.green) then return 'GREEN FLAG' end
@@ -1248,7 +1271,12 @@ local function classifyServerMessage(message)
   if hasAny(low, DICT.code80) then return 'CODE-80' end
   if hasAny(low, DICT.rolling) then return 'ROLLING START' end
   local name = tostring(ac.getDriverName(0) or '')
-  if name ~= '' and message:find(name, 1, true) and hasAny(low, DICT.driveThrough) then return 'DT' end
+  if hasAny(low, DICT.driveThrough) then
+    if name ~= '' and message:find(name, 1, true) then return 'DT' end
+    -- "Other Name: ..." is the KMR line of another driver (also after that driver left)
+    local head = message:match('^%s*([^:]+):%s')
+    if low:find('penalty', 1, true) and not head and not namesAnother(message) then return 'DT' end
+  end
   return nil
 end
 
@@ -1588,6 +1616,13 @@ end
 ac.onChatMessage(function(message, senderCarIndex)
   if type(message) ~= 'string' then return false end
   local server = fromServer(senderCarIndex)
+  -- Audit: every chat line about a drive-through or a penalty goes to the server log with the sender the game gives
+  -- (the SDK documents only -1 for the server; a KMR message to this car may come another way)
+  local low = message:lower()
+  if message:sub(1, #TEXTS.rcPrefix) ~= TEXTS.rcPrefix and (low:find('drive-through', 1, true)
+      or low:find('drive through', 1, true) or low:find('penalty', 1, true)) then
+    rcLog('Chat seen', string.format('sender %s - %s', tostring(senderCarIndex), message:sub(1, 90)))
+  end
   if message:sub(1, #TEXTS.rcPrefix) == TEXTS.rcPrefix then
     -- Race director client (admin): an edited record file is banned (/ban <car ID>, ACSM)
     local car = config.isDirector and message:find(TEXTS.editedFile, 1, true)
@@ -2763,6 +2798,27 @@ do
     return total
   end
 
+  -- Start of each operation (seconds after the stop is authorized) by the same order: F, T and R
+  function PitBox.starts(times)
+    local starts, total, groupStart, group, inGroup = {}, 0, 0, 0, false
+    for ch in tostring(config.pitStopOrder):upper():gmatch('.') do
+      if ch == '<' then
+        inGroup, groupStart, group = true, total, 0
+      elseif ch == '>' then
+        inGroup, total = false, groupStart + group
+      elseif times[ch] then
+        if inGroup then
+          starts[ch] = groupStart
+          group = math.max(group, times[ch])
+        else
+          starts[ch] = total
+          total = total + times[ch]
+        end
+      end
+    end
+    return starts
+  end
+
   -- Repair seconds of a group (repair formula of the session, collision damage)
   local function repairTime(group)
     local d = state.tow.damage
@@ -3386,6 +3442,54 @@ do
     if WrongDriver.remaining() <= 0 then
       carDsq(1, 'Driver swap with pending penalties')
       ac.log('race-control: DSQ, wrong driver did not leave the car')
+    end
+  end
+end
+-- ============================================================
+-- Driving the wrong way (rule 33). The CSP penalty is off on the server ([EXTRA_RULES] ALLOW_WRONG_WAY = 1): the rule
+-- is ours. The distance driven against the direction of the track (the car's position along the AI spline going back,
+-- times the track length, SDK sim.trackLengthM) is added up; a few metres forward end the manoeuvre and clear it.
+-- Up to wrongWay maxMeters (default 30) is a manoeuvre; more = our DSQ in the usual flow (stop at the pit place, or the
+-- game black flag at the line; no teleport). Not counted in the pit lane nor across a teleport or a car reset.
+-- ============================================================
+
+local WrongWay = { prev = nil, back = 0, fwd = 0 }
+do
+  local FORWARD_CLEARS_M = 5     -- metres forward that end a manoeuvre
+  local JUMP_M = 100             -- a jump this big in one frame is a teleport or a car reset, not driving
+
+  function WrongWay.reset()
+    WrongWay.prev, WrongWay.back, WrongWay.fwd = nil, 0, 0
+  end
+
+  function WrongWay.update(car)
+    local rule = config.wrongWay
+    if rule.penalty ~= 'DSQ' or car.isInPitlane or state.dtDsqActive or state.pitDsqActive then
+      WrongWay.reset()
+      return
+    end
+    local pos = car.splinePosition
+    local prev = WrongWay.prev
+    WrongWay.prev = pos
+    if not prev then return end
+    local d = pos - prev
+    if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end    -- across the line
+    local m = d * (tonumber(sim.trackLengthM) or 0)
+    if math.abs(m) > JUMP_M then
+      WrongWay.back, WrongWay.fwd = 0, 0
+      return
+    end
+    if m < 0 then
+      WrongWay.back = WrongWay.back - m
+      WrongWay.fwd = 0
+    elseif m > 0 then
+      WrongWay.fwd = WrongWay.fwd + m
+      if WrongWay.fwd >= FORWARD_CLEARS_M then WrongWay.back = 0 end
+    end
+    if WrongWay.back > rule.maxMeters then
+      ac.log(string.format('race-control: DSQ, wrong way %.0f m (limit %d m)', WrongWay.back, rule.maxMeters))
+      WrongWay.reset()
+      carDsq(1, TEXTS.wrongWayDsq, nil, string.format('over %d m', rule.maxMeters))
     end
   end
 end
@@ -4442,9 +4546,10 @@ end
 --   Move: click on a screen, hold and drag (move cursor, the four arrows); double click puts it back in its place.
 --   Icons (smallest readable size, outside the screen, shown only with the mouse over the screen or over them):
 --     one row outside the top right corner of every screen: mode (visible / auto-hide / always hidden; a click goes to
---     the next) and pin (locks the position); on the panel, before them, setup, pit stop box and car status (a click
---     shows that screen again: back to auto-hide) and, last on the right, reset (every screen back to its place;
---     later, the setup of the screens).
+--     the next) and pin (locks the position); on the panel, before them, setup (sliders; the gear is kept for the
+--     settings of the app), pit stop box and car status: a click shows that screen anywhere (visible), a click with it
+--     visible goes back to auto-hide; last on the right, reset (every screen back to its place; later, the setup of the
+--     screens).
 --   Auto-hide = the rule of each screen (panel: something to show; setup, pit stop box and car status: stopped at the
 --   pit place). The panel is also shown with the mouse over its place and stopped at the pit place, in any mode.
 -- Position (offset from the default place, px at 1080p), mode and pin are kept on this computer (ac.storage).
@@ -4457,7 +4562,7 @@ do
   local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
   local ICON_SIZE, ICON_GAP = 12, 3            -- px at 1080p (times the screen scale)
   local ICON_COLOR = rgbm(0.85, 0.87, 0.9, 0.9)
-  local ICON_ON = rgbm(1, 0.85, 0.25, 1)
+  local ICON_ON = rgbm(1, 0.2, 0.15, 1)   -- pin on: red
   local ICON_OFF = rgbm(0.45, 0.48, 0.5, 0.8)
   local layout = {}
   for _, g in ipairs(GROUPS) do
@@ -4523,9 +4628,9 @@ do
     local size, gap = ICON_SIZE * s, ICON_GAP * s
     local row = {}
     if group == 'panel' then
-      for _, it in ipairs({ { ui.Icons.Settings, 'setup' }, { ui.Icons.PitStop, 'pitbox' },
+      for _, it in ipairs({ { ui.Icons.Sliders, 'setup' }, { ui.Icons.PitStop, 'pitbox' },
           { ui.Icons.CarFront, 'status' } }) do
-        row[#row + 1] = { it[1], modes[it[2]] == 'hidden' and ICON_OFF or ICON_COLOR, 'show:' .. it[2] }
+        row[#row + 1] = { it[1], modes[it[2]] == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
       end
     end
     row[#row + 1] = { MODE_ICON[modes[group]], ICON_COLOR, 'mode:' .. group }
@@ -4549,7 +4654,7 @@ do
     local what, g = action:match('^(%a+):?(%a*)$')
     if what == 'mode' then modes[g] = MODES[modes[g]]
     elseif what == 'pin' then pins[g] = not pins[g]
-    elseif what == 'show' then if modes[g] == 'hidden' then modes[g] = 'auto' end
+    elseif what == 'show' then modes[g] = modes[g] == 'visible' and 'auto' or 'visible'
     elseif what == 'reset' then
       for _, x in ipairs(GROUPS) do offsets[x] = vec2(0, 0); save(x) end
       return
@@ -4765,6 +4870,21 @@ do
       { 'powertrain', TEXTS.pitRepairPowertrain, nil, p.times.powertrain },
       { 'body', TEXTS.pitRepairBody, nil, p.times.body },
     }
+    -- During the stop each item counts down from the authorization: its start by the order (pitStopOrder), repair
+    -- groups one after the other inside R
+    local left = {}
+    if sv then
+      local elapsed = (serverTimeMs() - sv.startMs) / 1000
+      local t = p.times
+      local st = PitBox.starts({ F = t.fuel, T = t.tyres, R = t.suspension + t.powertrain + t.body })
+      local function remain(start, dur) return math.min(math.max(start + dur - elapsed, 0), dur) end
+      left.fuel = remain(st.F or 0, t.fuel)
+      left.tyres = remain(st.T or 0, t.tyres)
+      local r0 = st.R or 0
+      left.suspension = remain(r0, t.suspension)
+      left.powertrain = remain(r0 + t.suspension, t.powertrain)
+      left.body = remain(r0 + t.suspension + t.powertrain, t.body)
+    end
     local chosen = PitBox.ROWS[PitBox.row]
     for i, r in ipairs(rows) do
       local y = p1.y + (21 + 4 + (i - 1) * ROW_H) * s
@@ -4783,7 +4903,11 @@ do
       else
         drawText(r[3], FONT_MONO, 10 * s, vec2(vx, y), sel and COLOR_SEL or (r[1] and COLOR_TITLE or COLOR_OFF))
       end
-      if r[4] then drawTextRight(mmss(r[4]), FONT_MONO, 10 * s, p2.x - 12 * s, y, COLOR_TITLE) end
+      if r[4] then
+        local rest = sv and left[r[1]]
+        drawTextRight(mmss(rest or r[4]), FONT_MONO, 10 * s, p2.x - 12 * s, y,
+          rest and rest > 0 and COLOR_SWAP or COLOR_TITLE)
+      end
     end
     local elapsed = sv and math.max(p.total - (sv.untilMs - serverTimeMs()) / 1000, 0) or 0
     drawText(sv and TEXTS.pitBoxServing or TEXTS.pitBoxConfirm, FONT_TEXT, 10 * s,
@@ -4948,6 +5072,9 @@ do
   -- The nose narrows 15% in total at its tip, back to the full width where the cockpit starts (y -9.2); flat front with
   -- slightly rounded corners (radius F1_NOSE_R)
   local F1_NOSE_HALF, F1_COCKPIT_Y, F1_NOSE_R = 5.1, -9.2, 1.5
+  -- Plus 10% more at the tip (0.6 each side), back to nothing at the middle of the front wishbone base (y -21); in
+  -- front of the tip, the radiator inlet: a white bar as thick as the steering wheel line
+  local F1_NOSE_EXTRA, F1_EXTRA_Y = 0.6, -21
   local F1_SHIFT = -4
   local F1_WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }   -- { inner x, outer x, top y, bottom y }
   local function drawF1(cx, cy, s)
@@ -4958,15 +5085,22 @@ do
     local function half(y)
       if y >= F1_COCKPIT_Y then return F1_BODY[3] end
       local k = math.max((y - noseY) / (F1_COCKPIT_Y - noseY), 0)
-      return F1_NOSE_HALF + (F1_BODY[3] - F1_NOSE_HALF) * k
+      local extra = y < F1_EXTRA_Y and F1_NOSE_EXTRA * (1 - math.max((y - noseY) / (F1_EXTRA_Y - noseY), 0)) or 0
+      return F1_NOSE_HALF + (F1_BODY[3] - F1_NOSE_HALF) * k - extra
     end
-    -- Outline: flat nose with rounded corners, tapered sides to the cockpit, straight sides, round tail
-    ui.pathArcTo(P(F1_NOSE_HALF - F1_NOSE_R, noseY), F1_NOSE_R * s, 0, -math.pi / 2, 4)
-    ui.pathArcTo(P(-F1_NOSE_HALF + F1_NOSE_R, noseY), F1_NOSE_R * s, -math.pi / 2, -math.pi, 4)
+    local tip = half(noseY)
+    -- Outline: flat nose with rounded corners, tapered sides (two slopes) to the cockpit, straight sides, round tail
+    ui.pathArcTo(P(tip - F1_NOSE_R, noseY), F1_NOSE_R * s, 0, -math.pi / 2, 4)
+    ui.pathArcTo(P(-tip + F1_NOSE_R, noseY), F1_NOSE_R * s, -math.pi / 2, -math.pi, 4)
+    ui.pathLineTo(P(-half(F1_EXTRA_Y), F1_EXTRA_Y))
     ui.pathLineTo(P(-F1_BODY[3], F1_COCKPIT_Y))
     ui.pathArcTo(P(0, F1_BODY[4] - F1_BODY[3]), F1_BODY[3] * s, math.pi, 0, 12)
     ui.pathLineTo(P(F1_BODY[3], F1_COCKPIT_Y))
+    ui.pathLineTo(P(half(F1_EXTRA_Y), F1_EXTRA_Y))
     ui.pathStroke(body, true, 1)
+    -- Radiator inlet: white bar on the flat front, as thick as the steering wheel line (1 px)
+    local a, b = P(-tip + F1_NOSE_R, F1_BODY[2]), P(tip - F1_NOSE_R, F1_BODY[2])
+    ui.drawRectFilled(vec2(a.x, a.y - 1), b, rgbm(1, 1, 1, 1))
     for _, wl in ipairs(F1_WHEELS) do
       local mid = (wl[3] + wl[4]) / 2
       for _, sd in ipairs({ -1, 1 }) do
@@ -5622,6 +5756,7 @@ function script.update(dt)
     PitStops.line = 0
     PitStops.endChecked = false
     DriverTable.reset()
+    WrongWay.reset()
     state.swap.swapInfo = nil
     state.tow.jumpPending = false
     state.tow.repairDone = false
@@ -5757,6 +5892,8 @@ function script.update(dt)
     Rules.invalidLaps(car)
     if not (state.dtDsqActive or state.pitDsqActive) then
       WrongDriver.update()
+      -- Driving the wrong way: our rule (the CSP penalty is off on the server)
+      WrongWay.update(car)
       StopAndGo.update(car)
     end
 
