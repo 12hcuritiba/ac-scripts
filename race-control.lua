@@ -738,6 +738,8 @@ local state = {
   onJumped = {},
   kmrMessages = {},
   tyreLaps = { [0] = 0, 0, 0, 0 },   -- laps of each tyre since it was fitted (car record)
+  tyreKm = { [0] = 0, 0, 0, 0 },     -- km driven by each tyre since it was fitted (car record)
+  tyreLineKm = { [0] = 0, 0, 0, 0 }, -- virtual km of each tyre at its last line crossing, never down (car record)
   pitPassServiced = false,   -- a service in the pit pass in progress (kept in the pit record: the next driver sees it)
   rcCommands = {},       -- Race Control commands from the server (ACSM live timing), read in script.update
   pitService = nil,       -- own pit stop in progress: { startMs, untilMs, plan } (PitBox)       -- KMR drive-through messages to this driver, read in script.update (KmrDT)
@@ -803,6 +805,7 @@ local state = {
     listApplied = false,  -- penalty list of the previous driver already received (this session)
     pendingList = nil,    -- received list waiting to be applied in script.update
   },
+  dsqFlagPutBack = nil,   -- game black flag put back in this session after the game took it off (decision 175)
   code80 = nil,           -- CODE-80 in progress: 'VSC', 'SC' or 'CODE-80' (from the server chat); nil = green
   code80Ended = false,    -- green flag received: the rules deferred during CODE-80 run in the next frame
   hold = nil,             -- hold in progress (locked in the pits): { untilT, text }; drive-throughs are not written
@@ -933,11 +936,8 @@ function CarRead.parked(car) return car.isInPit end
 -- Moving: any speed
 function CarRead.moving(car) return car.speedKmh > 0 end
 
--- Remaining life of a tyre in % (decision 163): its grip now (wheel tyreWear, the game's grip value, 1 = full) against
--- the wear curve of the compound fitted (car data tyres.ini, [FRONT] / [REAR], [FRONT_n] / [REAR_n] for compound n:
--- WEAR_CURVE, grip % by virtual km, read with ac.DataLUT11.carData): 100 = the highest grip of the curve (new), 0 = the
--- lowest (its end). Wear is not linear (temperature cycles, use of the rubber): the curve of the car gives it. nil when
--- the car data has no wear curve
+-- Tyre readings: helpers kept inside this block (the whole script is one chunk, limited to 200 local variables)
+do
 -- A curve of the tyre of the car (tyres.ini of the car data, section of the compound fitted and the axle of wheel i:
 -- prefix FRONT / REAR, _n for compound n; key WEAR_CURVE or PERFORMANCE_CURVE), read once (false = none)
 local tyreCurves = {}
@@ -960,34 +960,48 @@ local function tyreCurve(car, i, prefix, key)
   return lut
 end
 
-function CarRead.tyreLife(car, i)
+-- Wear of a tyre by the wear curve of the compound fitted (decision 166): the curve (WEAR_CURVE of tyres.ini, [FRONT] /
+-- [REAR], _n for compound n) gives the grip % by virtual km, and the game wears the tyre along it by its virtual km
+-- (wheel tyreVirtualKM: "not an actual distance, rate of change depends on wear multiplier"). Life in %: 100 up to the
+-- end of the top of the curve (highest grip), then the grip at the virtual km between the top (100) and the lowest
+-- grip of the curve (0, end of life). Also the virtual km of the end of life (first point at the lowest grip after the
+-- top). km: the virtual km of the tyre taken at the line (TyreUse, decision 170), not the reading of the frame. nil when
+-- the car data has no wear curve
+local function tyreWearState(car, i, km)
   local lut = tyreCurve(car, i, '', 'WEAR_CURVE')
-  local w = car.wheels and car.wheels[i]
-  if not lut or not w then return nil end
+  if not lut then return nil end
   local lo, hi = lut:bounds()
   if not lo or not hi or hi.y <= lo.y then return nil end
-  return math.min(math.max((CarRead.num(w.tyreWear) * 100 - lo.y) / (hi.y - lo.y) * 100, 0), 100)
-end
-
--- Laps of a tyre against its wear curve (decision 165): the life the curve of the compound fitted gives at the virtual
--- km of the tyre (tyreVirtualKM; 100 = highest grip of the curve, 0 = its lowest), and the expected laps of the tyre:
--- km where the curve reaches its lowest grip, at the km per lap run so far (laps of the tyre). limit nil before a lap
--- with km; nil when the car data has no wear curve
-function CarRead.tyreLapLimit(car, i, laps)
-  local lut = tyreCurve(car, i, '', 'WEAR_CURVE')
-  local w = car.wheels and car.wheels[i]
-  if not lut or not w then return nil end
-  local lo, hi = lut:bounds()
-  if not lo or not hi or hi.y <= lo.y then return nil end
-  local endKm, k = nil, 0
-  while not endKm do
+  local pts, k = {}, 0
+  while true do
     local x, y = lut:getPointInput(k), lut:getPointOutput(k)
     if x == nil or x ~= x then break end
-    if y <= lo.y then endKm = x end
+    pts[#pts + 1] = { x = x, y = y }
     k = k + 1
   end
-  local km = CarRead.num(w.tyreVirtualKM)
-  local life = math.min(math.max((lut:get(km) - lo.y) / (hi.y - lo.y) * 100, 0), 100)
+  local topEnd, endKm = -math.huge, nil
+  for _, p in ipairs(pts) do
+    if p.y >= hi.y then topEnd = p.x end
+  end
+  for _, p in ipairs(pts) do
+    if not endKm and p.x > topEnd and p.y <= lo.y then endKm = p.x end
+  end
+  local life = km <= topEnd and 100 or math.min(math.max((lut:get(km) - lo.y) / (hi.y - lo.y) * 100, 0), 100)
+  return life, endKm
+end
+
+-- Remaining life of a tyre in % at the virtual km km (decision 166): tyreWearState. nil when the car data has no wear
+-- curve
+function CarRead.tyreLife(car, i, km)
+  return (tyreWearState(car, i, km))
+end
+
+-- Laps of a tyre against its wear curve (decisions 165, 170): the life (tyreWearState) and the expected laps of the
+-- tyre: virtual km of the end of life, at the virtual km per lap of the laps run (km: the virtual km at the last line).
+-- limit nil before a lap with virtual km; nil when the car data has no wear curve
+function CarRead.tyreLapLimit(car, i, laps, km)
+  local life, endKm = tyreWearState(car, i, km)
+  if not life then return nil end
   local limit = endKm and laps > 0 and km > 0 and math.floor(endKm * laps / km) or nil
   return life, limit
 end
@@ -1018,6 +1032,7 @@ function CarRead.tyreThermal(car, i)
   if not top1 then return nil end
   local side = t < top1 and 'cold' or (t > top2 and 'hot' or 'ideal')
   return { grip = lut:get(t) / hi.y * 100, side = side, hotEnd = (hotEnd or hi.y) / hi.y * 100, temp = t }
+end
 end
 
 -- Movement of the car, from documented world readings only: where it is frame to frame (SDK car.position: "Car position
@@ -2205,6 +2220,52 @@ local function applyTowHold(tow, damage, reason)
 end
 
 -- ============================================================
+-- Use of each tyre since it was fitted (decisions 162, 166, 170), shown in the setup status: laps (one at each line
+-- crossing); km driven (the car's own distance, SDK car.distanceDrivenSessionKm, added frame by frame; the virtual km
+-- of the game is not a distance); virtual km of the tyre taken at each line crossing and never going down (the wear on
+-- the curve of the compound: life and expected laps are a measure of the laps run, so nothing changes between two
+-- lines, with the car stopped or not). Kept in the car record (crash, driver swap). A tyre fitted starts at 0: by the
+-- own pit stop box (TyreUse.fitted), or by any other way the game changes it (its virtual km falling at once to less
+-- than half: game pit, reset, new session; a slow change of the reading is not a new tyre).
+-- ============================================================
+
+local TyreUse = {}
+do
+  -- Largest distance of one frame that is driving (more: a teleport or a new session count)
+  local MAX_STEP_KM = 0.1
+  local lastVirtual, lastDist = {}, nil
+
+  function TyreUse.fitted(i)
+    state.tyreLaps[i], state.tyreKm[i], state.tyreLineKm[i] = 0, 0, 0
+  end
+
+  function TyreUse.update(car, lineFrame)
+    local dist = CarRead.num(car.distanceDrivenSessionKm)
+    local step = lastDist and dist - lastDist or 0
+    lastDist = dist
+    if step < 0 or step > MAX_STEP_KM then step = 0 end
+    for i = 0, 3 do
+      local virtual = CarRead.num(car.wheels and car.wheels[i] and car.wheels[i].tyreVirtualKM)
+      if lastVirtual[i] and virtual < lastVirtual[i] * 0.5 then TyreUse.fitted(i) end
+      lastVirtual[i] = virtual
+      state.tyreKm[i] = (state.tyreKm[i] or 0) + step
+      if lineFrame then
+        state.tyreLaps[i] = (state.tyreLaps[i] or 0) + 1
+        state.tyreLineKm[i] = math.max(state.tyreLineKm[i] or 0, virtual)
+      end
+    end
+    -- Audit of the tyres at the line (the virtual km is measured in the game from these lines)
+    if lineFrame then
+      local parts = {}
+      for i = 0, 3 do
+        local virtual = CarRead.num(car.wheels and car.wheels[i] and car.wheels[i].tyreVirtualKM)
+        parts[#parts + 1] = string.format('%d laps %.2f km virtual %.3f', state.tyreLaps[i], state.tyreKm[i], virtual)
+      end
+      ac.log('race-control: tyres at the line: ' .. table.concat(parts, ' / '))
+    end
+  end
+end
+-- ============================================================
 -- Car state (front B): the physical state belongs to the car, not to the driver. The game gives a new car on every new
 -- connection (reconnection, restarted game) and on a driver swap ("Driver swaps currently reset all vehicle damage, fuel
 -- status etc."), so the script keeps the car record and puts it back with the game physics (the car mod is untouched).
@@ -2238,6 +2299,7 @@ local CarState = {
   dirtyT = nil,        -- clock of the last damage change not saved yet
   lastBody = nil,      -- state of the last frame (saved on a teleport, before the game changes the car)
   orig = {},           -- [wheel] = { toe, camber } with no suspension damage
+  peak = {},           -- [wheel] = { toe, camber }: highest deviation over orig since the damage (decision 167)
   search = nil,        -- suspension being put back: [wheel] = { target %, lo, hi, kmh, steps, wait }
   suspKmh = {},        -- [wheel] = km/h that gives the suspension damage of the wheel (known after putting it back)
   suspRaw = {},        -- [wheel] = suspension damage read (0..1) when suspKmh was known
@@ -2261,7 +2323,8 @@ do
     return out
   end
 
-  -- Suspension damage of a wheel in %, by angle (nil while the wheel has no reference)
+  -- Suspension damage of a wheel in %, by the angle read now (nil while the wheel has no reference): what the record
+  -- keeps and the search puts back on the car (the physical state); the damage that counts is CarState.suspPercent
   local function suspPercent(car, i, orig)
     local w = car.wheels and car.wheels[i]
     local o = orig or CarState.orig[i]
@@ -2269,7 +2332,21 @@ do
     local dev = math.max(math.abs(num(w.toeIn) - o.toe), math.abs(num(w.camber) - o.camber))
     return math.min(dev / SUSP_MAX_ANGLE, 1) * 100
   end
-  CarState.suspPercent = suspPercent
+  -- Deviation of a wheel over the setup that counts for the damage (decision 167): toe and camber, each the highest of
+  -- now and of the peak since the damage (nil while the wheel has no reference)
+  function CarState.deviation(car, i)
+    local w = car.wheels and car.wheels[i]
+    local o = CarState.orig[i]
+    if not w or not o then return nil end
+    local pk = CarState.peak[i] or { toe = 0, camber = 0 }
+    return math.max(pk.toe, math.abs(num(w.toeIn) - o.toe)), math.max(pk.camber, math.abs(num(w.camber) - o.camber))
+  end
+  -- Suspension damage % shown (decision 167): by the deviation that counts
+  function CarState.suspPercent(car, i)
+    local toe, camber = CarState.deviation(car, i)
+    if not toe then return nil end
+    return math.min(math.max(toe, camber) / SUSP_MAX_ANGLE, 1) * 100
+  end
 
   local function carBody(car)
     local km, body, pct, raw, orig, kmh = {}, {}, {}, {}, {}, {}
@@ -2283,25 +2360,40 @@ do
     end
     for i = 0, 4 do body[#body + 1] = string.format('%.1f', num(car.damage[i])) end
     local d = state.tow.damage or { powertrain = 0, suspension = 0, body = 0 }
-    local laps = {}
-    for i = 0, 3 do laps[#laps + 1] = tostring(state.tyreLaps[i] or 0) end
-    return string.format('F%.1f|C%d|K%s|B%s|S%s|R%s|O%s|E%.0f|G%.3f|T%.3f,%.3f,%.1f|D%d|V%s|H%d|L%s', num(car.fuel),
+    local laps, tkm, lkm, peak = {}, {}, {}, {}
+    for i = 0, 3 do
+      laps[#laps + 1] = tostring(state.tyreLaps[i] or 0)
+      tkm[#tkm + 1] = string.format('%.2f', state.tyreKm[i] or 0)
+      lkm[#lkm + 1] = string.format('%.3f', state.tyreLineKm[i] or 0)
+      local pk = CarState.peak[i]
+      peak[#peak + 1] = pk and string.format('%.3f/%.3f', pk.toe, pk.camber) or '-'
+    end
+    return string.format('F%.1f|C%d|K%s|B%s|S%s|R%s|O%s|E%.0f|G%.3f|T%.3f,%.3f,%.1f|D%d|V%s|H%d|L%s|M%s|P%s|W%s',
+      num(car.fuel),
       num(car.compoundIndex), table.concat(km, ','), table.concat(body, ','), table.concat(pct, ','),
       table.concat(raw, ','), table.concat(orig, ','), num(car.engineLifeLeft), num(car.gearboxDamage), d.powertrain,
       d.suspension, d.body, state.repair.lapsLeft or -1, table.concat(kmh, ','),
-      state.repair.beyondSince and math.floor(state.repair.beyondSince) or -1, table.concat(laps, ','))
+      state.repair.beyondSince and math.floor(state.repair.beyondSince) or -1, table.concat(laps, ','),
+      table.concat(tkm, ','), table.concat(peak, ','), table.concat(lkm, ','))
   end
 
   local function carParse(body)
-    -- L (laps of each tyre) is the last field; a record without it (older version) still reads, with 0 laps
-    local f, c, k, b, s, r, o, e, g, t, dl, v, h, lp = tostring(body):match(
-      '^F([%d%.]+)|C(%d+)|K([^|]*)|B([^|]*)|S([^|]*)|R([^|]*)|O([^|]*)|E([%d%.]+)|G([%d%.]+)|T([^|]*)|D(%-?%d+)|V([^|]*)|H(%-?%d+)|?L?([^|]*)$')
+    -- After H, the fields added later (L laps, M km and W virtual km at the line of each tyre, P suspension peak); a
+    -- record without them (older version) still reads, with 0 and no peak
+    local f, c, k, b, s, r, o, e, g, t, dl, v, h, rest = tostring(body):match(
+      '^F([%d%.]+)|C(%d+)|K([^|]*)|B([^|]*)|S([^|]*)|R([^|]*)|O([^|]*)|E([%d%.]+)|G([%d%.]+)|T([^|]*)|D(%-?%d+)|V([^|]*)|H(%-?%d+)(.*)$')
     if not f then return nil end
-    local orig = {}
-    for i, v in ipairs(list(o)) do
-      local toe, camber = v:match('^([%-%d%.]+)/([%-%d%.]+)$')
-      if toe then orig[i - 1] = { toe = tonumber(toe), camber = tonumber(camber) } end
+    local extra = {}
+    for key, value in rest:gmatch('|(%u)([^|]*)') do extra[key] = value end
+    local function pairsOf(text)
+      local out = {}
+      for i, v in ipairs(list(text or '')) do
+        local toe, camber = v:match('^([%-%d%.]+)/([%-%d%.]+)$')
+        if toe then out[i - 1] = { toe = tonumber(toe), camber = tonumber(camber) } end
+      end
+      return out
     end
+    local orig = pairsOf(o)
     local function nums(text)
       local out = {}
       for i, v in ipairs(list(text)) do out[i] = tonumber(v) or 0 end
@@ -2309,7 +2401,8 @@ do
     end
     return { fuel = tonumber(f), compound = tonumber(c), km = nums(k), body = nums(b), pct = nums(s), raw = nums(r),
       orig = orig, engine = tonumber(e), gearbox = tonumber(g), tow = nums(t), repairLaps = tonumber(dl), kmh = nums(v),
-      beyondSince = tonumber(h), laps = nums(lp or '') }
+      beyondSince = tonumber(h), laps = nums(extra.L or ''), tyreKm = nums(extra.M or ''), peak = pairsOf(extra.P),
+      lineKm = nums(extra.W or '') }
   end
 
   local function damageSig(car)
@@ -2395,7 +2488,11 @@ do
     for i = 0, 3 do physics.setTyresVirtualKM(0, i, r.km[i + 1] or 0) end
     physics.setCarBodyDamage(0, vec4(r.body[1] or 0, r.body[2] or 0, r.body[3] or 0, r.body[4] or 0))
     physics.setCarEngineLife(0, r.engine)
-    for i = 0, 3 do state.tyreLaps[i] = r.laps[i + 1] or 0 end
+    for i = 0, 3 do
+      state.tyreLaps[i], state.tyreKm[i], state.tyreLineKm[i] = r.laps[i + 1] or 0, r.tyreKm[i + 1] or 0,
+        r.lineKm[i + 1] or 0
+      CarState.peak[i] = r.peak[i]
+    end
     local t = r.tow
     if (t[1] or 0) > 0 or (t[2] or 0) > 0 or (t[3] or 0) > 0 then
       state.tow.damage = { powertrain = t[1] or 0, suspension = t[2] or 0, body = t[3] or 0 }
@@ -2472,6 +2569,12 @@ do
       local searching = CarState.search and CarState.search[i]
       if w and num(car.suspensionDamage[i]) == 0 and not searching then
         CarState.orig[i] = { toe = num(w.toeIn), camber = num(w.camber) }
+        CarState.peak[i] = nil
+      elseif w and CarState.orig[i] and not searching then
+        -- Damaged: the highest deviation holds (the angle read changes with the steering, decision 167)
+        local o, pk = CarState.orig[i], CarState.peak[i] or { toe = 0, camber = 0 }
+        CarState.peak[i] = { toe = math.max(pk.toe, math.abs(num(w.toeIn) - o.toe)),
+          camber = math.max(pk.camber, math.abs(num(w.camber) - o.camber)) }
       end
       if not searching and CarState.suspKmh[i] and num(car.suspensionDamage[i]) ~= CarState.suspRaw[i] then
         CarState.suspKmh[i] = nil
@@ -2537,7 +2640,8 @@ end
 --     punctured: stop off track and return to the pits by the tow (the repair is charged in the pits). Internal timers
 --     (not shown), by the driver's attitude: beyondTowSeconds after the warning without the tow = our DSQ (safety
 --     hazard) asking for the tow and warning of unsporting behaviour; dsqTowSeconds more = game black flag (DsqFlow).
--- Toe and camber over the setup: CarState.orig (the wheel with no suspension damage). Body sides: car.damage[0..3]
+-- Toe and camber over the setup: CarState.orig (the wheel with no suspension damage), the highest since the damage
+-- (CarState.deviation, decision 167). Body sides: car.damage[0..3]
 -- = front, rear, left, right (AC shared memory order). Missing wheel: the game physics has no detached wheel and the
 -- SDK no field for it (only the punctured tyre, isBlown); the check is kept for a future physics and has no effect today.
 -- CODE-80: a stop is allowed under yellow, SC and VSC for everything, so the repair deadline does not stop.
@@ -2562,11 +2666,9 @@ do
       if rank[class] > rank[worst.class] then worst = { class = class, text = text, detail = detail } end
     end
     for i = 0, 3 do
-      local w = car.wheels and car.wheels[i]
-      local o = CarState.orig[i]
-      if w and o then
-        local toe = math.abs(num(w.toeIn) - o.toe)
-        local camber = math.abs(num(w.camber) - o.camber)
+      -- The highest deviation since the damage (decision 167): the angle read changes with the steering
+      local toe, camber = CarState.deviation(car, i)
+      if toe then
         local what, dev, bent, broken = 'toe', toe, config.damage.toeBent, config.damage.toeBroken
         if camber / config.damage.camberBent > toe / config.damage.toeBent then
           what, dev, bent, broken = 'camber', camber, config.damage.camberBent, config.damage.camberBroken
@@ -3127,7 +3229,8 @@ do
     elseif group == 'powertrain' then
       return num(car.engineLifeLeft) < 1000 or num(car.gearboxDamage) > 0
     end
-    for i = 0, 4 do if num(car.damage[i]) > 0 then return true end end
+    -- Body: the 4 zones (SDK: the fifth "is not really used"; physics.setCarBodyDamage sets only the 4)
+    for i = 0, 3 do if num(car.damage[i]) > 0 then return true end end
     return false
   end
 
@@ -3172,7 +3275,7 @@ do
     for i = 0, 3 do km[i] = num(car.wheels[i].tyreVirtualKM) end
     for _, w in ipairs(wheels) do
       km[w] = 0
-      state.tyreLaps[w] = 0
+      TyreUse.fitted(w)
     end
     local body = {}
     for i = 0, 3 do body[i] = p.repair.body and 0 or num(car.damage[i]) end
@@ -5434,23 +5537,24 @@ do
     local wStep = (p2.x - SETUP.side * s - textWidth('99/99', FONT_MONO, fs) - wx0) / 3
     for i = 0, 3 do
       local x = wx0 + i * wStep
-      -- Remaining life by the wear curve of the compound (CarRead.tyreLife), color graded green / yellow / red;
-      -- without a curve, the grip of the tyre (tyreWear) in %, white
-      local life = CarRead.tyreLife(car, i)
+      -- Remaining life by the wear curve of the compound at the virtual km of the tyre taken at the last line
+      -- (CarRead.tyreLife, TyreUse), color graded green / yellow / red; without a curve, 100 - the wear of the game
+      -- (tyreWear, 0 to 1) in %, white
+      local life = CarRead.tyreLife(car, i, state.tyreLineKm[i] or 0)
       local color = life and lifeColor(life) or COLOR_TITLE
-      life = life or num(wh[i] and wh[i].tyreWear) * 100
+      life = life or (1 - num(wh[i] and wh[i].tyreWear)) * 100
       drawText(WHEEL[i], FONT_MONO, fs, vec2(x, ty), COLOR_OFF)
       -- Pressure, colored by the temperature of the tyre (thermal curve of the compound); without it, white
       local th = CarRead.tyreThermal(car, i)
       drawText(string.format('%.1f', num(wh[i] and wh[i].tyrePressure)), FONT_MONO, fs, vec2(x, ty + lh),
         th and thermalColor(th) or COLOR_TITLE)
       drawText(string.format('%.0f%%', life), FONT_MONO, fs, vec2(x, ty + 2 * lh), color)
-      drawText(string.format('%.0f', num(wh[i] and wh[i].tyreVirtualKM)), FONT_MONO, fs, vec2(x, ty + 3 * lh),
-        COLOR_TITLE)
+      -- km driven by the tyre (TyreUse; the virtual km of the game is not a distance)
+      drawText(string.format('%.1f', state.tyreKm[i] or 0), FONT_MONO, fs, vec2(x, ty + 3 * lh), COLOR_TITLE)
       -- Laps run / laps expected by the wear curve of the compound, colored by the phase of the curve at the km of the
       -- tyre (max grip, half life, end of life, graded as the life); without a curve, the laps run, white
       local laps = state.tyreLaps[i] or 0
-      local lapLife, lapLimit = CarRead.tyreLapLimit(car, i, laps)
+      local lapLife, lapLimit = CarRead.tyreLapLimit(car, i, laps, state.tyreLineKm[i] or 0)
       drawText(lapLife and string.format(TEXTS.setupLapsOf, laps, lapLimit and tostring(lapLimit) or '--')
         or tostring(laps), FONT_MONO, fs, vec2(x, ty + 4 * lh), lapLife and lifeColor(lapLife) or COLOR_TITLE)
     end
@@ -5472,9 +5576,9 @@ do
     local wh = car.wheels and car.wheels[i]
     if wh and wh.isBlown then return TEXTS.statusPunct, COLOR_WARN end
     local pct = CarState.suspPercent(car, i) or 0
-    local o = CarState.orig[i]
-    if o and wh then
-      local dev = math.max(math.abs(num(wh.toeIn) - o.toe), math.abs(num(wh.camber) - o.camber))
+    local toe, camber = CarState.deviation(car, i)
+    if toe then
+      local dev = math.max(toe, camber)
       local d = config.damage
       if dev > math.min(d.toeBroken, d.camberBroken) then return string.format(TEXTS.statusBroken, dev), BORDER_RED end
       if dev > math.min(d.toeBent, d.camberBent) then return string.format(TEXTS.statusBent, dev), COLOR_ORANGE end
@@ -6185,6 +6289,7 @@ function script.update(dt)
     state.dtDsqActive = false
     state.code80 = nil
     state.code80Ended = false
+    state.dsqFlagPutBack = nil
     -- CODE-80 in force: kept on a script reload; otherwise it comes from the other drivers (RecordSync.askOwn below)
     TrackList.load()
     -- Car state: put back after a new connection or a driver swap (from this computer or the other drivers)
@@ -6258,6 +6363,19 @@ function script.update(dt)
       if not (state.dtDsqActive or state.pitDsqActive) then state.dtDsqActive = true end
       if l.dsqStage ~= 1 then dsqGameFlag('black flag from outside the script', nil, true) end
       Rules.zero()
+    end
+    -- The game took its black flag off while the DSQ of this session is in force (seen after the checkered flag of a
+    -- qualifying): logged with the session state; put back once in the session (decision 175); taken off again, only
+    -- logged. The controls stay locked and the text stays (the DSQ belongs to the session)
+    if g.t ~= BLACK_FLAG and l.prevGame.t == BLACK_FLAG and l.dsqStage == 1 then
+      local putBack = not state.dsqFlagPutBack
+      ac.log(string.format('race-control: game black flag taken off by the game (session type %s, time left %.0f s, '
+        .. 'session finished %s, game penalty %s/%s)%s', tostring(sim.raceSessionType), (sim.sessionTimeLeft or 0) / 1000,
+        tostring(sim.isSessionFinished), tostring(g.t), tostring(g.p), putBack and ', put back' or ''))
+      if putBack then
+        state.dsqFlagPutBack = true
+        physics.setCarPenalty(BLACK_FLAG)
+      end
     end
     local dsqActive = state.dtDsqActive or state.pitDsqActive
 
@@ -6335,10 +6453,7 @@ function script.update(dt)
       Rules.line(viaPit, g, lapCount)
       l.lastLap = lapCount
     end
-    -- Laps of each tyre (setup status): one more at each line crossing; a tyre fitted in the pit stop starts at 0
-    if lineFrame then
-      for i = 0, 3 do state.tyreLaps[i] = (state.tyreLaps[i] or 0) + 1 end
-    end
+    TyreUse.update(car, lineFrame)
     DamageClass.update(car, lineFrame)
     CarState.update(car, lineFrame)
     DsqFlow.update(car, lineFrame)
