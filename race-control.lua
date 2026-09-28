@@ -403,6 +403,7 @@ local TEXTS = {
   statusPowertrain = 'Powertrain',
   statusEngine = 'ENGINE',
   statusGearbox = 'GEARBOX',
+  statusBop = 'BOP',
   statusOk = 'OK',
   statusBody = 'Body',
   -- stop & go box (approved screens 3 and 4)
@@ -1605,16 +1606,21 @@ ac.onChatMessage(function(message, senderCarIndex)
     state.rcCommands[#state.rcCommands + 1] = command
     return true
   end
+  -- KMR drive-through to this driver: from the server, or with this car as the sender (the SDK documents only -1 for
+  -- the server; a message the server sends to one car may carry that car). Taking it from this car is safe: it can only
+  -- add a penalty to this driver. The sender goes to the audit line
+  if (server or senderCarIndex == 0) and classifyServerMessage(message) == 'DT' then
+    local prefix = tostring(ac.getDriverName(0) or '') .. ':'
+    local text = message
+    if message:sub(1, #prefix) == prefix then text = message:sub(#prefix + 1):gsub('^%s+', '') end
+    showNotice(TEXTS.kmrTitle, text, nil, SERVER_NOTICE_SECONDS)
+    state.kmrMessages[#state.kmrMessages + 1] = { text = text, sender = senderCarIndex }
+    return false
+  end
   if server and onDriverSwapMessage(message) then return false end
   if server then
     local kind = classifyServerMessage(message)
-    if kind == 'DT' then
-      local prefix = tostring(ac.getDriverName(0) or '') .. ':'
-      local text = message
-      if message:sub(1, #prefix) == prefix then text = message:sub(#prefix + 1):gsub('^%s+', '') end
-      showNotice(TEXTS.kmrTitle, text, nil, SERVER_NOTICE_SECONDS)
-      state.kmrMessages[#state.kmrMessages + 1] = text
-    elseif kind then
+    if kind then
       if CODE80_KINDS[kind] then
         if not state.code80 then ac.log('race-control: CODE-80 start (' .. kind .. ')') end
         if state.code80 ~= kind then
@@ -3484,7 +3490,9 @@ do
     local msgs = state.kmrMessages
     if #msgs == 0 then return end
     state.kmrMessages = {}
-    for _, text in ipairs(msgs) do
+    for _, m in ipairs(msgs) do
+      local text = m.text
+      local via = ' - chat sender ' .. tostring(m.sender)
       local low = text:lower()
       local laps = low:find('penalty', 1, true) and deadline(low)
       if laps then
@@ -3493,13 +3501,17 @@ do
         if cat == 'K1' then laps = 0 end
         if cat ~= 'K1' and (laps == 'next race' or sim.raceSessionType ~= ac.SessionType.Race) then
           ac.log('race-control: KMR drive-through relaxed (' .. cat .. '): ' .. text)
-          rcLog('Drive-through relaxed', base .. ' - issued by KMR for the next race, not carried over by Race Control')
+          rcLog('Drive-through relaxed', base .. ' - issued by KMR for the next race, not carried over by Race Control' .. via)
         elseif not (state.dtDsqActive or state.pitDsqActive) then
           ac.log(string.format('race-control: KMR drive-through DT%d (%s): %s', laps, cat, text))
-          rcLog('Drive-through DT' .. laps, base .. ' - issued by KMR, recorded by Race Control')
+          rcLog('Drive-through DT' .. laps, base .. ' - issued by KMR, recorded by Race Control' .. via)
           listAdd(cat, laps)
           Rules.finalize()
+        else
+          rcLog('Drive-through after the DSQ', base .. ' - issued by KMR, logged only' .. via)
         end
+      else
+        rcLog('KMR message not read', text .. via)
       end
     end
   end
@@ -3656,6 +3668,21 @@ local function startSlowdown(zone, r, lapCount)
   }
 end
 
+-- Cut discarded after its slowdown was given (spin before the car is back on track): its seconds and its category
+-- leave the slowdown in progress (merged or alone)
+local function cancelSlowdown(zone, r)
+  for key, sd in pairs(state.slowdowns) do
+    for i, c in ipairs(sd.cats) do
+      if c == zone.category then
+        table.remove(sd.cats, i)
+        sd.toPay = math.max(sd.toPay - math.max(r.param, 0), 0)
+        if #sd.cats == 0 or sd.toPay <= 0 then state.slowdowns[key] = nil end
+        return
+      end
+    end
+  end
+end
+
 -- Unpaid slowdown: rule set per session (DT -> DT0 of the category; DSQ -> direct)
 local function onSlowdownUnpaid(cat, endOfLap, inPit)
   local unpaid = config.unpaid[sim.raceSessionType]
@@ -3774,7 +3801,7 @@ end
 -- time taken to reach GAIN_SAMPLES + 1 evenly spaced points of the zone. A passage with a cut never becomes the
 -- reference. Cut with a reference: the slowdown is given only if, when the car is back on track (or the zone ends),
 -- the time taken is below the reference at that point x (1 + tolerance). A spin during the cut discards it.
--- Cut without a reference yet: the slowdown is given, as before.
+-- Cut without a reference yet: the slowdown is given at the cut; a spin before the car is back on track cancels it.
 -- ============================================================
 
 local GAIN_SAMPLES = 20
@@ -3840,12 +3867,15 @@ local function refAt(ref, p)
   return ref[i] + (ref[i + 1] - ref[i]) * (x - i)
 end
 
--- Angle between where the car points and where it moves, in degrees (0 = straight, 180 = backwards)
+-- Angle between where the car points and where it moves, in degrees (0 = straight, 180 = backwards), on the ground
+-- plane, from the world vectors the SDK documents: car.look ("Vector facing forward") and car.velocity ("Car velocity in
+-- m/s"); the axes of car.localVelocity are not documented
 local function driftAngle(car)
-  local v = car.localVelocity
+  local v, f = car.velocity, car.look
   local speed = math.sqrt(v.x * v.x + v.z * v.z)
-  if speed <= 0 then return 0 end
-  return math.deg(math.acos(math.min(math.max(v.z / speed, -1), 1)))
+  local len = math.sqrt(f.x * f.x + f.z * f.z)
+  if speed <= 0 or len <= 0 then return 0 end
+  return math.deg(math.acos(math.min(math.max((v.x * f.x + v.z * f.z) / (speed * len), -1), 1)))
 end
 
 -- Records the passage through each zone; a clean, complete and faster passage becomes the reference
@@ -3912,16 +3942,21 @@ local function updateCutChecks()
     cc.lastT = sim.time
     if car.speedKmh > SPIN_MIN_SPEED_KMH and driftAngle(car) > config.cutSpinAngle then cc.spun = true end
     local back = car.wheelsOutside <= zone.maxWheelsOut
-    if car.isInPitlane then
+    if cc.given then
+      -- No reference: the slowdown was given at the cut; a spin before the car is back on track cancels it
+      if cc.spun then
+        state.cutChecks[zi] = nil
+        cancelSlowdown(zone, cc.rule)
+        ac.log(string.format('race-control: cut %s discarded: spin, slowdown cancelled', zone.category))
+      elseif car.isInPitlane or back or not inZone then
+        state.cutChecks[zi] = nil
+      end
+    elseif car.isInPitlane then
       state.cutChecks[zi] = nil
     elseif back or not inZone then
       state.cutChecks[zi] = nil
       if cc.spun then
         ac.log(string.format('race-control: cut %s discarded: spin', zone.category))
-      elseif not cc.ref then
-        -- No reference yet: slowdown (the car is back on track without a spin)
-        startSlowdown(zone, cc.rule, cc.lapCount)
-        queueChat(TEXTS.cut.SLOWDOWN)
       elseif elapsed >= limit then
         ac.log(string.format('race-control: cut %s discarded: %.3f s, limit %.3f s', zone.category,
           elapsed / 1000, limit / 1000))
@@ -3954,10 +3989,19 @@ local function checkCutZone(zoneIndex, zone, lapCount)
     local ref = state.zoneRef[zoneIndex]
     local pass = state.zonePass[zoneIndex]
     if r.penalty == 'SLOWDOWN' then
-      -- Decided when the car is back on track: a spin in the zone passage discards the cut; with a reference, the gain
-      -- decides (gain filter); without one, slowdown
-      state.cutChecks[zoneIndex] = { zone = zone, rule = r, lapCount = lapCount, t0 = pass and pass.t0 or sim.time,
-        ref = pass and ref or nil, margin = 0, spun = pass and pass.spun or false }
+      -- A spin in the zone passage before the cut discards it. With a reference: decided when the car is back on track
+      -- (gain filter). Without one: slowdown at the cut, cancelled by a spin before the car is back on track
+      local withRef = pass and ref or nil
+      if pass and pass.spun then
+        ac.log(string.format('race-control: cut %s discarded: spin', zone.category))
+      else
+        if not withRef then
+          startSlowdown(zone, r, lapCount)
+          queueChat(TEXTS.cut.SLOWDOWN)
+        end
+        state.cutChecks[zoneIndex] = { zone = zone, rule = r, lapCount = lapCount, t0 = pass and pass.t0 or sim.time,
+          ref = withRef, given = not withRef, margin = 0, spun = false }
+      end
     elseif r.penalty == 'DT' then
       rcLog('Drive-through', TEXTS.reason[zone.category])
       if car.isInPitlane then Rules.slowdownEndOfLap(zone.category) else Rules.slowdownMidLap(zone.category) end
@@ -4393,23 +4437,46 @@ do
   end
 end
 -- ============================================================
--- Screens moved by the driver with the mouse: click on a screen, hold and drag (move cursor, the four arrows).
--- Double click puts it back in its place. Groups: 'panel' (Race Control panel with the boxes below it, moved together),
--- 'pitbox' (pit stop box), 'setup' (setup status), 'status' (car status). The position is an offset from the default
--- place, in px at 1080p (the same place on any resolution), kept in this computer (ac.storage) for every session.
+-- Screens controlled by the driver with the mouse. Groups: 'panel' (Race Control panel with the boxes below it, moved
+-- together), 'pitbox' (pit stop box), 'setup' (setup status), 'status' (car status).
+--   Move: click on a screen, hold and drag (move cursor, the four arrows); double click puts it back in its place.
+--   Icons (smallest readable size, outside the screen, shown only with the mouse over the screen or over them):
+--     one row outside the top right corner of every screen: mode (visible / auto-hide / always hidden; a click goes to
+--     the next) and pin (locks the position); on the panel, before them, setup, pit stop box and car status (a click
+--     shows that screen again: back to auto-hide) and, last on the right, reset (every screen back to its place;
+--     later, the setup of the screens).
+--   Auto-hide = the rule of each screen (panel: something to show; setup, pit stop box and car status: stopped at the
+--   pit place). The panel is also shown with the mouse over its place and stopped at the pit place, in any mode.
+-- Position (offset from the default place, px at 1080p), mode and pin are kept on this computer (ac.storage).
 -- ============================================================
 
 local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status' }
+  local MODES = { visible = 'auto', auto = 'hidden', hidden = 'visible' }   -- next mode on a click
+  local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
+  local ICON_SIZE, ICON_GAP = 12, 3            -- px at 1080p (times the screen scale)
+  local ICON_COLOR = rgbm(0.85, 0.87, 0.9, 0.9)
+  local ICON_ON = rgbm(1, 0.85, 0.25, 1)
+  local ICON_OFF = rgbm(0.45, 0.48, 0.5, 0.8)
   local layout = {}
-  for _, g in ipairs(GROUPS) do layout[g .. 'X'] = 0; layout[g .. 'Y'] = 0 end
+  for _, g in ipairs(GROUPS) do
+    layout[g .. 'X'] = 0; layout[g .. 'Y'] = 0; layout[g .. 'Mode'] = 'auto'; layout[g .. 'Pin'] = false
+  end
   local stored = ac.storage(layout, 'screen_')
-  local offsets = {}
-  for _, g in ipairs(GROUPS) do offsets[g] = vec2(tonumber(stored[g .. 'X']) or 0, tonumber(stored[g .. 'Y']) or 0) end
+  local offsets, modes, pins = {}, {}, {}
+  for _, g in ipairs(GROUPS) do
+    offsets[g] = vec2(tonumber(stored[g .. 'X']) or 0, tonumber(stored[g .. 'Y']) or 0)
+    local m = tostring(stored[g .. 'Mode'])
+    modes[g] = MODES[m] and m or 'auto'
+    pins[g] = stored[g .. 'Pin'] == true or stored[g .. 'Pin'] == 'true'
+  end
 
   Drag.group = nil       -- group of the boxes being drawn now (drawPanel registers their area)
   local rects = {}       -- area of each group drawn in this frame: { min = vec2, max = vec2 }
+  local zones = {}       -- area of each group with its icons (hover), this frame
+  local hover = {}       -- group under the mouse in the previous frame (its icons shown)
+  local buttons = {}     -- icons drawn in this frame: { p1, p2, action }
   local active           -- { group, grab = mouse - offset (px), min, max, offset (px) at the start }
 
   -- Offset of a group in px on this screen
@@ -4418,30 +4485,89 @@ do
     return vec2(o.x * h / 1080, o.y * h / 1080)
   end
 
-  -- Area drawn by the current group (called by drawPanel)
-  function Drag.hit(p1, p2)
-    local g = Drag.group
-    if not g then return end
-    local r = rects[g]
+  function Drag.mode(group) return modes[group] end
+  function Drag.hovered(group) return hover[group] == true end
+
+  local function grow(t, g, p1, p2)
+    local r = t[g]
     if r then
       r.min = vec2(math.min(r.min.x, p1.x), math.min(r.min.y, p1.y))
       r.max = vec2(math.max(r.max.x, p2.x), math.max(r.max.y, p2.y))
     else
-      rects[g] = { min = vec2(p1.x, p1.y), max = vec2(p2.x, p2.y) }
+      t[g] = { min = vec2(p1.x, p1.y), max = vec2(p2.x, p2.y) }
     end
+  end
+
+  -- Area drawn by the current group (called by drawPanel)
+  function Drag.hit(p1, p2)
+    local g = Drag.group
+    if not g then return end
+    grow(rects, g, p1, p2)
+    grow(zones, g, p1, p2)
+  end
+
+  -- Area of a group for the mouse even when it is not drawn (the panel shows up with the mouse over its place)
+  function Drag.zone(group, p1, p2) grow(zones, group, p1, p2) end
+
+  local function icon(id, x, y, size, color, action)
+    local p1, p2 = vec2(x, y), vec2(x + size, y + size)
+    ui.drawRectFilled(vec2(p1.x - 1, p1.y - 1), vec2(p2.x + 1, p2.y + 1), rgbm(0.04, 0.04, 0.05, 0.85), 2)
+    ui.drawIcon(id, p1, p2, color)
+    buttons[#buttons + 1] = { p1 = p1, p2 = p2, action = action }
+  end
+
+  -- Icons of a screen in one row outside its top right corner: mode and pin; on the panel, before them, the setup, pit
+  -- stop box and car status icons (dim while that screen is always hidden) and, last on the right, reset. Drawn only
+  -- with the mouse over the screen or over them.
+  function Drag.icons(group, p1, p2, s)
+    local size, gap = ICON_SIZE * s, ICON_GAP * s
+    local row = {}
+    if group == 'panel' then
+      for _, it in ipairs({ { ui.Icons.Settings, 'setup' }, { ui.Icons.PitStop, 'pitbox' },
+          { ui.Icons.CarFront, 'status' } }) do
+        row[#row + 1] = { it[1], modes[it[2]] == 'hidden' and ICON_OFF or ICON_COLOR, 'show:' .. it[2] }
+      end
+    end
+    row[#row + 1] = { MODE_ICON[modes[group]], ICON_COLOR, 'mode:' .. group }
+    row[#row + 1] = { ui.Icons.Pin, pins[group] and ICON_ON or ICON_COLOR, 'pin:' .. group }
+    if group == 'panel' then row[#row + 1] = { ui.Icons.Reset, ICON_COLOR, 'reset' } end
+    local y = p1.y - size - gap
+    local x = p2.x - #row * size - (#row - 1) * gap
+    grow(zones, group, vec2(x, y), p2)
+    if not hover[group] then return end
+    for i, it in ipairs(row) do icon(it[1], x + (i - 1) * (size + gap), y, size, it[2], it[3]) end
   end
 
   local function save(g)
     stored[g .. 'X'] = offsets[g].x
     stored[g .. 'Y'] = offsets[g].y
+    stored[g .. 'Mode'] = modes[g]
+    stored[g .. 'Pin'] = pins[g]
   end
 
-  -- End of the frame: hover shows the move cursor; click, hold and drag moves the group (kept on screen); release keeps
-  -- the place; double click puts it back
+  local function press(action)
+    local what, g = action:match('^(%a+):?(%a*)$')
+    if what == 'mode' then modes[g] = MODES[modes[g]]
+    elseif what == 'pin' then pins[g] = not pins[g]
+    elseif what == 'show' then if modes[g] == 'hidden' then modes[g] = 'auto' end
+    elseif what == 'reset' then
+      for _, x in ipairs(GROUPS) do offsets[x] = vec2(0, 0); save(x) end
+      return
+    end
+    save(g)
+  end
+
+  local function inside(m, a, b) return m.x >= a.x and m.x <= b.x and m.y >= a.y and m.y <= b.y end
+
+  -- End of the frame: icons first (hand cursor, click); then hover shows the move cursor; click, hold and drag moves
+  -- the group (kept on screen; not when pinned); release keeps the place; double click puts it back
   function Drag.finish(w, h)
     Drag.group = nil
     local k = h / 1080
     local m = ui.mousePos()
+    local ok = m.x >= 0
+    hover = {}
+    for g, z in pairs(zones) do hover[g] = ok and inside(m, z.min, z.max) end
     if active then
       local a = active
       if ui.mouseDown() then
@@ -4454,26 +4580,37 @@ do
       end
       ui.setMouseCursor(ui.MouseCursor.ResizeAll)
       ui.captureMouse(true)
-      rects = {}
-      return
-    end
-    if m.x >= 0 then
-      for g, r in pairs(rects) do
-        if m.x >= r.min.x and m.x <= r.max.x and m.y >= r.min.y and m.y <= r.max.y then
-          ui.setMouseCursor(ui.MouseCursor.ResizeAll)
+    elseif ok then
+      local done = false
+      for _, b in ipairs(buttons) do
+        if inside(m, b.p1, b.p2) then
+          ui.setMouseCursor(ui.MouseCursor.Hand)
           ui.captureMouse(true)
-          if ui.mouseDoubleClicked() then
-            offsets[g] = vec2(0, 0)
-            save(g)
-          elseif ui.mouseClicked() then
-            local o = Drag.offset(g, h)
-            active = { group = g, grab = vec2(m.x - o.x, m.y - o.y), min = r.min, max = r.max, o = o }
-          end
+          if ui.mouseClicked() then press(b.action) end
+          done = true
           break
         end
       end
+      if not done then
+        for g, r in pairs(rects) do
+          if inside(m, r.min, r.max) then
+            ui.captureMouse(true)
+            if not pins[g] then
+              ui.setMouseCursor(ui.MouseCursor.ResizeAll)
+              if ui.mouseDoubleClicked() then
+                offsets[g] = vec2(0, 0)
+                save(g)
+              elseif ui.mouseClicked() then
+                local o = Drag.offset(g, h)
+                active = { group = g, grab = vec2(m.x - o.x, m.y - o.y), min = r.min, max = r.max, o = o }
+              end
+            end
+            break
+          end
+        end
+      end
     end
-    rects = {}
+    rects, zones, buttons = {}, {}, {}
   end
 end
 -- ============================================================
@@ -4591,7 +4728,10 @@ do
 
   drawPitBox = function(car, w, h, s)
     local sv = state.pitService
-    if not PitBox.open and not sv then return end
+    -- Mode (Drag): always hidden = never; auto-hide = stopped at the pit place or during the stop; visible = always
+    -- (outside the pit place only information: the commands work only there)
+    local mode = Drag.mode('pitbox')
+    if mode == 'hidden' or (mode == 'auto' and not PitBox.open and not sv) then return end
     local k = h / 1080
     local bw, bh = BOX_W * s, BOX_H * s
     local o = Drag.offset('pitbox', h)
@@ -4650,6 +4790,7 @@ do
       vec2(p1.x + 14 * s, p2.y - 16 * s), sv and COLOR_SWAP or COLOR_OFF)
     drawTextRight(string.format('%s / %s', mmss(elapsed), mmss(p.total)), FONT_MONO, 10 * s, p2.x - 12 * s,
       p2.y - 16 * s, COLOR_TITLE)
+    Drag.icons('pitbox', p1, p2, s)
   end
 end
 -- ============================================================
@@ -4776,6 +4917,7 @@ do
     drawText(string.format(TEXTS.setupElectronics, num(car.absMode), num(car.tractionControlMode),
       num(car.tractionControl2), num(car.fuelMap), num(car.currentEngineBrakeSetting), num(car.mgukDelivery),
       num(car.mgukRecovery)), FONT_MONO, 9 * s, vec2(p1.x + 14 * s, p2.y - 15 * s), COLOR_TITLE)
+    Drag.icons('setup', p1, p2, s)
   end
 
   -- Tile of a wheel: text and color (bent / broken / punctured / suspension damage %)
@@ -4803,22 +4945,24 @@ do
   -- Body: the nose reaches ahead of the front wheels almost the span of the wishbone base (8); the tail goes back 1/5
   -- of what the nose went forward. The whole car sits 4 higher, clear of the B value below it
   local F1_BODY = { -6, -36, 6, 33 }   -- { left x, top y, right x, bottom y }
-  -- The nose narrows 10% in total at its tip, back to the full width where the cockpit starts (y -9.2)
-  local F1_NOSE_HALF, F1_COCKPIT_Y = 5.4, -9.2
+  -- The nose narrows 15% in total at its tip, back to the full width where the cockpit starts (y -9.2); flat front with
+  -- slightly rounded corners (radius F1_NOSE_R)
+  local F1_NOSE_HALF, F1_COCKPIT_Y, F1_NOSE_R = 5.1, -9.2, 1.5
   local F1_SHIFT = -4
   local F1_WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }   -- { inner x, outer x, top y, bottom y }
   local function drawF1(cx, cy, s)
     local body = COLOR_TITLE
     local function P(x, y) return vec2(cx + x * s, cy + y * s) end
     -- Half width of the body at y: tapered nose, straight from the cockpit back
-    local noseY = F1_BODY[2] + F1_NOSE_HALF
+    local noseY = F1_BODY[2] + F1_NOSE_R
     local function half(y)
       if y >= F1_COCKPIT_Y then return F1_BODY[3] end
       local k = math.max((y - noseY) / (F1_COCKPIT_Y - noseY), 0)
       return F1_NOSE_HALF + (F1_BODY[3] - F1_NOSE_HALF) * k
     end
-    -- Outline: round nose tip, tapered sides to the cockpit, straight sides, round tail
-    ui.pathArcTo(P(0, noseY), F1_NOSE_HALF * s, 0, -math.pi, 12)
+    -- Outline: flat nose with rounded corners, tapered sides to the cockpit, straight sides, round tail
+    ui.pathArcTo(P(F1_NOSE_HALF - F1_NOSE_R, noseY), F1_NOSE_R * s, 0, -math.pi / 2, 4)
+    ui.pathArcTo(P(-F1_NOSE_HALF + F1_NOSE_R, noseY), F1_NOSE_R * s, -math.pi / 2, -math.pi, 4)
     ui.pathLineTo(P(-F1_BODY[3], F1_COCKPIT_Y))
     ui.pathArcTo(P(0, F1_BODY[4] - F1_BODY[3]), F1_BODY[3] * s, math.pi, 0, 12)
     ui.pathLineTo(P(F1_BODY[3], F1_COCKPIT_Y))
@@ -4878,11 +5022,29 @@ do
     drawText(TEXTS.statusEngine, FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, y + 12 * s), COLOR_TITLE)
     drawText(engine >= 1000 and TEXTS.statusOk or string.format('%.0f%%', engine / 10), FONT_MONO, 9 * s,
       vec2(p1.x + 12 * s, y + 23 * s), engine >= 1000 and COLOR_OK or COLOR_WARN)
+    -- Columns measured from their widest text (title or value), so ENGINE, GEARBOX and BOP fit in the same width
+    local function colW(title, widest)
+      return math.max(textWidth(title, FONT_TITLE, 9 * s), textWidth(widest, FONT_MONO, 9 * s)) + 10 * s
+    end
+    local xGear = p1.x + 12 * s + colW(TEXTS.statusEngine, '100%')
+    local xBop = xGear + colW(TEXTS.statusGearbox, TEXTS.statusBrokenShort)
     local gear = num(car.gearboxDamage)
-    drawText(TEXTS.statusGearbox, FONT_TITLE, 9 * s, vec2(p1.x + 88 * s, y + 12 * s), COLOR_TITLE)
+    drawText(TEXTS.statusGearbox, FONT_TITLE, 9 * s, vec2(xGear, y + 12 * s), COLOR_TITLE)
     drawText(gear >= 1 and TEXTS.statusBrokenShort or (gear > 0 and string.format('%.0f%%', (1 - gear) * 100)
-      or TEXTS.statusOk), FONT_MONO, 9 * s, vec2(p1.x + 88 * s, y + 23 * s), gear >= 1 and BORDER_RED
+      or TEXTS.statusOk), FONT_MONO, 9 * s, vec2(xGear, y + 23 * s), gear >= 1 and BORDER_RED
       or (gear > 0 and COLOR_WARN or COLOR_OK))
+    -- Balance of performance set by the organizer (ballast kg, restrictor %); '-' when none. Two lines if one does not fit
+    local kg, rs = num(car.ballast), num(car.restrictor)
+    drawText(TEXTS.statusBop, FONT_TITLE, 9 * s, vec2(xBop, y + 12 * s), COLOR_TITLE)
+    local kgText, rsText = string.format('%.0f kg', kg), string.format('%.0f%%', rs)
+    if kg == 0 and rs == 0 then
+      drawText('-', FONT_MONO, 9 * s, vec2(xBop, y + 23 * s), COLOR_OFF)
+    elseif xBop + textWidth(kgText .. ' ' .. rsText, FONT_MONO, 9 * s) <= p2.x - 10 * s then
+      drawText(kgText .. ' ' .. rsText, FONT_MONO, 9 * s, vec2(xBop, y + 23 * s), COLOR_TITLE)
+    else
+      drawText(kgText, FONT_MONO, 9 * s, vec2(xBop, y + 21 * s), COLOR_TITLE)
+      drawText(rsText, FONT_MONO, 9 * s, vec2(xBop, y + 30 * s), COLOR_TITLE)
+    end
     -- Body (approved screen 12): F bar and value on top, the car outline (a 1960s F1: cigar body, wheels outside) in the
     -- middle, B value and bar at the bottom; L and R values beside the car, their bars outside them. Bar = damage of the
     -- side over the repair limit (bodyRepair); color: over the limit orange, over half yellow, some damage green
@@ -4919,12 +5081,19 @@ do
     drawText(string.format('R %.0f', vR), FONT_MONO, 9 * s, vec2(p2.x - 50 * s, cy - 5 * s), cR)
     vbar(p2.x - 15 * s, kR, cR)
     drawF1(cx, cy + F1_SHIFT * s, s)
+    Drag.icons('status', p1, p2, s)
+  end
+
+  -- Mode of each screen (Drag): always hidden = never; auto-hide = with the pit stop box (stopped at the pit place or
+  -- during the stop); visible = always
+  local function shown(group)
+    local mode = Drag.mode(group)
+    return mode == 'visible' or (mode == 'auto' and (PitBox.open or state.pitService ~= nil))
   end
 
   drawStatus = function(car, w, h, s)
-    if not PitBox.open and not state.pitService then return end
-    drawSetup(car, w, h, s)
-    drawCar(car, w, h, s)
+    if shown('setup') then drawSetup(car, w, h, s) end
+    if shown('status') then drawCar(car, w, h, s) end
   end
 end
 function script.drawUI()
@@ -5009,7 +5178,14 @@ function script.drawUI()
     if c.title and values[i] and not values[i].quiet then anyOn = true end
   end
   local text, color = Panel.message()
-  if intro or (Intro.done and (anyOn or text)) then
+  -- Mode chosen by the driver (Drag): visible / auto-hide (something to show) / always hidden. In any mode the panel
+  -- shows up with the mouse over its place and stopped at the pit place. Always hidden: the boxes below it too
+  local pm = Drag.mode('panel')
+  local panelPlace = { vec2(x, yMsg), vec2(x + boxW, yMsg + msgH) }
+  Drag.zone('panel', panelPlace[1], panelPlace[2])
+  local forced = Drag.hovered('panel') or ac.getCar(0).isInPit
+  local stackOn = pm ~= 'hidden' or forced
+  if intro or (Intro.done and (pm == 'visible' or (pm == 'auto' and (anyOn or text)) or forced)) then
     local p1 = vec2(x, yMsg)
     local p2 = vec2(x + boxW, yMsg + msgH)
     local INTRO_BORDERS = { base = BORDER_BASE, yellow = BORDER_YELLOW, blue = BORDER_BLUE, red = BORDER_RED,
@@ -5081,7 +5257,7 @@ function script.drawUI()
   -- slower. It only disappears when the car is back on track (never in the middle, so it does not blink).
   local cc
   for _, check in pairs(state.cutChecks) do if check.ref then cc = check end end
-  if cc then
+  if cc and stackOn then
     local p1 = vec2(x, ySd)
     local p2 = vec2(x + boxW, ySd + sdH)
     drawPanel(p1, p2, BORDER_YELLOW, s)
@@ -5177,7 +5353,7 @@ function script.drawUI()
   -- Slowdown box (one slowdown at a time; overlapping ones are merged)
   for _, zone in ipairs(config.cutZones) do
     local sd = state.slowdowns[zone.category]
-    if not cc and not sdHidden and sd and sd.active then
+    if stackOn and not cc and not sdHidden and sd and sd.active then
       local p1 = vec2(x, ySd)
       local p2 = vec2(x + boxW, ySd + sdH)
       drawPanel(p1, p2, BORDER_YELLOW, s)
@@ -5213,7 +5389,7 @@ function script.drawUI()
   local dl = state.list
   -- Stop & go box (approved screens 3 and 4): stopped at the pit place, or interrupted waiting for the same driver
   local sgIt = config.sg and sgItem()
-  if not cc and sgIt and (StopAndGo.stopping or StopAndGo.resume) then
+  if stackOn and not cc and sgIt and (StopAndGo.stopping or StopAndGo.resume) then
     local total = sgSeconds(sgIt)
     local left = StopAndGo.remainingMs(sgIt) / 1000
     local h = msgH + math.floor(10 * s)
@@ -5247,7 +5423,7 @@ function script.drawUI()
   -- Drive-through flag (the game no longer shows its drive-through message): the drive-through to serve now, with the
   -- reason and the deadline; +n = more drive-throughs in the list
   local dtHead = dl.items[1]
-  if not cc and dl.dsq == 0 and dtHead and dtHead.kind:sub(1, 2) ~= 'SG' then
+  if stackOn and not cc and dl.dsq == 0 and dtHead and dtHead.kind:sub(1, 2) ~= 'SG' then
     local p2 = vec2(x + boxW, yNext + sdH)
     local more = #dl.items > 1 and string.format(TEXTS.dtMore, #dl.items - 1) or ''
     local deadline = dtHead.laps < 0 and TEXTS.dtOverdue or dtHead.laps == 0 and TEXTS.dtThisLap
@@ -5256,7 +5432,9 @@ function script.drawUI()
       TEXTS.reason[dtHead.cat] or dtHead.cat, deadline, 'dt')
     yNext = p2.y + gap
   end
-  if not cc and dl.dsq > 0 and dl.dsqStage ~= 1 then
+  if not stackOn then
+    -- always hidden: no box below the panel
+  elseif not cc and dl.dsq > 0 and dl.dsqStage ~= 1 then
     local p2 = vec2(x + boxW, yNext + sdH)
     drawFlagBox(vec2(x, yNext), p2, s, BORDER_RED, nil, TEXTS.dsqTitle, BORDER_RED, dl.dsqReason,
       dl.dsqStage == 2 and TEXTS.dsqTow or TEXTS.dsqStop)
@@ -5302,7 +5480,7 @@ function script.drawUI()
       title, line1 = TEXTS.swapActive, TEXTS.swapDisconnect
       line2 = string.format(TEXTS.swapTimes, mmss(clock - sw.stopT), mmss(total))
     end
-    if title then
+    if title and stackOn then
       local ySwap = math.max(ySd + sdH + gap, yNext)
       local p1 = vec2(x, ySwap)
       local p2 = vec2(x + boxW, ySwap + msgH)
@@ -5322,6 +5500,8 @@ function script.drawUI()
     drawPitBox(ac.getCar(0), w, h, sb)
     drawStatus(ac.getCar(0), w, h, sb)
   end
+  -- Icons of the panel (mode, pin, the other screens, reset), with the mouse over it
+  Drag.icons('panel', panelPlace[1], panelPlace[2], s)
   -- Mouse: move cursor over a screen, click, hold and drag to move it; double click puts it back
   Drag.finish(w, h)
 end
