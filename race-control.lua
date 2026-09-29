@@ -84,7 +84,9 @@
 --     each); body = increase of the body damage zones in km/h.
 --   damage = toeBent:10 | toeBroken:20 | camberBent:10 | camberBroken:20 | bodyRepair:150 | powertrainRepair:45 |
 --            maxPunctured:2 | repairLaps:2 |
---            beyondTowSeconds:180 | dsqTowSeconds:180
+--            beyondTowSeconds:180 | dsqTowSeconds:180 | settleSeconds:1
+--     settleSeconds: toe and camber count only with the game reporting suspension damage on the wheel and held this long
+--     (a kerb bends the suspension for an instant and it comes back: elastic, not damage).
 --     Qualifying and race. Toe and camber over the setup, per wheel, in degrees: over the bent limit = black flag with
 --     orange disc (repair required); over the broken limit = damage beyond the safety limit (stop off track, tow).
 --     bodyRepair: body damage of a side over which the repair is required; powertrainRepair: powertrain damage in %
@@ -130,6 +132,14 @@ local cfg = ac.configValues({
   --   from 1x at 1080p (the approved size) up to max. The Race Control panel keeps its own growth (^0.3, up to 1.3x),
   --   so these screens grow slightly more on a big screen (1440p: 1.14x; 4K: 1.37x).
   screenScale = '',
+  -- screens = autoSeconds:5 | closeGap:2.5 | noticeSeconds:3 | serverNoticeSeconds:5 | messageSeconds:5 |
+  --           pitBoxSeconds:5 | indicatorSeconds:2 | buttonSeconds:10
+  --   Times of the screens (decision 212): auto-hide shows a screen by an event (line, sector, damage, position) for
+  --   autoSeconds; the relative while a car is within closeGap seconds; a new penalty in the panel noticeSeconds, a
+  --   server message serverNoticeSeconds; the message window under the panel messageSeconds; the pit stop box after
+  --   a D-pad press away from the pit place pitBoxSeconds; the desktop indicator indicatorSeconds; the time to press
+  --   the button being recorded buttonSeconds.
+  screens = '',
   -- tyreLife = ok:70 | worn:30
   --   Colors of the tyre life in the setup status (remaining life from the wear curve of the compound), graded: green
   --   from ok % up (ok), yellow in the middle of the half life band (worn % to ok %), orange at worn %, red at 0 (end).
@@ -156,6 +166,12 @@ local cfg = ac.configValues({
   -- cockpitExemptSteamIDs: Steam IDs not forced (for example, Race Control / broadcast), separated by '|' (not ';':
   --   it starts a comment in the INI; not ',': the CSP splits the value there and the script gets only the first).
   cockpitExemptSteamIDs = '',
+  -- classes = GT3:model/model | GT4:model (optional): class of each car model (car folder name), for the relative and
+  --   the standings (the SDK has no car class). Empty = no classes.
+  classes = '',
+  -- kmrPoints = limit:100: limit of the KMR infraction points of a driver (shown with his points in the race status;
+  --   the points come from the KMR message of each infraction).
+  kmrPoints = '',
 
   -- ------------------------------------------------------------
   -- 3. Driver swap and pit stops (the ACSM keys must match the ACSM race settings)
@@ -182,6 +198,10 @@ local cfg = ac.configValues({
   --   DSQ, and the original driver cannot come back. 0 = another driver is not allowed (DSQ as he enters). Empty = no
   --   time defined: the new driver takes the penalties over and pays them (not the world standard).
   wrongDriverSeconds = '120',
+  -- driverStint = minMinutes:0 | maxMinutes:0 (optional; race only; decision 198)
+  --   Stint of each driver, from taking the car to the stop at the pit place where he leaves it. Under minMinutes at a
+  --   driver swap, or over maxMinutes while driving: DSQ. 0 = no limit.
+  driverStint = '',
   -- pitStopOrder: order of the operations of the own pit stop box (the AC pit menu is off, so the script times the
   --   stop). Same notation as PITS_ORDER of the CSP [EXTRA_RULES]: F fuel, T tyres, R repair, one after the other;
   --   letters inside < > at the same time. F<TR> = fuel first, then tyres and repair together.
@@ -201,13 +221,6 @@ local cfg = ac.configValues({
   --   not validated, no penalty; missing at the end of the race = DSQ.
   pitStopsEnabled = 0,
   pitStopsRequired = 0,
-  -- driverStint = minMinutes:0 | maxMinutes:0 (optional; race only; decision 198)
-  --   Stint of each driver, from taking the car to the stop at the pit place where he leaves it. Under minMinutes at a
-  --   driver swap, or over maxMinutes while driving: DSQ. 0 = no limit.
-  driverStint = '',
-  -- classes = GT3:model/model | GT4:model (optional): class of each car model (car folder name), for the relative and
-  --   the standings (the SDK has no car class). Empty = no classes.
-  classes = '',
 
   -- ------------------------------------------------------------
   -- 4.1 Penalty control: pit exit while closed
@@ -586,8 +599,11 @@ local TEXTS = {
   scrLaps = 'LAPS', scrLapN = 'Lap %d', scrStint = 'STINT - %s - %d laps', scrRace = 'RACE STATUS',
   scrCurrent = 'Current', scrNow = 'Now', scrBest = 'Best', scrOptimal = 'Optimal', scrLast = 'Last',
   scrSession = 'Session', scrInvalid = 'INVALID', scrTime = 'Time left', scrPosition = 'Position', scrLap = 'Lap',
-  scrLeader = 'Leader', scrAhead = 'Ahead', scrBehind = 'Behind', scrStops = 'Stops', scrSwaps = 'Swaps',
-  scrWindow = 'Pit window', scrStintLine = 'Stint', scrTyres = 'Tyres', scrPending = 'Pending',
+  scrLeader = 'Leader', scrAhead = 'Ahead', scrBehind = 'Behind', scrStops = 'STOPS', scrSwaps = 'SWAPS',
+  scrWindow = 'PIT WINDOW', scrStintLine = 'STINT', scrTyres = 'Tyres', scrPending = 'Pending',
+  scrOpt = 'Opt.', scrCarBest = 'Car best', scrStintN = 'STINT %d - %s', scrStintInfo = '%d laps - %s',
+  scrStintMin = ' / min %d', scrBestAvg = 'Best %s - avg %s', scrDeltaButton = 'Δ',
+  scrGaps = 'GAPS', scrObligations = 'OBLIGATIONS', scrTrack = 'Track', scrKmr = 'KMR points',
   sessionName = { [ac.SessionType.Practice] = 'PRACTICE', [ac.SessionType.Qualify] = 'QUALIFY', [ac.SessionType.Race] = 'RACE' },
   -- desktop editor and indicator (draw/desktop_editor.lua)
   edTitle = 'SCREENS', edPitDesk = 'Pit desktop', edDeskOf = 'Desktop %s of %d', edHint = 'drag a screen to its place - title line moves this window',
@@ -596,6 +612,13 @@ local TEXTS = {
   edPitWarning = 'PIT desktop off: nothing more is shown in the pit lane - at your own risk',
   edButtons = 'Next screen %s - Previous screen %s - Next desktop %s - Previous desktop %s (CSP controls)',
   edIndicator = 'DESKTOP %d / %d - %s',
+  menuButtons = 'Buttons', navTitle = 'BUTTONS', navOwn = 'RECORDED BY THE TOOL', navCsp = 'CSP CONTROLS',
+  navNextScreen = 'Next screen', navPrevScreen = 'Previous screen', navNextDesktop = 'Next desktop',
+  navPrevDesktop = 'Previous desktop', navSet = 'Set', navClear = 'Clear', navPress = 'Press a button... %d s',
+  navButton = '%s - button %d', navPov = '%s - D-pad %d deg', navGamepad = 'Gamepad %d - %s', navKey = 'Key %s',
+  navDeviceOff = 'device off',
+  menuDesktops = 'Desktops', menuAudit = 'Audit', auditTitle = 'AUDIT', auditPoints = 'KMR points %d / %d',
+  auditCount = '%d messages', auditEmpty = 'No messages in this session',
   edPin = 'Pin to all', edPinned = 'On all desktops', edMode = 'Mode: %s', edRemove = 'Remove',
   edChoose = 'Click a screen to choose it and drag it to its place',
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
@@ -679,12 +702,9 @@ local SCREEN_SCALE = structKey('screenScale', { exponent = 0.45, max = 1.5 })
 local TYRE_LIFE = structKey('tyreLife', { ok = 70, worn = 30 })
 local TYRE_TEMP = structKey('tyreTemp', { edge = 98 })
 local WRONG_WAY = structKey('wrongWay', { maxMeters = 30, penalty = 'DSQ', showMeters = 2, angle = 90 })
-local DRIVER_STINT = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 })
-local FLAGS = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
-  greenSeconds = 5 })
 local DAMAGE = structKey('damage', { toeBent = 10, toeBroken = 20, camberBent = 10, camberBroken = 20, bodyRepair = 150,
   powertrainRepair = 45,
-  maxPunctured = 2, repairLaps = 2, beyondTowSeconds = 180, dsqTowSeconds = 180 })
+  maxPunctured = 2, repairLaps = 2, beyondTowSeconds = 180, dsqTowSeconds = 180, settleSeconds = 1 })
 
 local function makeZone(category, startPos, endPos, maxWheelsOut, rules, deadline, maxGas, gainTolerance)
   local s = tonumber(startPos) or 0
@@ -737,8 +757,12 @@ local config = {
   tyreLife = TYRE_LIFE,
   tyreTemp = TYRE_TEMP,
   wrongWay = WRONG_WAY,
-  flags = FLAGS,
-  driverStint = DRIVER_STINT,
+  flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
+    greenSeconds = 5 }),
+  driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
+  kmrPoints = structKey('kmrPoints', { limit = 100 }),
+  screens = structKey('screens', { autoSeconds = 5, closeGap = 2.5, noticeSeconds = 3, serverNoticeSeconds = 5,
+    messageSeconds = 5, pitBoxSeconds = 5, indicatorSeconds = 2, buttonSeconds = 10 }),
   -- Tow per session: mode ('TOW', 'RESET', 'NONE'), towSeconds, repairFactor
   tow = bySession(
     structKey('practiceTow', { mode = 'RESET', towSeconds = 0, repairFactor = 0, clearDsq = 1 }),
@@ -759,6 +783,7 @@ local config = {
     powertrainRepair = DAMAGE.powertrainRepair,
     maxPunctured = DAMAGE.maxPunctured,
     repairLaps = DAMAGE.repairLaps,
+    settleSeconds = DAMAGE.settleSeconds,
   },
 
   pit = {
@@ -1184,8 +1209,9 @@ end
 
 -- Penalty message box: a new penalty is shown for NOTICE_SECONDS, then the box goes back to the one being paid.
 -- Server messages (KMR, ACSM) are shown for SERVER_NOTICE_SECONDS.
-local NOTICE_SECONDS = 3
-local SERVER_NOTICE_SECONDS = 5
+-- (key screens: noticeSeconds, serverNoticeSeconds)
+local NOTICE_SECONDS = config.screens.noticeSeconds
+local SERVER_NOTICE_SECONDS = config.screens.serverNoticeSeconds
 
 local function showNotice(title, text, item, seconds, flag)
   state.ui.notice = { title = title, text = text, item = item, flag = flag,
@@ -1932,9 +1958,91 @@ local function updateSwapRelay()
   end
 end
 
+-- ============================================================
+-- Audit (decision 209): the server messages taken off the chat (KMR, ACSM: with the chat minimized the CSP shows them on
+-- top of the screen) are kept here, shown for a few seconds in our message window under the panel and listed in the
+-- Audit screen (gear of the panel). Kept on this computer for the session (ac.storage), so a crash does not lose them.
+-- KMR points (decision 210): the KMR message of an infraction ("Penalty +1 (3/100): ... You now have 21p.",
+-- Portuguese "Penalidade +1 (3/100): ..."; KMR language file, money_penalty) gives the driver's infraction points
+-- before the bar; the limit is the key kmrPoints (limit:100); a limit in the message that differs goes to the log.
+-- Kept per driver in the car record 'kmr' on this computer: back after a crash; another driver starts at '-'.
+-- ============================================================
+
+local Audit = { items = {}, window = {}, open = false, scroll = 0, points = nil, pointsDriver = nil }
+do
+  local MAX_ITEMS = 200
+  local STORAGE_KEY = 'rc.audit'
+
+  local function save()
+    local lines = { Record.key() }
+    for _, it in ipairs(Audit.items) do
+      lines[#lines + 1] = string.format('%d|%s|%s', math.floor(it.t), it.src, (it.text:gsub('[\r\n]', ' ')))
+    end
+    ac.storage[STORAGE_KEY] = table.concat(lines, '\n')
+  end
+
+  -- Session start or reload: the messages of this session on this computer
+  function Audit.load()
+    Audit.items, Audit.window, Audit.scroll = {}, {}, 0
+    local text = tostring(ac.storage[STORAGE_KEY] or '')
+    local first = true
+    for line in text:gmatch('[^\n]+') do
+      if first then
+        first = false
+        if not Record.sameRace(line, Record.key()) then break end
+      else
+        local t, src, msg = line:match('^(%-?%d+)|(%w+)|(.*)$')
+        if t then Audit.items[#Audit.items + 1] = { t = tonumber(t), src = src, text = msg } end
+      end
+    end
+    -- KMR points of the driver in the car
+    local body = Record.load('kmr')
+    local driver, points = tostring(body or ''):match('^(%d+)|(%d+)$')
+    local me = nameCode(ac.getDriverName(0))
+    if driver and tonumber(driver) == me then Audit.points, Audit.pointsDriver = tonumber(points), me
+    else Audit.points, Audit.pointsDriver = nil, nil end
+  end
+
+  -- A message taken off the chat: kept; shown in the message window for a few seconds only when no other part of our
+  -- screen shows it (window = true: the KMR points; the drive-through and the flags are already in the panel)
+  function Audit.add(src, text, window)
+    Audit.items[#Audit.items + 1] = { t = serverTimeMs(), src = src, text = tostring(text) }
+    if #Audit.items > MAX_ITEMS then table.remove(Audit.items, 1) end
+    if window then Audit.window[#Audit.window + 1] = { src = src, text = tostring(text) } end
+    ac.log('race-control: audit ' .. src .. ': ' .. tostring(text))
+    save()
+  end
+
+  -- The message of the window now (one at a time, each screens.messageSeconds, in order)
+  function Audit.current()
+    local w = Audit.window[1]
+    if not w then return nil end
+    w.untilT = w.untilT or (state.ui.clock + config.screens.messageSeconds)
+    if state.ui.clock >= w.untilT then
+      table.remove(Audit.window, 1)
+      return Audit.current()
+    end
+    return w
+  end
+
+  -- KMR infraction message: points of this driver (the number before the bar), limit checked against the key
+  function Audit.kmrPoints(message)
+    local points, limit = tostring(message):match('^%s*Penal%a*%s*%+%d+%s*%((%d+)/(%d+)%)')
+    if not points then return false end
+    Audit.points, Audit.pointsDriver = tonumber(points), nameCode(ac.getDriverName(0))
+    Record.save('kmr', Audit.points, string.format('%d|%d', Audit.pointsDriver, Audit.points))
+    if tonumber(limit) ~= config.kmrPoints.limit then
+      ac.log(string.format('race-control: KMR limit in the message %s differs from the key kmrPoints (%d)', limit,
+        config.kmrPoints.limit))
+    end
+    return true
+  end
+end
 -- Chat: Race Control lines are for the server log only, hidden from the chat of every client. Server messages
 -- (fromServer: KMR or ACSM) that match the dictionary are also shown in the penalty message box, and the
--- ACSM driver swap messages feed the driver swap panel; everything stays in the chat.
+-- ACSM driver swap messages feed the driver swap panel. Those, and the KMR infraction points, are taken off the chat
+-- (decision 209: with the chat minimized the CSP shows the chat on top of the screen): they go to the Audit and to our
+-- message window under the panel. Other server messages (free text of the Race Control) stay in the chat.
 -- A message from the server: -1 (SDK: "or -1 if message comes from server"; a broadcast, e.g. VSC), or a sender that
 -- is no connected car: a message the server sends to one car (ACSM chat to the driver, udp SendChat; KMR messages to
 -- the driver) arrives with no name in the chat. A driver's message always comes from the driver's own car.
@@ -1981,9 +2089,18 @@ ac.onChatMessage(function(message, senderCarIndex)
     if message:sub(1, #prefix) == prefix then text = message:sub(#prefix + 1):gsub('^%s+', '') end
     showNotice(TEXTS.kmrTitle, text, nil, SERVER_NOTICE_SECONDS)
     state.kmrMessages[#state.kmrMessages + 1] = { text = text, sender = senderCarIndex }
-    return false
+    Audit.add('KMR', text)
+    return true
   end
-  if server and onDriverSwapMessage(message) then return false end
+  if server and onDriverSwapMessage(message) then
+    Audit.add('ACSM', message)
+    return true
+  end
+  -- KMR infraction: the points of this driver (decision 210)
+  if (server or senderCarIndex == 0) and Audit.kmrPoints(message) then
+    Audit.add('KMR', message, true)
+    return true
+  end
   if server then
     local kind = classifyServerMessage(message)
     if kind then
@@ -2000,6 +2117,8 @@ ac.onChatMessage(function(message, senderCarIndex)
         ac.log('race-control: CODE-80 end')
       end
       showNotice(TEXTS.rcTitle .. '  ' .. kind, message, nil, SERVER_NOTICE_SECONDS, kind)
+      Audit.add('KMR', message)
+      return true
     end
   end
   return false
@@ -2420,6 +2539,7 @@ local CarState = {
   lastBody = nil,      -- state of the last frame (saved on a teleport, before the game changes the car)
   orig = {},           -- [wheel] = { toe, camber } with no suspension damage
   peak = {},           -- [wheel] = { toe, camber }: highest deviation over orig since the damage (decision 167)
+  held = {},           -- [wheel] = readings of the last settleSeconds with damage (decision 208)
   search = nil,        -- suspension being put back: [wheel] = { target %, lo, hi, kmh, steps, wait }
   suspKmh = {},        -- [wheel] = km/h that gives the suspension damage of the wheel (known after putting it back)
   suspRaw = {},        -- [wheel] = suspension damage read (0..1) when suspKmh was known
@@ -2452,14 +2572,18 @@ do
     local dev = math.max(math.abs(num(w.toeIn) - o.toe), math.abs(num(w.camber) - o.camber))
     return math.min(dev / SUSP_MAX_ANGLE, 1) * 100
   end
-  -- Deviation of a wheel over the setup that counts for the damage (decision 167): toe and camber, each the highest of
-  -- now and of the peak since the damage (nil while the wheel has no reference)
+  -- Deviation of a wheel over the setup that counts for the damage (decisions 167, 208): only with the game reporting
+  -- damage on that wheel (suspensionDamage above 0: the damage that stays), and only a deviation held for
+  -- damage.settleSeconds (the kerb bends the suspension for an instant and it comes back: elastic, not damage); the
+  -- highest held since the damage (the angle read changes with the steering). 0, 0 with no damage; nil while the wheel
+  -- has no reference
   function CarState.deviation(car, i)
     local w = car.wheels and car.wheels[i]
     local o = CarState.orig[i]
     if not w or not o then return nil end
+    if num(car.suspensionDamage[i]) <= 0 then return 0, 0 end
     local pk = CarState.peak[i] or { toe = 0, camber = 0 }
-    return math.max(pk.toe, math.abs(num(w.toeIn) - o.toe)), math.max(pk.camber, math.abs(num(w.camber) - o.camber))
+    return pk.toe, pk.camber
   end
   -- Suspension damage % shown (decision 167): by the deviation that counts
   function CarState.suspPercent(car, i)
@@ -2690,11 +2814,23 @@ do
       if w and num(car.suspensionDamage[i]) == 0 and not searching then
         CarState.orig[i] = { toe = num(w.toeIn), camber = num(w.camber) }
         CarState.peak[i] = nil
+        CarState.held[i] = nil
       elseif w and CarState.orig[i] and not searching then
-        -- Damaged: the highest deviation holds (the angle read changes with the steering, decision 167)
-        local o, pk = CarState.orig[i], CarState.peak[i] or { toe = 0, camber = 0 }
-        CarState.peak[i] = { toe = math.max(pk.toe, math.abs(num(w.toeIn) - o.toe)),
-          camber = math.max(pk.camber, math.abs(num(w.camber) - o.camber)) }
+        -- Damaged: the deviation counts once held for settleSeconds (the lowest of that window: a kerb spike does not
+        -- last); the highest held one stays (the angle read changes with the steering, decisions 167, 208)
+        local o = CarState.orig[i]
+        local now = state.ui.clock
+        local list = CarState.held[i] or {}
+        CarState.held[i] = list
+        list[#list + 1] = { t = now, toe = math.abs(num(w.toeIn) - o.toe), camber = math.abs(num(w.camber) - o.camber) }
+        local settle = config.damage.settleSeconds
+        while #list > 1 and now - list[2].t >= settle do table.remove(list, 1) end
+        if now - list[1].t >= settle then
+          local toe, camber = math.huge, math.huge
+          for _, v in ipairs(list) do toe, camber = math.min(toe, v.toe), math.min(camber, v.camber) end
+          local pk = CarState.peak[i] or { toe = 0, camber = 0 }
+          CarState.peak[i] = { toe = math.max(pk.toe, toe), camber = math.max(pk.camber, camber) }
+        end
       end
       if not searching and CarState.suspKmh[i] and num(car.suspensionDamage[i]) ~= CarState.suspRaw[i] then
         CarState.suspKmh[i] = nil
@@ -3281,7 +3417,6 @@ do
   end
   local SERVICE_LOCK_EXTRA = 1   -- seconds added to the lock so the stop ends with the car still locked
 
-  local SHOW_SECONDS = 5          -- a key press away from the pit place shows the box this long
   -- Keyboard buttons (at the pit place) and gamepad buttons (anywhere), each configurable in the CSP controls
   local function button(name, key, period)
     return ac.ControlButton('12hcuritiba.race-control/Pit stop ' .. name, { keyboard = { key = key }, period = period })
@@ -3566,7 +3701,7 @@ do
     local confirm = right and ROWS[PitBox.row] == 'mode'
     if left then choose(car, -1) end
     if right and not confirm then choose(car, 1) end
-    if (up or down or left or right) and not PitBox.open then PitBox.shownUntil = state.ui.clock + SHOW_SECONDS end
+    if (up or down or left or right) and not PitBox.open then PitBox.shownUntil = state.ui.clock + config.screens.pitBoxSeconds end
     if not PitBox.open then return end
     -- Anything chosen starts the stop: fuel, tyres or a repair (a repair can take 0 s: only collision damage is
     -- charged, and none is recorded without the tow of the session). AUTO: arriving at the pit place with the box
@@ -4636,7 +4771,7 @@ end
 -- DSQ. Race only.
 -- ============================================================
 
-local RaceTable = { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0,
+local RaceTable = { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, stops = {}, passes = {},
   stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0 }, stintDone = false, maxDsq = false, prevParked = nil }
 do
   local REFRESH = 0.25
@@ -4654,6 +4789,35 @@ do
     return classes[tostring(ac.getCarID(i) or ''):lower()]
   end
 
+  -- Stops of each car (the PIT column): a pass through the pit lane in which the car stopped at its own pit place
+  -- (car.isInPitlane, car.isInPit: read for every car), seen by this client; kept on this computer for the session
+  local STOPS_KEY = 'rc.stops'
+  local function stopsSave()
+    local parts = {}
+    for i, n in pairs(RaceTable.stops) do parts[#parts + 1] = i .. ':' .. n end
+    ac.storage[STOPS_KEY] = Record.key() .. '\n' .. table.concat(parts, ';')
+  end
+  local function stopsLoad()
+    RaceTable.stops, RaceTable.passes = {}, {}
+    local key, body = tostring(ac.storage[STOPS_KEY] or ''):match('^([^\n]*)\n(.*)$')
+    if not key or not Record.sameSession(key, Record.key()) then return end
+    for i, n in body:gmatch('(%d+):(%d+)') do RaceTable.stops[tonumber(i)] = tonumber(n) end
+  end
+  local function stopsWatch(c)
+    local ps = RaceTable.passes[c.index] or {}
+    RaceTable.passes[c.index] = ps
+    if c.isInPitlane then
+      ps.lane = true
+      if c.isInPit then ps.parked = true end
+    elseif ps.lane then
+      if ps.parked then
+        RaceTable.stops[c.index] = (RaceTable.stops[c.index] or 0) + 1
+        stopsSave()
+      end
+      ps.lane, ps.parked = false, false
+    end
+  end
+
   -- Standings and the cars around, from the leaderboard and each car
   function RaceTable.refresh()
     local session = ac.getSession(sim.currentSessionIndex)
@@ -4664,12 +4828,14 @@ do
         local e = board[k]
         local c = e and e.car
         if c then
+          stopsWatch(c)
           local cls = RaceTable.classOf(c.index)
           if cls then classPos[cls] = (classPos[cls] or 0) + 1 end
           local r = { index = c.index, pos = #rows + 1, classPos = cls and classPos[cls] or nil, class = cls,
             number = ac.getDriverNumber(c.index) or c.index, name = tostring(ac.getDriverName(c.index) or ''),
             team = tostring(ac.getDriverTeam(c.index) or ''), laps = e.laps or 0, best = e.bestLapTimeMs or 0,
-            spline = CarRead.num(c.splinePosition), inPit = c.isInPitlane, connected = c.isConnected }
+            spline = CarRead.num(c.splinePosition), inPit = c.isInPitlane, connected = c.isConnected,
+            stops = RaceTable.stops[c.index] or 0 }
           rows[#rows + 1] = r
           byIndex[c.index] = r
         end
@@ -4716,6 +4882,7 @@ do
   -- Session start or reload: this car's laps and stint of this session
   function RaceTable.load()
     lapsApply(Record.load('laps'))
+    stopsLoad()
     local body, seq = Record.load('stint')
     RaceTable.stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0 }
     if body then stintApply(body, seq) end
@@ -4764,8 +4931,9 @@ do
   function RaceTable.update(car, lineFrame, viaPit)
     if lineFrame and CarRead.num(car.previousLapTimeMs) > 0 then
       local s = {}
-      for k = 0, #(car.lastSplits or {}) do
-        local v = car.lastSplits[k]
+      local splits = car.lastSplits or {}
+      for k = 0, #splits do
+        local v = splits[k]
         if v then s[#s + 1] = math.floor(CarRead.num(v)) end
       end
       local laps = RaceTable.laps
@@ -5477,7 +5645,6 @@ local Desktop = { current = 1, count = 1, pitOn = true, place = {}, focus = nil,
 do
   local SCREENS = { 'pitbox', 'setup', 'status', 'race', 'laps', 'standings', 'relative', 'laptime', 'delta' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
-  local INDICATOR_SECONDS = 2
   local STORAGE_KEY = 'rc.desktops'
   Desktop.SCREENS = SCREENS
 
@@ -5636,7 +5803,7 @@ do
   end
   function Desktop.go(dir)
     Desktop.current = (Desktop.current - 1 + dir) % Desktop.count + 1
-    Desktop.indicatorUntil = state.ui.clock + INDICATOR_SECONDS
+    Desktop.indicatorUntil = state.ui.clock + config.screens.indicatorSeconds
     Desktop.focus = nil
     Desktop.save()
   end
@@ -5682,11 +5849,139 @@ do
   end
   PitBox.padFor = Desktop.padFor
 
+  -- Auto-hide events (decision 212): each one shows its screens for screens.autoSeconds
+  Desktop.events = {}
+  local last = { lap = nil, sector = nil, damage = nil, class = nil, pos = nil, closeT = 0 }
+  local function pulse(k) Desktop.events[k] = state.ui.clock + config.screens.autoSeconds end
+  function Desktop.recent(k) return state.ui.clock < (Desktop.events[k] or 0) end
+  Desktop.close = false
+  local function events(car)
+    if last.lap and car.lapCount ~= last.lap then pulse('line') end
+    last.lap = car.lapCount
+    local sector = CarRead.num(car.currentSector)
+    if last.sector and sector ~= last.sector then pulse('sector') end
+    last.sector = sector
+    -- Damage: grows, or its class changes (tyres and temperatures do not count: they change all the time)
+    local total = (1000 - CarRead.num(car.engineLifeLeft)) / 10 + CarRead.num(car.gearboxDamage) * 100
+    for i = 0, 3 do total = total + CarRead.num(car.damage[i]) + CarRead.num(car.suspensionDamage[i]) * 100 end
+    if (last.damage and total > last.damage + 0.5) or (last.class and state.repair.class ~= last.class) then pulse('damage') end
+    last.damage, last.class = total, state.repair.class
+    local me = RaceTable.byIndex[0]
+    if me and last.pos and me.pos ~= last.pos then pulse('position') end
+    last.pos = me and me.pos or last.pos
+    -- A car within closeGap seconds (4 times a second): the relative stays while it lasts, then autoSeconds more
+    if state.ui.clock >= last.closeT then
+      last.closeT = state.ui.clock + 0.25
+      local close = false
+      for _, r in ipairs(RaceTable.rows) do
+        if r.index ~= 0 and r.connected and not r.inPit and math.abs(ac.getGapBetweenCars(0, r.index)) <= config.screens.closeGap then
+          close = true
+        end
+      end
+      if Desktop.close and not close then pulse('closeEnd') end
+      Desktop.close = close
+    end
+  end
+
+  -- Own buttons of the navigation (decision 212): recorded by the tool itself on any device (DirectInput button or
+  -- D-pad of a wheel or button box, gamepad button, key), kept on this computer; the CSP controls binding still works.
+  -- Device by its instance GUID (the same in every session; SDK). The SDK reads a button held: the press is the change
+  local BIND_KEY = 'rc.nav'
+  Desktop.binds = {}
+  local down = {}
+  local function bindSave()
+    local parts = {}
+    for name, b in pairs(Desktop.binds) do parts[#parts + 1] = name .. '=' .. b end
+    ac.storage[BIND_KEY] = table.concat(parts, ';')
+  end
+  for name, b in tostring(ac.storage[BIND_KEY] or ''):gmatch('(%a+)=([^;]+)') do Desktop.binds[name] = b end
+  -- Is the input of a binding held now: j:<guid>:<button>, p:<guid>:<pov>:<angle>, g:<pad>:<id>, k:<key>
+  local function held(b)
+    local kind, a, c, d = b:match('^(%a):([^:]*):?([^:]*):?([^:]*)$')
+    if kind == 'j' or kind == 'p' then
+      local j = ac.getJoystickIndexByInstanceGUID and ac.getJoystickIndexByInstanceGUID(a)
+      if not j then return false end
+      if kind == 'j' then return ac.isJoystickButtonPressed(j, tonumber(c)) == true end
+      return ac.getJoystickDpadValue(j, tonumber(c)) == tonumber(d)
+    elseif kind == 'g' then return ac.isGamepadButtonPressed(tonumber(a), tonumber(c)) == true
+    elseif kind == 'k' then return ac.isKeyDown(tonumber(a)) == true end
+    return false
+  end
+  local function bindPressed(name)
+    local b = Desktop.binds[name]
+    if not b then return false end
+    local now = held(b)
+    local was = down[name]
+    down[name] = now
+    return now and not was
+  end
+  -- Every input held now: the snapshot of the recording (the first input that changes is the button)
+  local function snapshot()
+    local out = {}
+    for j = 0, (ac.getJoystickCount and ac.getJoystickCount() or 0) - 1 do
+      local guid = ac.getJoystickInstanceGUID(j)
+      if guid then
+        for bt = 0, ac.getJoystickButtonsCount(j) - 1 do
+          if ac.isJoystickButtonPressed(j, bt) then out['j:' .. guid .. ':' .. bt] = true end
+        end
+        for pv = 0, ac.getJoystickDpadsCount(j) - 1 do
+          local v = ac.getJoystickDpadValue(j, pv)
+          if v and v >= 0 then out['p:' .. guid .. ':' .. pv .. ':' .. v] = true end
+        end
+      end
+    end
+    for pad = 0, 7 do
+      for _, id in pairs(ac.GamepadButton) do
+        if ac.isGamepadButtonPressed(pad, id) then out['g:' .. pad .. ':' .. id] = true end
+      end
+    end
+    for key = 8, 254 do if ac.isKeyDown(key) then out['k:' .. key] = true end end
+    return out
+  end
+  Desktop.capture = nil      -- { name, before, untilT }: recording the button of a command
+  function Desktop.startCapture(name)
+    Desktop.capture = { name = name, before = snapshot(), untilT = state.ui.clock + config.screens.buttonSeconds }
+  end
+  function Desktop.clearBind(name) Desktop.binds[name] = nil; bindSave() end
+  -- Name of the device and the button of a binding, for the screen
+  function Desktop.bindText(name)
+    local b = Desktop.binds[name]
+    if not b then return nil end
+    local kind, a, c, d = b:match('^(%a):([^:]*):?([^:]*):?([^:]*)$')
+    if kind == 'j' or kind == 'p' then
+      local j = ac.getJoystickIndexByInstanceGUID and ac.getJoystickIndexByInstanceGUID(a)
+      local dev = j and ac.getJoystickName(j) or TEXTS.navDeviceOff
+      return kind == 'j' and string.format(TEXTS.navButton, dev, tonumber(c) + 1)
+        or string.format(TEXTS.navPov, dev, tonumber(d) / 100)
+    elseif kind == 'g' then return string.format(TEXTS.navGamepad, tonumber(a) + 1, c)
+    elseif kind == 'k' then return string.format(TEXTS.navKey, a) end
+    return b
+  end
+  local function captureUpdate()
+    local cap = Desktop.capture
+    if not cap then return end
+    if state.ui.clock > cap.untilT then Desktop.capture = nil return end
+    local now = snapshot()
+    for b in pairs(now) do
+      if not cap.before[b] then
+        Desktop.binds[cap.name] = b
+        down[cap.name] = true         -- the press that recorded it does not act
+        bindSave()
+        Desktop.capture = nil
+        return
+      end
+    end
+    cap.before = now
+  end
+
   function Desktop.update(car)
-    if NAV.nextDesktop:pressed() then Desktop.go(1) end
-    if NAV.prevDesktop:pressed() then Desktop.go(-1) end
-    if NAV.nextScreen:pressed() then moveFocus(1) end
-    if NAV.prevScreen:pressed() then moveFocus(-1) end
+    events(car)
+    captureUpdate()
+    local nav = not Desktop.capture
+    if nav and (NAV.nextDesktop:pressed() or bindPressed('nextDesktop')) then Desktop.go(1) end
+    if nav and (NAV.prevDesktop:pressed() or bindPressed('prevDesktop')) then Desktop.go(-1) end
+    if nav and (NAV.nextScreen:pressed() or bindPressed('nextScreen')) then moveFocus(1) end
+    if nav and (NAV.prevScreen:pressed() or bindPressed('prevScreen')) then moveFocus(-1) end
     -- In the pit lane the pit stop box takes the focus
     if car.isInPitlane and Desktop.wasInPit == false then Desktop.focus = 'pitbox' end
     Desktop.wasInPit = car.isInPitlane
@@ -5802,8 +6097,8 @@ do
     local row = {}
     if group == 'panel' then
       -- The gear: options of the tool, the desktop editor (decision 192)
-      row[#row + 1] = { ui.Icons.Settings, Desktop.editor and ICON_ON or ICON_COLOR,
-        function() Desktop.editor = not Desktop.editor end }
+      row[#row + 1] = { ui.Icons.Settings, (Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons) and ICON_ON or ICON_COLOR,
+        function() Desktop.menu = not Desktop.menu end }
       for _, it in ipairs({ { ui.Icons.Sliders, 'setup' }, { ui.Icons.PitStop, 'pitbox' },
           { ui.Icons.CarFront, 'status' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
@@ -6703,9 +6998,12 @@ local drawStatus
 
   -- Mode of each screen (Drag): always hidden = never; auto-hide = in the pit lane or during the stop (decision 154);
   -- visible = always
+  -- Auto-hide: in the pit lane and during the stop; the car status also for screens.autoSeconds after the damage grows
+  -- or changes class (decision 212)
   local function shown(group, car)
     local mode = Drag.mode(group)
-    return mode == 'visible' or (mode == 'auto' and (car.isInPitlane or PitBox.open or state.pitService ~= nil))
+    local event = group == 'status' and Desktop.recent('damage')
+    return mode == 'visible' or (mode == 'auto' and (car.isInPitlane or PitBox.open or state.pitService ~= nil or event))
   end
 
   drawStatus = function(car, w, h, s)
@@ -6718,7 +7016,8 @@ end)()
 -- the driver, race status, lap time, delta (its own screen, shown by the button next to the lap time title), relative
 -- (5 above and 5 below, overall or class position by the filter) and standings. They only read (RaceTable, CarRead,
 -- state): nothing is decided here. Each one is a screen of the screen control (Drag): moved, mode, pin.
--- Auto-hide: relative, lap time and delta on track; race status and standings in the pit lane; laps when chosen.
+-- Auto-hide (decision 212): each screen by the events of the race (line, sector, position, a car close), for
+-- screens.autoSeconds; the relative while a car is within screens.closeGap seconds.
 -- Colors of times: purple = best of the session, green = best of this car, red = cut or slower.
 -- ============================================================
 
@@ -6732,6 +7031,7 @@ local drawRaceScreens = (function()
   local RED = PANEL_COLORS.red
   local BLUE = PANEL_COLORS.blue
   local YELLOW = PANEL_COLORS.yellow
+  local ORANGE = rgbm(1, 0.54, 0.11, 1)
   local ROW = 13          -- px at 1080p
   local FS = 10           -- font of the rows
   -- Place of each screen at 1080p (top left) and its width; the height comes from its rows
@@ -6743,6 +7043,10 @@ local drawRaceScreens = (function()
     if not ms or ms <= 0 then return '-' end
     local s = ms / 1000
     return string.format('%d:%06.3f', math.floor(s / 60), s % 60)
+  end
+  local function hms(ms)
+    local t = math.max(math.floor((ms or 0) / 1000), 0)
+    return string.format('%d:%02d:%02d', math.floor(t / 3600), math.floor(t / 60) % 60, t % 60)
   end
   local function secs(ms) return (ms and ms > 0) and string.format('%.3f', ms / 1000) or '-' end
 
@@ -6854,45 +7158,52 @@ local drawRaceScreens = (function()
     local p1, p2, y = frame('standings', w, h, s, last - first + 2, TEXTS.scrStandings, nil)
     chips('standings', p1, p2, s)
     row(p1, y, s, { { 'P', 32, COLOR_AXIS, true }, { 'CL', 52, COLOR_AXIS, true }, { '#', 58, COLOR_AXIS },
-      { 'DRIVER', 88, COLOR_AXIS }, { 'CLASS', 240, COLOR_AXIS }, { 'LAPS', 300, COLOR_AXIS, true },
-      { 'GAP', 346, COLOR_AXIS, true }, { 'BEST', 416, COLOR_AXIS, true } })
+      { 'DRIVER', 88, COLOR_AXIS }, { 'CLASS', 214, COLOR_AXIS }, { 'LAPS', 266, COLOR_AXIS, true },
+      { 'GAP', 306, COLOR_AXIS, true }, { 'INT', 346, COLOR_AXIS, true }, { 'BEST', 398, COLOR_AXIS, true },
+      { 'PIT', 416, COLOR_AXIS, true } })
     y = y + ROW * s
     local leader = list[1]
     local sessionBest = CarRead.num(sim.bestLapTimeMs)
+    -- Gap to a car in front: laps of difference, or the seconds
+    local function gapTo(r, front)
+      if not front or r == front then return '-' end
+      local dl = front.laps - r.laps
+      return dl >= 1 and string.format('%d L', dl) or string.format('%.1f', math.abs(ac.getGapBetweenCars(r.index, front.index)))
+    end
     for i = first, last do
       local r = list[i]
       local me = r.index == 0
       local col = me and YELLOW or COLOR_TITLE
-      local gap = '-'
-      if leader and r ~= leader then
-        local dl = leader.laps - r.laps
-        gap = dl >= 1 and string.format('%d L', dl) or string.format('%.1f', math.abs(ac.getGapBetweenCars(r.index, leader.index)))
-      end
       row(p1, y, s, {
         { tostring(r.pos), 32, col, true }, { tostring(r.classPos or '-'), 52, COLOR_DIM, true },
         { '#' .. r.number, 58, col }, { r.name, 88, col, false, me and FONT_TITLE or FONT_TEXT },
-        { r.class or '', 240, COLOR_OFF }, { tostring(r.laps), 300, col, true }, { gap, 346, col, true },
-        { lapTime(r.best), 416, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
+        { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 266, col, true }, { gapTo(r, leader), 306, col, true },
+        { gapTo(r, list[i - 1]), 346, col, true },
+        { lapTime(r.best), 398, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
+        { tostring(r.stops or 0), 416, col, true },
       })
       y = y + ROW * s
     end
     Drag.icons('standings', p1, p2, s)
   end
 
+  -- Lap time by the approved model (screen 5): current; sectors now / best / optimal; last, best, session (with the
+  -- car), optimal; the delta button next to the title
   local function lapTimeScreen(car, w, h, s)
-    local p1, p2, y = frame('laptime', w, h, s, 9, TEXTS.scrLapTime, nil)
-    -- Button of the delta screen, next to the title (decision 193)
+    local p1, p2, y = frame('laptime', w, h, s, 10.2, TEXTS.scrLapTime, nil)
     local on = Drag.mode('delta') ~= 'hidden'
-    local a, b = vec2(p1.x + 96 * s, p1.y + 5 * s), vec2(p1.x + 112 * s, p1.y + 18 * s)
+    local a, b = vec2(p2.x - 34 * s, p1.y + 5 * s), vec2(p2.x - 14 * s, p1.y + 18 * s)
     if on then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
-    drawText('D', FONT_MONO, 9 * s, vec2(a.x + 4 * s, a.y + 1 * s), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
+    drawText(TEXTS.scrDeltaButton, FONT_TEXT, 9 * s, vec2(a.x + 6 * s, a.y), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
     Drag.clickable(a, b, function() Drag.setMode('delta', on and 'hidden' or 'auto') end)
     row(p1, y, s, { { TEXTS.scrCurrent, 14, COLOR_DIM, false, FONT_TEXT },
       { lapTime(CarRead.num(car.lapTimeMs)), 246, car.isLapValid == false and RED or COLOR_TITLE, true } })
     y = y + ROW * s
+    drawSeparator(p1, p2, y + 3 * s, s)
+    y = y + 8 * s
     row(p1, y, s, { { 'S1', 110, COLOR_AXIS, true }, { 'S2', 178, COLOR_AXIS, true }, { 'S3', 246, COLOR_AXIS, true } })
     y = y + ROW * s
-    local lines = { { TEXTS.scrNow, car.currentSplits }, { TEXTS.scrBest, car.bestLapSplits }, { TEXTS.scrOptimal, car.bestSplits } }
+    local lines = { { TEXTS.scrNow, car.currentSplits }, { TEXTS.scrBest, car.bestLapSplits }, { TEXTS.scrOpt, car.bestSplits } }
     for li, l in ipairs(lines) do
       local cells = { { l[1], 14, COLOR_DIM } }
       for k = 0, 2 do
@@ -6907,8 +7218,12 @@ local drawRaceScreens = (function()
       row(p1, y, s, cells)
       y = y + ROW * s
     end
+    drawSeparator(p1, p2, y + 3 * s, s)
+    y = y + 8 * s
     local best = CarRead.num(car.bestLapTimeMs)
     local sessionBest = CarRead.num(sim.bestLapTimeMs)
+    local owner = ''
+    for _, r in ipairs(RaceTable.rows) do if sessionBest > 0 and r.best == sessionBest then owner = '  #' .. r.number end end
     local optimal = 0
     for k = 0, 2 do optimal = optimal + (car.bestSplits and CarRead.num(car.bestSplits[k]) or 0) end
     -- No last lap yet: only the dash (no color, no cut)
@@ -6916,8 +7231,8 @@ local drawRaceScreens = (function()
     for _, l in ipairs({
       { TEXTS.scrLast, lapTime(CarRead.num(car.previousLapTimeMs)) .. (lastValid and '' or ' cut'), lastValid and COLOR_TITLE or RED },
       { TEXTS.scrBest, lapTime(best), (best > 0 and best == sessionBest) and PURPLE or GREEN },
-      { TEXTS.scrSession, lapTime(sessionBest), PURPLE },
-      { TEXTS.scrOptimal, lapTime(optimal), COLOR_TITLE } }) do
+      { TEXTS.scrSession, sessionBest > 0 and (lapTime(sessionBest) .. owner) or '-', PURPLE },
+      { TEXTS.scrOptimal, optimal > 0 and lapTime(optimal) or '-', COLOR_TITLE } }) do
       row(p1, y, s, { { l[1], 14, COLOR_DIM }, { l[2], 246, l[3], true } })
       y = y + ROW * s
     end
@@ -6941,96 +7256,170 @@ local drawRaceScreens = (function()
     Drag.icons('delta', p1, p2, s)
   end
 
+  -- Laps by the approved model (screen 3): the current stint (number, driver, laps, time / minimum) with its laps; the
+  -- stint before, closed (best and average); the best lap of the car and its driver
   local function lapsScreen(car, w, h, s)
     local laps = RaceTable.laps
-    local best = 0
-    for _, l in ipairs(laps) do if l.valid and (best == 0 or l.ms < best) then best = l.ms end end
     local sessionBest = CarRead.num(sim.bestLapTimeMs)
-    local driver = tostring(ac.getDriverName(0) or '')
-    local stint = {}
-    for i = #laps, 1, -1 do
-      if laps[i].driver ~= driver:gsub('[,;|]', ' ') then break end
-      stint[#stint + 1] = laps[i]
+    local driver = tostring(ac.getDriverName(0) or ''):gsub('[,;|]', ' ')
+    -- Stints: consecutive laps of the same driver
+    local stints = {}
+    for _, l in ipairs(laps) do
+      local cur = stints[#stints]
+      if not cur or cur.driver ~= l.driver then cur = { driver = l.driver, laps = {} }; stints[#stints + 1] = cur end
+      cur.laps[#cur.laps + 1] = l
     end
-    local n = math.min(#stint, 8)
-    local p1, p2, y = frame('laps', w, h, s, n + 2.5, TEXTS.scrLaps, string.format(TEXTS.scrLapN, car.lapCount + 1))
-    local ms = RaceTable.stintMs()
+    if not stints[#stints] or stints[#stints].driver ~= driver then stints[#stints + 1] = { driver = driver, laps = {} } end
+    local now, prev = stints[#stints], stints[#stints - 1]
+    local best, bestDriver = 0, '-'
+    for _, l in ipairs(laps) do if l.valid and (best == 0 or l.ms < best) then best, bestDriver = l.ms, l.driver end end
+    local n = math.min(#now.laps, 8)
+    local p1, p2, y = frame('laps', w, h, s, 2.5 + n + (prev and 2.6 or 0) + 1.6, TEXTS.scrLaps,
+      string.format(TEXTS.scrLapN, car.lapCount + 1))
+    local function sum(list) local t = 0; for _, l in ipairs(list) do t = t + l.ms end; return t end
+    -- Current stint
+    local ms = RaceTable.stintMs() or sum(now.laps)
     local rule = config.driverStint
-    local stintCol = (not ms or rule.minMinutes <= 0) and COLOR_DIM or (ms < rule.minMinutes * 60000 and YELLOW)
+    local stintCol = (rule.minMinutes <= 0) and COLOR_DIM or (ms < rule.minMinutes * 60000 and YELLOW)
       or ((rule.maxMinutes > 0 and ms > rule.maxMinutes * 60000) and RED) or GREEN
-    row(p1, y, s, { { string.format(TEXTS.scrStint, driver, #stint), 14, COLOR_DIM, false, FONT_TITLE },
-      { ms and mmss(ms / 1000) or '-', 316, stintCol, true } })
+    drawText(string.format(TEXTS.scrStintN, #stints, now.driver), FONT_TITLE, 10.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+    drawTextRight(string.format(TEXTS.scrStintInfo, #now.laps, hms(ms)) .. (rule.minMinutes > 0 and
+      string.format(TEXTS.scrStintMin, rule.minMinutes) or ''), FONT_MONO, 10 * s, p2.x - 14 * s, y, stintCol)
     y = y + ROW * 1.5 * s
     row(p1, y, s, { { 'LAP', 14, COLOR_AXIS }, { 'TIME', 118, COLOR_AXIS, true }, { 'DELTA', 172, COLOR_AXIS, true },
       { 'S1', 220, COLOR_AXIS, true }, { 'S2', 268, COLOR_AXIS, true }, { 'S3', 316, COLOR_AXIS, true } })
     y = y + ROW * s
-    for i = 1, n do
-      local l = stint[i]
+    for k = #now.laps, #now.laps - n + 1, -1 do
+      local l = now.laps[k]
       local col = not l.valid and RED or (l.ms == sessionBest and PURPLE) or (l.ms == best and GREEN) or COLOR_TITLE
       local cells = { { tostring(l.lap) .. (l.pit and ' P' or ''), 14, l.pit and YELLOW or COLOR_TITLE },
         { lapTime(l.ms), 118, col, true },
         { not l.valid and 'cut' or l.pit and 'pit' or (l.ms == best and 'best') or string.format('%+.3f', (l.ms - best) / 1000),
           172, not l.valid and RED or (l.ms == best and GREEN) or (l.pit and COLOR_DIM) or RED, true } }
-      for k = 1, 3 do cells[#cells + 1] = { secs(l.s[k]), 172 + k * 48, COLOR_TITLE, true } end
+      for q = 1, 3 do cells[#cells + 1] = { secs(l.s[q]), 172 + q * 48, COLOR_TITLE, true } end
       row(p1, y, s, cells)
       y = y + ROW * s
     end
+    -- The stint before, closed
+    if prev then
+      drawSeparator(p1, p2, y + 3 * s, s)
+      y = y + 8 * s
+      local pb, total = 0, 0
+      for _, l in ipairs(prev.laps) do
+        total = total + l.ms
+        if l.valid and (pb == 0 or l.ms < pb) then pb = l.ms end
+      end
+      drawText(string.format(TEXTS.scrStintN, #stints - 1, prev.driver), FONT_TITLE, 10.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+      drawTextRight(string.format(TEXTS.scrStintInfo, #prev.laps, hms(total)), FONT_MONO, 10 * s, p2.x - 14 * s, y, COLOR_DIM)
+      y = y + ROW * s
+      row(p1, y, s, { { string.format(TEXTS.scrBestAvg, lapTime(pb), lapTime(#prev.laps > 0 and total / #prev.laps or 0)), 14,
+        COLOR_DIM } })
+      y = y + ROW * 1.6 * s
+    end
+    -- Best lap of the car and who drove it
+    drawSeparator(p1, p2, y + 3 * s, s)
+    y = y + 8 * s
+    row(p1, y, s, { { TEXTS.scrCarBest, 14, COLOR_DIM }, { best > 0 and (lapTime(best) .. ' (' .. bestDriver .. ')') or '-', 316,
+      (best > 0 and best == sessionBest) and PURPLE or GREEN, true } })
     Drag.icons('laps', p1, p2, s)
   end
 
+  -- Race status by the approved model (screen 4, decision 211): session lines; GAPS; OBLIGATIONS in 2 x 2 chips with
+  -- the state light; tyres, track and pending; and the KMR points (decision 210)
+  local function chip2(p, wdt, s, title, value, light)
+    local a, b = vec2(p.x, p.y), vec2(p.x + wdt, p.y + 26 * s)
+    ui.drawRect(a, b, rgbm(1, 1, 1, 0.2), 3 * s)
+    ui.drawCircleFilled(vec2(a.x + 9 * s, a.y + 13 * s), 3 * s, light, 12)
+    drawText(title, FONT_TITLE, 9 * s, vec2(a.x + 17 * s, a.y + 2 * s), COLOR_TITLE)
+    drawText(value, FONT_MONO, 9 * s, vec2(a.x + 17 * s, a.y + 13 * s), value == '-' and COLOR_OFF or light)
+  end
   local function raceScreen(car, w, h, s)
     local me = RaceTable.byIndex[0]
-    local left = CarRead.num(sim.sessionTimeLeft) / 1000
-    local lines = {
-      { TEXTS.scrTime, left > 0 and string.format('%d:%02d:%02d', math.floor(left / 3600), math.floor(left / 60) % 60,
-        math.floor(left % 60)) or '-' },
-      { TEXTS.scrPosition, me and (('P' .. me.pos) .. (me.class and string.format(' - %s C%d', me.class, me.classPos) or '')) or '-' },
-      { TEXTS.scrLap, tostring(me and me.laps + 1 or car.lapCount + 1) },
-    }
-    -- Gaps to the leader, the car ahead and the car behind (standings order)
-    if me then
-      local ahead, behind, leader = RaceTable.rows[me.pos - 1], RaceTable.rows[me.pos + 1], RaceTable.rows[1]
-      local function gap(r)
-        if not r then return '-' end
-        local dl = math.abs(r.laps - me.laps)
-        return dl >= 1 and string.format('%d L', dl) or string.format('%.1f', math.abs(ac.getGapBetweenCars(0, r.index)))
-      end
-      lines[#lines + 1] = { TEXTS.scrLeader, leader and leader ~= me and ('#' .. leader.number .. '  ' .. gap(leader)) or '-' }
-      lines[#lines + 1] = { TEXTS.scrAhead, ahead and ('#' .. ahead.number .. '  ' .. gap(ahead)) or '-' }
-      lines[#lines + 1] = { TEXTS.scrBehind, behind and ('#' .. behind.number .. '  ' .. gap(behind)) or '-' }
+    local session = ac.getSession(sim.currentSessionIndex)
+    -- Height: 3 lines of 14, a category and 3 gap rows, a category and 2 rows of chips, 4 rows, the separators
+    local content = 3 * 14 + 14 + 3 * ROW + 8 + 14 + 2 * 30 + 8 + 4 * ROW
+    local p1, p2, y = frame('race', w, h, s, content / ROW, TEXTS.scrRace, TEXTS.sessionName[sim.raceSessionType] or '')
+    local x0, xr = p1.x + 14 * s, p2.x - 14 * s
+    local function line(label, value, color)
+      drawText(label, FONT_TEXT, 11 * s, vec2(x0, y), COLOR_TITLE)
+      drawTextRight(value, FONT_MONO, 11 * s, xr, y, value == '-' and COLOR_OFF or (color or COLOR_TITLE))
+      y = y + 14 * s
     end
+    local total = session and session.durationMinutes > 0 and hms(session.durationMinutes * 60000)
+      or (session and session.laps > 0 and string.format('%d L', session.laps)) or nil
+    line(TEXTS.scrTime, hms(sessionElapsedMs()) .. (total and (' / ' .. total) or ''))
+    line(TEXTS.scrPosition, me and (('P' .. me.pos) .. (me.class and string.format(' - class P%d %s', me.classPos, me.class)
+      or '')) or '-')
+    line(TEXTS.scrLap, tostring(me and me.laps + 1 or car.lapCount + 1))
+    -- GAPS: leader, ahead, behind (standings order)
+    drawText(TEXTS.scrGaps, FONT_TITLE, 10.5 * s, vec2(x0, y), COLOR_DIM)
+    y = y + 14 * s
+    local rows = RaceTable.rows
+    local function gapRow(label, r)
+      local gap = '-'
+      if me and r and r ~= me then
+        local dl = math.abs(r.laps - me.laps)
+        local g = ac.getGapBetweenCars(0, r.index)
+        gap = dl >= 1 and string.format('+%d L', dl) or string.format('%+.3f', -g)
+      end
+      row(p1, y, s, { { label, 14, COLOR_DIM }, { r and r ~= me and ('#' .. r.number) or '-', 90 },
+        { gap, 272, COLOR_TITLE, true } })
+      y = y + ROW * s
+    end
+    gapRow(TEXTS.scrLeader, rows[1])
+    gapRow(TEXTS.scrAhead, me and rows[me.pos - 1])
+    gapRow(TEXTS.scrBehind, me and rows[me.pos + 1])
+    drawSeparator(p1, p2, y + 3 * s, s)
+    y = y + 8 * s
+    -- OBLIGATIONS: 2 x 2 chips with the state light
+    drawText(TEXTS.scrObligations, FONT_TITLE, 10.5 * s, vec2(x0, y), COLOR_DIM)
+    y = y + 14 * s
+    local cw = (p2.x - p1.x - 28 * s - 4 * s) / 2
+    local req = config.pitStopsRequired
+    local stops = config.pitStopsEnabled and string.format('%d / %d', PitRecord.stops, req) or '-'
+    local stopsLight = (not config.pitStopsEnabled) and COLOR_OFF or ((req <= 0 or PitRecord.stops >= req) and GREEN or YELLOW)
+    local swapReq = config.swapOn() and config.swapRequired
+    local swaps = swapReq and string.format('%d / %d', SwapRecord.validNow(), swapReq) or '-'
+    local swapsLight = not swapReq and COLOR_OFF or ((swapReq <= 0 or SwapRecord.validNow() >= swapReq) and GREEN or YELLOW)
     local pit = Panel.cellPit()
+    local pitLight = not pit and COLOR_OFF or (pit.color == 'red' and RED or pit.color == 'yellow' and YELLOW or GREEN)
     local ms = RaceTable.stintMs()
     local rule = config.driverStint
-    lines[#lines + 1] = { TEXTS.scrStops, config.pitStopsEnabled and string.format('%d / %d', PitRecord.stops,
-      config.pitStopsRequired) or '-' }
-    lines[#lines + 1] = { TEXTS.scrSwaps, config.swapOn() and config.swapRequired and string.format('%d / %d',
-      SwapRecord.validNow(), config.swapRequired) or '-' }
-    lines[#lines + 1] = { TEXTS.scrWindow, pit and pit.value or '-' }
-    lines[#lines + 1] = { TEXTS.scrStintLine, ms and (mmss(ms / 1000) .. (rule.minMinutes > 0 and
-      string.format(' / min %d', rule.minMinutes) or '') .. (rule.maxMinutes > 0 and string.format(' / max %d', rule.maxMinutes) or '')) or '-' }
+    local stint = ms and (mmss(ms / 1000) .. (rule.minMinutes > 0 and string.format(' / min %d', rule.minMinutes) or '')) or '-'
+    local stintLight = not ms and COLOR_OFF or (rule.minMinutes > 0 and ms < rule.minMinutes * 60000 and YELLOW)
+      or ((rule.maxMinutes > 0 and ms > rule.maxMinutes * 60000) and RED) or GREEN
+    chip2(vec2(x0, y), cw, s, TEXTS.scrStops, stops, stopsLight)
+    chip2(vec2(x0 + cw + 4 * s, y), cw, s, TEXTS.scrSwaps, swaps, swapsLight)
+    chip2(vec2(x0, y + 30 * s), cw, s, TEXTS.scrWindow, pit and pit.value or '-', pitLight)
+    chip2(vec2(x0 + cw + 4 * s, y + 30 * s), cw, s, TEXTS.scrStintLine, stint, stintLight)
+    y = y + 60 * s
+    drawSeparator(p1, p2, y + 3 * s, s)
+    y = y + 8 * s
+    -- Tyres, track, pending, KMR points
     local life = CarRead.tyreLife(car, 0, state.tyreLineKm[0] or 0)
-    lines[#lines + 1] = { TEXTS.scrTyres, string.format('%d laps%s', state.tyreLaps[0] or 0,
-      life and string.format(' - %d%%', math.floor(life)) or '') }
+    local wet = CarRead.num(sim.rainWetness) > 0.05
     local pen = Panel.cellPenalties()
-    lines[#lines + 1] = { TEXTS.scrPending, pen and pen.value or '-' }
-    local p1, p2, y = frame('race', w, h, s, #lines, TEXTS.scrRace, TEXTS.sessionName[sim.raceSessionType] or '')
-    for i = 1, #lines do
-      local l = lines[i]
-      row(p1, y, s, { { l[1], 14, COLOR_DIM, false, FONT_TEXT }, { l[2], 286, i == #lines and pen and RED or COLOR_TITLE, true } })
+    local kmr = Audit.points and string.format('%d / %d', Audit.points, config.kmrPoints.limit) or '-'
+    for _, l in ipairs({
+      { TEXTS.scrTyres, string.format('%d laps%s', state.tyreLaps[0] or 0, life and string.format(' - %d%%', math.floor(life)) or '') },
+      { TEXTS.scrTrack, string.format('%s - grip %d%%', wet and 'WET' or 'DRY', math.floor(CarRead.num(sim.roadGrip) * 100)) },
+      { TEXTS.scrPending, pen and pen.value or '-', pen and ORANGE },
+      { TEXTS.scrKmr, kmr, Audit.points and Audit.points >= config.kmrPoints.limit * 0.8 and RED or nil } }) do
+      row(p1, y, s, { { l[1], 14, COLOR_DIM }, { l[2], 286, l[3] or COLOR_TITLE, true } })
       y = y + ROW * s
     end
     Drag.icons('race', p1, p2, s)
   end
 
   return function(car, w, h, s)
-    local onTrack = not car.isInPitlane
-    if shown('race', car.isInPitlane) then raceScreen(car, w, h, s) end
-    if shown('laps', false) then lapsScreen(car, w, h, s) end
-    if shown('standings', car.isInPitlane) then standingsScreen(car, w, h, s) end
-    if shown('relative', onTrack) then relativeScreen(car, w, h, s) end
-    if shown('laptime', onTrack) then lapTimeScreen(car, w, h, s) end
-    if shown('delta', onTrack) then deltaScreen(car, w, h, s) end
+    -- Auto-hide by the events of the race (decision 212)
+    local line, sector = Desktop.recent('line'), Desktop.recent('sector')
+    if shown('race', car.isInPitlane or line) then raceScreen(car, w, h, s) end
+    if shown('laps', line) then lapsScreen(car, w, h, s) end
+    if shown('standings', line or Desktop.recent('position')) then standingsScreen(car, w, h, s) end
+    if shown('relative', Desktop.close or Desktop.recent('closeEnd') or line) then relativeScreen(car, w, h, s) end
+    if shown('laptime', line or sector) then lapTimeScreen(car, w, h, s) end
+    if shown('delta', sector) then deltaScreen(car, w, h, s) end
   end
 end)()
 -- ============================================================
@@ -7245,8 +7634,134 @@ local drawDesktopUI = (function()
     drawText(text, FONT_MONO, 11 * s, vec2(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
   end
 
+  -- Menu of the gear (decision 192): the options of the tool
+  local function menu(w, h, s)
+    local pr = Drag.lastRects.panel
+    if not pr then return end
+    local p1 = vec2(math.floor(pr.max.x - 150 * s), math.floor(pr.min.y))
+    local p2 = vec2(p1.x + 150 * s, p1.y + 80 * s)
+    Drag.group = nil
+    Drag.modal = { p1, p2 }
+    drawPanel(p1, p2, BORDER_BASE, s)
+    local items = { { TEXTS.menuDesktops, function() Desktop.editor = true; Audit.open = false; Desktop.buttons = false end },
+      { TEXTS.menuAudit, function() Audit.open = true; Desktop.editor = false; Desktop.buttons = false end },
+      { TEXTS.menuButtons, function() Desktop.buttons = true; Desktop.editor = false; Audit.open = false end } }
+    for i, it in ipairs(items) do
+      local a = vec2(p1.x + 12 * s, p1.y + (8 + (i - 1) * 22) * s)
+      local b = vec2(p2.x - 10 * s, a.y + 18 * s)
+      ui.drawRect(a, b, rgbm(1, 1, 1, 0.25), 3 * s)
+      drawText(it[1], FONT_TEXT, 10 * s, vec2(a.x + 6 * s, a.y + 2 * s), COLOR_TITLE)
+      Drag.clickable(a, b, function() it[2](); Desktop.menu = false end)
+    end
+  end
+
+  -- Audit screen (decision 209): the server messages taken off the chat, newest first, and the KMR points
+  local AUDIT_ROWS = 16
+  local SRC_COLOR = { KMR = PANEL_COLORS.yellow, ACSM = PANEL_COLORS.blue }
+  local function audit(w, h, s)
+    local W2, ROW2 = 620, 14
+    local H2 = 44 + AUDIT_ROWS * ROW2 + 10
+    local p1 = vec2(math.floor(w / 2 - W2 * s / 2), math.floor(h / 2 - H2 * s / 2))
+    local p2 = vec2(p1.x + W2 * s, p1.y + H2 * s)
+    Drag.group = nil
+    Drag.modal = { p1, p2 }
+    local m = ui.mousePos()
+    local over = m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y
+    if over then ui.captureMouse(true) end
+    drawPanel(p1, p2, BORDER_BASE, s)
+    drawText(TEXTS.auditTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    local pts = Audit.points and string.format(TEXTS.auditPoints, Audit.points, config.kmrPoints.limit)
+      or string.format(TEXTS.auditPoints, 0, config.kmrPoints.limit):gsub('^(%S+ %S+ )0', '%1-')
+    drawTextRight(pts .. '   ' .. string.format(TEXTS.auditCount, #Audit.items), FONT_MONO, 11 * s, p2.x - 34 * s,
+      p1.y + 5 * s, COLOR_TITLE)
+    chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Audit.open = false end)
+    drawSeparator(p1, p2, p1.y + 21 * s, s)
+    -- Newest first; mouse wheel or the arrows scroll
+    local n = #Audit.items
+    local maxScroll = math.max(n - AUDIT_ROWS, 0)
+    if over then Audit.scroll = Audit.scroll - math.floor(ui.mouseWheel() * 3) end
+    local x = chip('^', vec2(p1.x + 14 * s, p1.y + 25 * s), s, false, nil, function() Audit.scroll = Audit.scroll - AUDIT_ROWS end)
+    chip('v', vec2(x, p1.y + 25 * s), s, false, nil, function() Audit.scroll = Audit.scroll + AUDIT_ROWS end)
+    Audit.scroll = math.min(math.max(Audit.scroll, 0), maxScroll)
+    local y = p1.y + 44 * s
+    ui.pushClipRect(vec2(p1.x + 8 * s, y), vec2(p2.x - 8 * s, p2.y - 4 * s))
+    for k = 1, AUDIT_ROWS do
+      local it = Audit.items[n - Audit.scroll - k + 1]
+      if not it then break end
+      local sec = math.max(math.floor(it.t / 1000), 0)
+      drawText(string.format('%d:%02d:%02d', math.floor(sec / 3600), math.floor(sec / 60) % 60, sec % 60), FONT_MONO,
+        9.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+      drawText(it.src, FONT_MONO, 9.5 * s, vec2(p1.x + 76 * s, y), SRC_COLOR[it.src] or COLOR_TITLE)
+      drawText(it.text, FONT_TEXT, 9.5 * s, vec2(p1.x + 118 * s, y), COLOR_TITLE)
+      y = y + ROW2 * s
+    end
+    ui.popClipRect()
+    if n == 0 then drawText(TEXTS.auditEmpty, FONT_MONO, 9.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM) end
+  end
+
+  -- Buttons screen (decision 212): each command of the navigation, the button recorded by the tool (Set: press it on any
+  -- device within 10 s; Clear), and the binding in the CSP controls, which also works
+  local NAV_ROWS = { { 'nextScreen', TEXTS.navNextScreen }, { 'prevScreen', TEXTS.navPrevScreen },
+    { 'nextDesktop', TEXTS.navNextDesktop }, { 'prevDesktop', TEXTS.navPrevDesktop } }
+  local function buttonsScreen(w, h, s)
+    local W3, H3 = 560, 44 + #NAV_ROWS * 22 + 22
+    local p1 = vec2(math.floor(w / 2 - W3 * s / 2), math.floor(h / 2 - H3 * s / 2))
+    local p2 = vec2(p1.x + W3 * s, p1.y + H3 * s)
+    Drag.group = nil
+    Drag.modal = { p1, p2 }
+    local m = ui.mousePos()
+    if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
+    drawPanel(p1, p2, BORDER_BASE, s)
+    drawText(TEXTS.navTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.buttons = false; Desktop.capture = nil end)
+    drawSeparator(p1, p2, p1.y + 21 * s, s)
+    local y = p1.y + 30 * s
+    drawText(TEXTS.navOwn, FONT_TITLE, 9 * s, vec2(p1.x + 150 * s, y), COLOR_DIM)
+    drawText(TEXTS.navCsp, FONT_TITLE, 9 * s, vec2(p1.x + 420 * s, y), COLOR_DIM)
+    y = y + 16 * s
+    for _, r in ipairs(NAV_ROWS) do
+      local name = r[1]
+      drawText(r[2], FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y + 1 * s), COLOR_TITLE)
+      local cap = Desktop.capture and Desktop.capture.name == name
+      local own = cap and string.format(TEXTS.navPress, math.max(math.ceil(Desktop.capture.untilT - state.ui.clock), 0))
+        or Desktop.bindText(name) or '-'
+      drawText(own, FONT_MONO, 9.5 * s, vec2(p1.x + 150 * s, y + 1.5 * s), cap and PANEL_COLORS.yellow or (own == '-' and COLOR_OFF or COLOR_TITLE))
+      local x = chip(TEXTS.navSet, vec2(p1.x + 330 * s, y), s, cap, nil, function() Desktop.startCapture(name) end)
+      chip(TEXTS.navClear, vec2(x, y), s, false, PANEL_COLORS.red, function() Desktop.clearBind(name) end)
+      local b = Desktop.NAV[name]
+      local csp = b and b.boundTo and b:boundTo() or '-'
+      drawText(csp, FONT_MONO, 9.5 * s, vec2(p1.x + 420 * s, y + 1.5 * s), csp == '-' and COLOR_OFF or COLOR_TITLE)
+      y = y + 22 * s
+    end
+  end
+
+  -- Message window under the panel (decision 209): the server message taken off the chat, a few seconds, narrower
+  local function messageWindow(w, h, s)
+    local msg = Audit.current()
+    if not msg then return end
+    -- Under the panel and its boxes; with the panel off, under its place (screen.lua: 18% of the height + 10 px)
+    local pr = Drag.lastRects.panel
+    local o = Drag.offset('panel', h)
+    local cx = pr and (pr.min.x + pr.max.x) / 2 or (w / 2 + o.x)
+    local top = pr and pr.max.y or (h * 0.18 + 10 * s + o.y + 66 * s)
+    local mw = 380 * s
+    local p1 = vec2(math.floor(cx - mw / 2), math.floor(top + 6 * s))
+    local p2 = vec2(p1.x + mw, p1.y + 42 * s)
+    Drag.group = nil
+    drawPanel(p1, p2, BORDER_BASE, s)
+    drawText(msg.src, FONT_TITLE, 10 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), SRC_COLOR[msg.src] or COLOR_TITLE)
+    ui.pushDWriteFont(FONT_TEXT)
+    ui.setCursor(vec2(p1.x + 14 * s, p1.y + 17 * s))
+    ui.dwriteTextAligned(msg.text, 10 * s, ui.Alignment.Start, ui.Alignment.Start, vec2(mw - 28 * s, 24 * s), true, COLOR_TITLE)
+    ui.popDWriteFont()
+  end
+
   return function(w, h, s)
+    messageWindow(w, h, s)
     if Desktop.editor then editor(w, h, s) end
+    if Audit.open then audit(w, h, s) end
+    if Desktop.buttons then buttonsScreen(w, h, s) end
+    if Desktop.menu then menu(w, h, s) end
     if state.ui.clock < Desktop.indicatorUntil then indicator(w, h, s) end
   end
 end)()
@@ -7806,6 +8321,7 @@ function script.update(dt)
     PitStops.endChecked = false
     DriverTable.reset()
     RaceTable.load()
+    Audit.load()
     WrongWay.reset()
     PitBox.reset()
     state.swap.swapInfo = nil
