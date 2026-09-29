@@ -5742,10 +5742,16 @@ do
   -- Offset of a group: the screens of the desktops keep it per desktop (Desktop), the panel here
   local function getOff(g) return Desktop.has(g) and Desktop.offset(g) or offsets[g] end
   local function setOff(g, v) if Desktop.has(g) then Desktop.setOffset(g, v) else offsets[g] = v end end
+  local offUsed = {}    -- offset (px) each group was drawn with in this frame
   function Drag.offset(group, h)
     local o = getOff(group)
-    return vec2(o.x * h / 1080, o.y * h / 1080)
+    local v = vec2(o.x * h / 1080, o.y * h / 1080)
+    offUsed[group] = v
+    return v
   end
+  -- Area of each screen drawn in the last frame, px, with its own place without the offset (base): the desktop editor
+  -- draws the cards from them, so a card is the screen as it really is on this screen
+  Drag.lastRects = {}
 
   function Drag.mode(group) return Desktop.has(group) and Desktop.mode(group) or modes[group] end
   function Drag.setMode(group, m)
@@ -5837,6 +5843,14 @@ do
 
   local function inside(m, a, b) return m.x >= a.x and m.x <= b.x and m.y >= a.y and m.y <= b.y end
 
+  -- Position set from outside (the desktop editor), px at 1080p; a pinned (locked) screen does not move
+  function Drag.pinned(g) return pins[g] == true end
+  function Drag.setOffset(g, v)
+    if pins[g] then return end
+    setOff(g, v)
+    save(g)
+  end
+
   -- A clickable area of a screen this frame (a chip of a filter, a button of a title): calls fn on a click
   function Drag.clickable(p1, p2, fn) buttons[#buttons + 1] = { p1 = p1, p2 = p2, action = fn } end
 
@@ -5898,6 +5912,11 @@ do
     local drawn = {}
     for g, r in pairs(rects) do if Desktop.has(g) then drawn[#drawn + 1] = { g = g, x = r.min.x, y = r.min.y } end end
     Desktop.setDrawn(drawn)
+    Drag.lastRects = {}
+    for g, r in pairs(rects) do
+      local o = offUsed[g] or vec2(0, 0)
+      Drag.lastRects[g] = { min = r.min, max = r.max, base = vec2(r.min.x - o.x, r.min.y - o.y) }
+    end
     rects, zones, buttons = {}, {}, {}
     Drag.modal = nil
   end
@@ -7017,8 +7036,7 @@ end)()
 -- Helpers inside a function: the script is one chunk, limited to 200 local variables at any point
 local drawDesktopUI = (function()
   local W = 660                        -- editor width, px at 1080p (the height comes from its content)
-  local CANVAS_W, CANVAS_H = 422, 238
-  local SCALE = CANVAS_W / 1920
+  local CANVAS_W = 422                 -- canvas width, px at 1080p (its height has the shape of the screen)
   -- Own place and size of each screen at 1080p (with no offset): only to draw the cards
   local RECT = { pitbox = { 1397, 837, 288, 195 }, setup = { 48, 772, 474, 260 }, status = { 1701, 718, 171, 314 },
     race = { 48, 110, 300, 190 }, laps = { 48, 420, 330, 160 }, standings = { 745, 560, 430, 180 },
@@ -7047,7 +7065,9 @@ local drawDesktopUI = (function()
   end
 
   local function editor(w, h, s)
-    local H = (Desktop.pitOn and 334 or 348)
+    -- The canvas has the shape of this screen; the editor height follows it
+    local canvasH = CANVAS_W * h / w
+    local H = canvasH + (Desktop.pitOn and 96 or 110)
     local p1 = vec2(math.floor(w / 2 - W * s / 2 + pos.x), math.floor(h / 2 - H * s / 2 + pos.y))
     local p2 = vec2(p1.x + W * s, p1.y + H * s)
     Drag.group = nil
@@ -7081,24 +7101,48 @@ local drawDesktopUI = (function()
     drawText(TEXTS.edHint, FONT_MONO, 8.5 * s, vec2(x + 6 * s, ty + 2 * s), COLOR_DIM)
     -- Canvas: the screen in small
     local c1 = vec2(p1.x + 14 * s, p1.y + 47 * s)
-    local c2 = vec2(c1.x + CANVAS_W * s, c1.y + CANVAS_H * s)
+    local c2 = vec2(c1.x + CANVAS_W * s, c1.y + canvasH * s)
     ui.drawRectFilled(c1, c2, rgbm(0.06, 0.07, 0.09, 1), 3 * s)
     ui.drawRect(c1, c2, rgbm(1, 1, 1, 0.2), 3 * s)
-    local cs = SCALE * s
-    local function toCanvas(x1080, y1080) return vec2(c1.x + x1080 * cs, c1.y + y1080 * cs) end
+    -- Screen px to the canvas: the cards are the screens as they are drawn (Drag.lastRects), same margins and size
+    local k = h / 1080
+    local cs = CANVAS_W * s / w
+    local function toCanvas(px, py) return vec2(c1.x + px * cs, c1.y + py * cs) end
+    -- Real area of a screen (px): drawn in the last frame, or its own place from the table when not drawn
+    local function area(g, e)
+      local r = Drag.lastRects[g]
+      if r then return r.min, r.max, r.base end
+      local t = RECT[g]
+      local base = vec2(t[1] * k, t[2] * k)
+      local a = vec2(base.x + e.x * k, base.y + e.y * k)
+      return a, vec2(a.x + t[3] * k, a.y + t[4] * k), base
+    end
     -- The Race Control panel: fixed on every desktop
-    local pa, pb = toCanvas(700, 204), toCanvas(1220, 270)
+    local pr = Drag.lastRects.panel
+    local pa = pr and toCanvas(pr.min.x, pr.min.y) or toCanvas(w / 2 - 260 * k, h * 0.18)
+    local pb = pr and toCanvas(pr.max.x, pr.min.y + 66 * k) or toCanvas(w / 2 + 260 * k, h * 0.18 + 66 * k)
     ui.drawRectFilled(pa, pb, rgbm(0.24, 0.25, 0.28, 0.95), 2 * s)
+    ui.drawRect(pa, pb, (drag and drag.g == 'panel') and PANEL_COLORS.yellow or rgbm(1, 1, 1, 0.45), 2 * s)
+    -- The panel moves (one place on every desktop) but cannot be removed
+    if pr and not drag and not move and not Drag.pinned('panel') and ui.mouseClicked() and m.x >= pa.x and m.x <= pb.x
+        and m.y >= pa.y and m.y <= pb.y then
+      drag = { g = 'panel', dx = (m.x - pa.x) / cs, dy = (m.y - pa.y) / cs, base = pr.base,
+        size = vec2(pr.max.x - pr.min.x, 66 * k) }
+    end
     drawText(TEXTS.rcTitle, FONT_TEXT, 7.5 * s, vec2(pa.x + 3 * s, pa.y + 1 * s), COLOR_DIM)
     local lists = { { Desktop.place.all, true } }
     if Desktop.place[desk] then lists[#lists + 1] = { Desktop.place[desk], false } end
     for _, L in ipairs(lists) do
       for g, e in pairs(L[1]) do
-        local r = RECT[g]
-        if r then
-          local a, b = toCanvas(r[1] + e.x, r[2] + e.y), toCanvas(r[1] + e.x + r[3], r[2] + e.y + r[4])
+        if RECT[g] then
+          local rmin, rmax, base = area(g, e)
+          local a, b = toCanvas(rmin.x, rmin.y), toCanvas(rmax.x, rmax.y)
+          local size = vec2(rmax.x - rmin.x, rmax.y - rmin.y)
           -- Room for the name and the icons on a small card
           b = vec2(math.max(b.x, a.x + 44 * s), math.max(b.y, a.y + 22 * s))
+          -- ... kept inside the canvas (a small screen at the edge of the screen)
+          if b.x > c2.x then a = vec2(a.x - (b.x - c2.x), a.y); b = vec2(c2.x, b.y) end
+          if b.y > c2.y then a = vec2(a.x, a.y - (b.y - c2.y)); b = vec2(b.x, c2.y) end
           local dragging = drag and drag.g == g
           ui.drawRectFilled(a, b, rgbm(0.16, 0.17, 0.2, 0.95), 2 * s)
           ui.drawRect(a, b, dragging and PANEL_COLORS.yellow or (L[2] and PANEL_COLORS.green or rgbm(1, 1, 1, 0.45)), 2 * s)
@@ -7121,16 +7165,22 @@ local drawDesktopUI = (function()
           local onIcons = m.x >= b.x - 3 * (isz + 2 * s) - 2 * s and m.y >= iy - 1 * s
           if not drag and not move and not onIcons and ui.mouseClicked() and m.x >= a.x and m.x <= b.x
               and m.y >= a.y and m.y <= b.y then
-            drag = { g = g, entry = e, dx = (m.x - a.x) / cs, dy = (m.y - a.y) / cs }
+            drag = { g = g, entry = e, dx = (m.x - a.x) / cs, dy = (m.y - a.y) / cs, base = base, size = size }
           end
         end
       end
     end
     if drag then
       if ui.mouseDown() then
-        local r = RECT[drag.g]
-        drag.entry.x = math.floor((m.x - c1.x) / cs - drag.dx - r[1])
-        drag.entry.y = math.floor((m.y - c1.y) / cs - drag.dy - r[2])
+        -- New top left on the screen (px), kept on the screen like the real drag; offset = from its own place
+        local tx = math.min(math.max((m.x - c1.x) / cs - drag.dx, 0), w - drag.size.x)
+        local ty = math.min(math.max((m.y - c1.y) / cs - drag.dy, 0), h - drag.size.y)
+        if drag.g == 'panel' then
+          Drag.setOffset('panel', vec2((tx - drag.base.x) / k, (ty - drag.base.y) / k))
+        else
+          drag.entry.x = math.floor((tx - drag.base.x) / k)
+          drag.entry.y = math.floor((ty - drag.base.y) / k)
+        end
       else
         drag = nil
         Desktop.save()
