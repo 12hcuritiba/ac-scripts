@@ -5397,12 +5397,13 @@ do
     drawSeparator(p1, p2, sep, s)
     local fy = sep + gap
     local elapsed = sv and math.max(p.total - (sv.untilMs - serverTimeMs()) / 1000, 0) or 0
-    -- Last line: the start mode (left changes it) and the start (right)
+    -- Last line: the start mode (left changes it) and the start (right). A row that takes a choice like the others
+    -- (decision 202): white, the choice color when chosen; never the dim color of the rows only shown
     local modeSel = not sv and chosen == 'mode'
     local footer = sv and TEXTS.pitBoxServing
       or string.format(TEXTS.pitBoxMode, PitBox.isAuto() and TEXTS.pitModeAuto or TEXTS.pitModeManual) .. TEXTS.pitBoxStart
     drawText(footer, FONT_TEXT, fs, vec2(p1.x + BOX.side * s, fy),
-      sv and COLOR_SWAP or (modeSel and COLOR_SEL or COLOR_OFF))
+      sv and COLOR_SWAP or (modeSel and COLOR_SEL or COLOR_TITLE))
     drawTextRight(string.format('%s / %s', mmss(elapsed), mmss(p.total)), FONT_MONO, fs, p2.x - BOX.side * s, fy,
       COLOR_TITLE)
     Drag.icons('pitbox', p1, p2, s)
