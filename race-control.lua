@@ -133,12 +133,12 @@ local cfg = ac.configValues({
   --   so these screens grow slightly more on a big screen (1440p: 1.14x; 4K: 1.37x).
   screenScale = '',
   -- screens = autoSeconds:5 | closeGap:2.5 | noticeSeconds:3 | serverNoticeSeconds:5 | messageSeconds:5 |
-  --           pitBoxSeconds:5 | indicatorSeconds:2 | buttonSeconds:10
-  --   Times of the screens (decision 212): auto-hide shows a screen by an event (line, sector, damage, position) for
-  --   autoSeconds; the relative while a car is within closeGap seconds; a new penalty in the panel noticeSeconds, a
-  --   server message serverNoticeSeconds; the message window under the panel messageSeconds; the pit stop box after
+  --           pitBoxSeconds:5 | indicatorSeconds:2 | buttonSeconds:10 | controlSeconds:3
+  --   Times of the screens (decisions 212, 219): auto-hide shows a screen by an event (line, sector, damage, position)
+  --   for autoSeconds; the relative while a car is within closeGap seconds; a new penalty in the panel noticeSeconds, a
+  --   server message serverNoticeSeconds; the message window over the panel messageSeconds; the pit stop box after
   --   a D-pad press away from the pit place pitBoxSeconds; the desktop indicator indicatorSeconds; the time to press
-  --   the button being recorded buttonSeconds.
+  --   the button being recorded buttonSeconds; the car controls after a change controlSeconds.
   screens = '',
   -- tyreLife = ok:70 | worn:30
   --   Colors of the tyre life in the setup status (remaining life from the wear curve of the compound), graded: green
@@ -777,7 +777,7 @@ local config = {
     return r
   end)(),
   screens = structKey('screens', { autoSeconds = 5, closeGap = 2.5, noticeSeconds = 3, serverNoticeSeconds = 5,
-    messageSeconds = 5, pitBoxSeconds = 5, indicatorSeconds = 2, buttonSeconds = 10 }),
+    messageSeconds = 5, pitBoxSeconds = 5, indicatorSeconds = 2, buttonSeconds = 10, controlSeconds = 3 }),
   -- Tow per session: mode ('TOW', 'RESET', 'NONE'), towSeconds, repairFactor
   tow = bySession(
     structKey('practiceTow', { mode = 'RESET', towSeconds = 0, repairFactor = 0, clearDsq = 1 }),
@@ -1671,6 +1671,10 @@ do
       -- race_clean_gain_reward, laptime_challenge_reward
       ratingAdded = { en = { 'you have been paid ' .. N, 'paid you additional ' .. N, 'you earned ' .. N },
         pt = { 'voce foi pago ' .. N, 'pagaram um adicional de ' .. N, 'voce ganhou ' .. N } },
+      -- The race director's points or money penalty (race_control_*_money_penalty, *_points_penalty): sent to everyone
+      -- with the driver's name and no balance (decision 221)
+      directorPenalty = { en = { 'money penalty', 'points penalty', 'point penalty' },
+        pt = { 'penalidade em dinheiro', 'penalidade de pontos', 'pontos de penalidade', 'dinheiro de penalidade' } },
     },
     -- 3. ACSM driver swap (race_control.go, handleDriverSwap; English only)
     acsm = {
@@ -2280,6 +2284,12 @@ ac.onChatMessage(function(message, senderCarIndex)
       Audit.add('KMR', message, true)
       return true
     end
+  end
+  -- The race director's points or money penalty to this driver (decision 221): it changes the driver's score
+  local name = tostring(ac.getDriverName(0) or '')
+  if server and name ~= '' and message:find(name, 1, true) and hasAny(low, DICT.kmr.directorPenalty) then
+    Audit.add('KMR', message, true)
+    return true
   end
   if server then
     local kind = classifyServerMessage(message)
@@ -6198,6 +6208,8 @@ do
     events(car)
     captureUpdate()
     dirUpdate()
+    -- Car controls (decision 219; set by the desktop editor, later in the script)
+    if Desktop.controlsUpdate then Desktop.controlsUpdate(car) end
     local nav = not Desktop.capture
     if nav and (NAV.nextDesktop:pressed() or bindPressed('nextDesktop')) then Desktop.go(1) end
     if nav and (NAV.prevDesktop:pressed() or bindPressed('prevDesktop')) then Desktop.go(-1) end
@@ -6679,8 +6691,13 @@ do
     local fs = BOX.font * s
     local gap = (boxH - BOX.head - (#rows + 1) * ROW_H) / 4 * s
     drawText(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s, vec2(p1.x + BOX.side * s, p1.y + 4 * s), COLOR_TITLE)
-    drawTextRight(string.format(TEXTS.pitBoxTotal, mmss(p.total)), FONT_MONO, 11 * s, p2.x - BOX.side * s,
-      p1.y + 5 * s, COLOR_TITLE)
+    local total = string.format(TEXTS.pitBoxTotal, mmss(p.total))
+    drawTextRight(total, FONT_MONO, 11 * s, p2.x - BOX.side * s, p1.y + 5 * s, COLOR_TITLE)
+    -- The order of the operations, as the key pitStopOrder has it (decision 220), before the total
+    ui.pushDWriteFont(FONT_MONO)
+    local tw = ui.measureDWriteText(total, 11 * s).x
+    ui.popDWriteFont()
+    drawTextRight(config.pitStopOrder, FONT_MONO, 11 * s, p2.x - BOX.side * s - tw - 10 * s, p1.y + 5 * s, COLOR_DIM)
     drawSeparator(p1, p2, p1.y + BOX.head * s, s)
     -- During the stop each item counts down from the authorization: its start by the order (pitStopOrder), repair
     -- groups one after the other inside R
@@ -7995,30 +8012,99 @@ local drawDesktopUI = (function()
     end
   end
 
-  -- Message window over the panel (decisions 209, 213): the server message taken off the chat, a few seconds, narrower
+  -- Car controls (decision 219): ABS, TC, TC2, brake bias, engine map, engine brake, MGU-K delivery and recovery, MGU-H,
+  -- DRS; only what the car has. A change shows the page of 4 with that control for screens.controlSeconds, the control
+  -- changed in yellow (title and value). The first reading of a car is the reference, not a change
+  local Controls = { last = nil, changed = nil, untilT = 0, list = {} }
+  local function controlList(c)
+    local list = {}
+    local function add(key, label, value) list[#list + 1] = { key = key, label = label, value = value } end
+    local absN, tcN = CarRead.num(c.absModes), CarRead.num(c.tractionControlModes)
+    local abs, tc = CarRead.num(c.absMode), CarRead.num(c.tractionControlMode)
+    if absN > 0 then add('abs', 'ABS', abs > 0 and string.format('%d', abs) or 'OFF') end
+    if tcN > 0 then add('tc', 'TC', tc > 0 and string.format('%d', tc) or 'OFF') end
+    if CarRead.num(c.tractionControl2Modes) > 0 then add('tc2', 'TC2', string.format('%g', CarRead.num(c.tractionControl2))) end
+    local bb = CarRead.num(c.brakeBias)
+    if bb > 0 then add('bb', 'BB', string.format('%.1f', bb <= 1 and bb * 100 or bb)) end
+    local maps = CarRead.num(c.fuelMaps)
+    if maps > 1 then add('map', 'MAP', string.format('%d/%d', CarRead.num(c.fuelMap) + 1, maps)) end
+    local eb = CarRead.num(c.engineBrakeSettingsCount)
+    if eb > 1 then add('eb', 'EB', string.format('%d/%d', CarRead.num(c.currentEngineBrakeSetting) + 1, eb)) end
+    local mgu = CarRead.num(c.mgukDeliveryCount)
+    if mgu > 0 then
+      add('mguk', 'MGU-K', string.format('%d/%d', CarRead.num(c.mgukDelivery) + 1, mgu))
+      add('recov', 'RECOV.', string.format('%d%%', CarRead.num(c.mgukRecovery) * 10))
+      add('mguh', 'MGU-H', c.mguhChargingBatteries and 'BATT' or 'MOTOR')
+    end
+    if c.drsPresent then add('drs', 'DRS', c.drsActive and 'OPEN' or (c.drsAvailable and 'AVAIL' or 'OFF')) end
+    return list
+  end
+  local function controlsUpdate(car)
+    local list = controlList(car)
+    local now = {}
+    for _, it in ipairs(list) do now[it.key] = it.value end
+    if Controls.last then
+      for _, it in ipairs(list) do
+        if Controls.last[it.key] ~= nil and Controls.last[it.key] ~= it.value then
+          Controls.changed = it.key
+          Controls.untilT = state.ui.clock + config.screens.controlSeconds
+        end
+      end
+    end
+    Controls.last = now
+    Controls.list = list
+  end
+  -- Read every frame by the desktops (Desktop.update), drawn or not
+  Desktop.controlsUpdate = controlsUpdate
+  local function controlsBox(list, p1, p2, s)
+    local at = 1
+    for i, it in ipairs(list) do if it.key == Controls.changed then at = i end end
+    local first = math.floor((at - 1) / 4) * 4 + 1
+    drawPanel(p1, p2, BORDER_BASE, s)
+    local cw = (p2.x - p1.x - 20 * s) / 4
+    for i = first, math.min(first + 3, #list) do
+      local it = list[i]
+      local x = p1.x + 12 * s + (i - first) * cw
+      local on = it.key == Controls.changed
+      drawText(it.label, FONT_TITLE, 9 * s, vec2(x, p1.y + 7 * s), on and PANEL_COLORS.yellow or COLOR_DIM)
+      drawText(it.value, FONT_MONO, 13 * s, vec2(x, p1.y + 22 * s), on and PANEL_COLORS.yellow or COLOR_TITLE)
+    end
+  end
+
+  -- Over the panel (decisions 209, 213, 219): the car controls on the left and the server message taken off the chat on
+  -- the right, each for a few seconds, together as wide as the panel; under the panel and its boxes when there is no
+  -- room over it. 56 px high: the source and three lines of the message. Their room is kept in the limit of the panel
+  -- drag (Drag.fitPanel), shown or not
+  local CONTROLS_W = 196
   local function messageWindow(w, h, s)
-    -- Over the panel (decision 213); under the panel and its boxes when there is no room over it. 460 x 56: the source
-    -- and two whole lines. Its room is kept in the limit of the panel drag (Drag.fitPanel), message or not
-    local mw, mh, gapW = 460 * s, 56 * s, 6 * s
+    local mh, gapW = 56 * s, 6 * s
     Drag.panelExtra = mh + gapW
+    local list = Controls.list
     local msg = Audit.current()
-    if not msg then return end
-    -- The panel and its boxes; with the panel off, its place (screen.lua: 18% of the height + 10 px, 66 px high)
+    local controls = state.ui.clock < Controls.untilT and #list > 0
+    if not msg and not controls then return end
+    -- The panel and its boxes; with the panel off, its place (screen.lua: 18% of the height + 10 px, 520 x 66)
     local pr = Drag.lastRects.panel
     local o = Drag.offset('panel', h)
+    local rw = pr and (pr.max.x - pr.min.x) or 520 * s
     local cx = pr and (pr.min.x + pr.max.x) / 2 or (w / 2 + o.x)
     local top = pr and pr.min.y or (h * 0.18 + 10 * s + o.y)
     local bottom = pr and pr.max.y or (top + 66 * s)
     local y = top - gapW - mh
     if y < 0 then y = bottom + gapW end
-    local p1 = vec2(math.floor(math.min(math.max(cx - mw / 2, 0), w - mw)), math.floor(y))
-    local p2 = vec2(p1.x + mw, p1.y + mh)
+    local x0 = math.floor(math.min(math.max(cx - rw / 2, 0), w - rw))
     Drag.group = nil
+    local cw = CONTROLS_W * s
+    if controls then controlsBox(list, vec2(x0, math.floor(y)), vec2(x0 + cw, math.floor(y) + mh), s) end
+    if not msg then return end
+    local p1 = vec2(x0 + cw + gapW, math.floor(y))
+    local p2 = vec2(x0 + rw, p1.y + mh)
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(msg.src, FONT_TITLE, 10 * s, vec2(p1.x + 14 * s, p1.y + 5 * s), SRC_COLOR[msg.src] or COLOR_TITLE)
+    drawText(msg.src, FONT_TITLE, 10 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), SRC_COLOR[msg.src] or COLOR_TITLE)
     ui.pushDWriteFont(FONT_TEXT)
-    ui.setCursor(vec2(p1.x + 14 * s, p1.y + 20 * s))
-    ui.dwriteTextAligned(msg.text, 10.5 * s, ui.Alignment.Start, ui.Alignment.Start, vec2(mw - 28 * s, 30 * s), true, COLOR_TITLE)
+    ui.setCursor(vec2(p1.x + 14 * s, p1.y + 17 * s))
+    ui.dwriteTextAligned(msg.text, 10 * s, ui.Alignment.Start, ui.Alignment.Start, vec2(p2.x - p1.x - 26 * s, 36 * s), true,
+      COLOR_TITLE)
     ui.popDWriteFont()
   end
 
