@@ -172,6 +172,10 @@ local cfg = ac.configValues({
   -- kmrPoints = limit:100: limit of the KMR infraction points of a driver (shown with his points in the race status;
   --   the points come from the KMR message of each infraction).
   kmrPoints = '',
+  -- kmrRating = dsqAt:0: the KMR safety rating of a driver (the KMR money: shown in the race status, read from every
+  --   KMR message with the balance, the welcome message at the entry included); at or under dsqAt = DSQ. Empty = the
+  --   rating is only shown, no DSQ.
+  kmrRating = '',
 
   -- ------------------------------------------------------------
   -- 3. Driver swap and pit stops (the ACSM keys must match the ACSM race settings)
@@ -594,6 +598,7 @@ local TEXTS = {
   -- flag box (flags/flags.lua)
   stintMinDsq = 'Stint under the minimum (%s of %d min)',
   stintMaxDsq = 'Stint over the maximum (%d min)',
+  kmrRatingDsq = 'KMR safety rating %s (limit %s)',
   -- screens of front E, E3 (draw/race_screens.lua)
   scrRelative = 'RELATIVE', scrStandings = 'STANDINGS', scrLapTime = 'LAP TIME', scrDelta = 'DELTA', scrVsBest = 'vs BEST',
   scrLaps = 'LAPS', scrLapN = 'Lap %d', scrStint = 'STINT - %s - %d laps', scrRace = 'RACE STATUS',
@@ -604,6 +609,7 @@ local TEXTS = {
   scrOpt = 'Opt.', scrCarBest = 'Car best', scrStintN = 'STINT %d - %s', scrStintInfo = '%d laps - %s',
   scrStintMin = ' / min %d', scrBestAvg = 'Best %s - avg %s', scrDeltaButton = 'Δ',
   scrGaps = 'GAPS', scrObligations = 'OBLIGATIONS', scrTrack = 'Track', scrKmr = 'KMR points',
+  scrKmrRating = 'KMR rating',
   sessionName = { [ac.SessionType.Practice] = 'PRACTICE', [ac.SessionType.Qualify] = 'QUALIFY', [ac.SessionType.Race] = 'RACE' },
   -- desktop editor and indicator (draw/desktop_editor.lua)
   edTitle = 'SCREENS', edPitDesk = 'Pit desktop', edDeskOf = 'Desktop %s of %d', edHint = 'drag a screen to its place - title line moves this window',
@@ -617,7 +623,10 @@ local TEXTS = {
   navPrevDesktop = 'Previous desktop', navSet = 'Set', navClear = 'Clear', navPress = 'Press a button... %d s',
   navButton = '%s - button %d', navPov = '%s - D-pad %d deg', navGamepad = 'Gamepad %d - %s', navKey = 'Key %s',
   navDeviceOff = 'device off',
+  navUp = 'Up', navDown = 'Down', navLeft = 'Left (value -)', navRight = 'Right (value +)',
+  navKeyNames = { [37] = 'Left arrow', [38] = 'Up arrow', [39] = 'Right arrow', [40] = 'Down arrow' },
   menuDesktops = 'Desktops', menuAudit = 'Audit', auditTitle = 'AUDIT', auditPoints = 'KMR points %d / %d',
+  auditRating = 'KMR rating %s',
   auditCount = '%d messages', auditEmpty = 'No messages in this session',
   edPin = 'Pin to all', edPinned = 'On all desktops', edMode = 'Mode: %s', edRemove = 'Remove',
   edChoose = 'Click a screen to choose it and drag it to its place',
@@ -761,6 +770,12 @@ local config = {
     greenSeconds = 5 }),
   driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
   kmrPoints = structKey('kmrPoints', { limit = 100 }),
+  -- KMR safety rating (decision 215): dsqAt; on = the key is set (empty = the rating is only shown)
+  kmrRating = (function()
+    local r = structKey('kmrRating', { dsqAt = 0 })
+    r.on = tostring(cfg.kmrRating or ''):match('%S') ~= nil
+    return r
+  end)(),
   screens = structKey('screens', { autoSeconds = 5, closeGap = 2.5, noticeSeconds = 3, serverNoticeSeconds = 5,
     messageSeconds = 5, pitBoxSeconds = 5, indicatorSeconds = 2, buttonSeconds = 10 }),
   -- Tow per session: mode ('TOW', 'RESET', 'NONE'), towSeconds, repairFactor
@@ -841,6 +856,8 @@ local state = {
   pitDsqActive = false,
   dtDsqActive = false,
   onJumped = {},
+  sessionStartPending = false,  -- start / restart of a session (ac.onSessionStart), read by the session start
+  jumpSinceUpdate = false,      -- a reset of the car (ac.onCarJumped) since the last frame
   kmrMessages = {},
   tyreLaps = { [0] = 0, 0, 0, 0 },   -- laps of each tyre since it was fitted (car record)
   tyreKm = { [0] = 0, 0, 0, 0 },     -- km driven by each tyre since it was fitted (car record)
@@ -939,7 +956,20 @@ for _, zone in ipairs(config.cutZones) do
 end
 -- Teleport or car reset (SDK: ac.onCarJumped). The script's own holds (TeleportToPits) are ignored: the car is
 -- already where the hold was applied. A teleport from the track gets the tow hold in the next frame.
+-- The reset of the car by a new session (another session index, or the start event before it) is no teleport of the
+-- driver (decision 218): no tow, no hold, the car state not saved; the session start takes care of the car. A restart
+-- whose event comes after the reset is caught by the session start (state.jumpSinceUpdate)
+ac.onSessionStart(function(index, restarted)
+  state.sessionStartPending = true
+  ac.log(string.format('race-control: session start event (index %d, restarted %s)', index, tostring(restarted)))
+end)
+
 ac.onCarJumped(0, function()
+  state.jumpSinceUpdate = true
+  if state.lastSessionIndex ~= -1 and (sim.currentSessionIndex ~= state.lastSessionIndex or state.sessionStartPending) then
+    ac.log('race-control: car reset by the session start (not a tow)')
+    return
+  end
   for _, fn in ipairs(state.onJumped) do fn() end
   if state.ui.clock <= state.tow.ownJumpUntil then
     ac.log('race-control: car jumped (hold)')
@@ -1019,21 +1049,27 @@ end
 -- Service at the pit place: the own pit stop box running a stop, or a real change in the car since it arrived (fuel
 -- added, compound or tyres changed, damage repaired). Without a change in the car there is no service (the game flags
 -- and the AC pit screen opened and closed do not count)
+-- Second value: what changed, for the log (decision 218)
 function CarRead.serviced(car, s)
-  if state.pitService ~= nil then return true end
-  if CarRead.num(car.fuel) > s.fuel or CarRead.num(car.compoundIndex) ~= s.compound
-    or CarRead.num(car.engineLifeLeft) > s.engine then
-    return true
+  if state.pitService ~= nil then return true, 'pit stop box' end
+  local num = CarRead.num
+  if num(car.fuel) > s.fuel then return true, string.format('fuel %.2f -> %.2f L', s.fuel, num(car.fuel)) end
+  if num(car.compoundIndex) ~= s.compound then return true, 'compound ' .. s.compound .. ' -> ' .. num(car.compoundIndex) end
+  if num(car.engineLifeLeft) > s.engine then
+    return true, string.format('engine %.0f -> %.0f', s.engine, num(car.engineLifeLeft))
   end
   for i = 0, 3 do
-    if CarRead.num(car.wheels and car.wheels[i] and car.wheels[i].tyreVirtualKM) < s.km[i]
-      or CarRead.num(car.suspensionDamage[i]) < s.susp[i] then
-      return true
+    local km = num(car.wheels and car.wheels[i] and car.wheels[i].tyreVirtualKM)
+    if km < s.km[i] then return true, string.format('tyre %d %.3f -> %.3f km', i, s.km[i], km) end
+    if num(car.suspensionDamage[i]) < s.susp[i] then
+      return true, string.format('suspension %d %.3f -> %.3f', i, s.susp[i], num(car.suspensionDamage[i]))
     end
   end
   -- Body: the 4 zones of the damage screen (the fifth "is not really used", SDK; decision 168)
   for i = 0, 3 do
-    if CarRead.num(car.damage[i]) < s.body[i] then return true end
+    if num(car.damage[i]) < s.body[i] then
+      return true, string.format('body %d %.1f -> %.1f', i, s.body[i], num(car.damage[i]))
+    end
   end
   return false
 end
@@ -1570,18 +1606,113 @@ RecordSync.restorers.pit = function(body, seq)
   if seq < (PitRecord.seq or 0) then return end
   pitApply(body, seq, true)
 end
--- Server message dictionary (lowercase, plain text; no bare "DT" so names and other words are not caught)
-local DICT = {
-  driveThrough = { 'drive-through', 'drive through', 'drivethrough', 'stop and go', 'stop-and-go', 'stop & go' },
-  vsc = { 'virtual safety car' },   -- plus the whole word "vsc"
-  sc = { 'safety car' },            -- checked after VSC
-  code80 = { 'code-80', 'code 80', 'código-80', 'codigo-80', 'código 80', 'codigo 80', 'full course yellow' },
-  green = { 'green flag', 'bandeira verde' },   -- end of CODE-80; checked first
-  ended = { 'ended' },              -- with VSC / virtual safety car: end of CODE-80 (KMR: "Virtual Safety Car ended!")
-  rolling = { 'rolling start', 'formation lap' },
-  -- KMR penalty word, English and Portuguese (KMR language files en.json / pt.json)
-  penalty = { 'penalty', 'penalidade' },
-}
+-- ============================================================
+-- Dictionary (decision 214): the one place of the texts that come from outside the script (KMR, ACSM, the race
+-- direction), by source and theme; no other module keeps a term of its own. Each term by language: en, pt (the KMR sends
+-- each driver the message in the driver's language: KMR language files v1.6f, language/en.json and pt.json; the ACSM,
+-- race_control.go, writes English only). Lower case and no accents, as the KMR writes them; no bare "DT", so names and
+-- other words are not caught. Another language later = one more key (xx = { ... }) in each entry. At the load each
+-- entry becomes one list with every language. Words: plain text (hasAny); patterns: Lua patterns, a capture where a
+-- value is read (DICT.match)
+-- ============================================================
+local DICT
+do
+  -- A number of the KMR money (the safety rating): sign, digits, thousands comma, decimals; a unit before it is skipped
+  local N = '[^%d%-%+%s]*([%-%+]?%d[%d,]*%.?%d*)'
+  DICT = {
+    -- 1. Race direction: flags and CODE-80 (KMR, ACSM, the race direction)
+    flags = {
+      green = { en = { 'green flag' }, pt = { 'bandeira verde' } },           -- end of CODE-80; checked first
+      vsc = { en = { 'virtual safety car' }, pt = { 'safety car virtual' } }, -- plus the whole word "vsc"
+      sc = { en = { 'safety car' } },                                         -- checked after VSC
+      code80 = { en = { 'code-80', 'code 80', 'full course yellow' },
+        pt = { 'código-80', 'codigo-80', 'código 80', 'codigo 80' } },
+      -- With VSC: end of CODE-80 (KMR virtual_safety_car_ended: "Virtual Safety Car ended!", "... terminado!")
+      ended = { en = { 'ended' }, pt = { 'terminado' } },
+      rolling = { en = { 'rolling start', 'formation lap' }, pt = { 'largada em movimento', 'volta de formacao' } },
+    },
+    -- 2. KMR
+    kmr = {
+      -- 2.1 Penalty and drive-through
+      penalty = { en = { 'penalty' }, pt = { 'penalidade' } },
+      driveThrough = { en = { 'drive-through', 'drive through', 'drivethrough', 'stop and go', 'stop-and-go', 'stop & go' } },
+      -- Deadline of the drive-through (penalty_drive_through_*): next race, this lap, within n laps (pattern)
+      nextRace = { en = { 'next race' }, pt = { 'proxima corrida' } },
+      thisLap = { en = { 'this lap' }, pt = { 'desta volta' } },
+      withinLaps = { en = { 'within (%d+) lap' }, pt = { 'dentro de no maximo (%d+)' } },
+      -- Reason of the drive-through (for_* entries) -> category (TEXTS.kmrReasons), in this order
+      reasons = {
+        { 'K1', en = { 'crossing the pit exit line' }, pt = { 'por cruzar o pitlane na pista' } },
+        { 'K2', en = { 'pit lane speeding' }, pt = { 'excesso de velocidade no pit lane' } },
+        { 'K3', en = { 'reaching the infraction limit' }, pt = { 'atingir o limite de infracoes' } },
+        { 'K4', en = { 'colliding with a car that was lapping you' }, pt = { 'estava lhe aplicando uma volta' } },
+        { 'K5', en = { 'colliding with a car in the hotlap' }, pt = { 'colidir com um carro em volta rapida' } },
+        { 'K6', en = { 'disturbing another driver hotlap' }, pt = { 'atrapalhar a volta rapida' } },
+        { 'K7', en = { 'driving in reverse gear' }, pt = { 'pilotar em marcha re' } },
+        { 'K8', en = { 'parking the car in proximity of the track' }, pt = { 'parar o carro nas proximidades da pista' } },
+        { 'K9', en = { 'too many collisions' }, pt = { 'muitas colisoes' } },
+        { 'K10', en = { 'speeding during the virtual safety car' },
+          pt = { 'excesso de velocidade durante o safety car virtual' } },
+        { 'K11', en = { 'slowing down too much during the virtual safety car' },
+          pt = { 'lento durante muito tempo no safety car virtual' } },
+        { 'K12', en = { 'violating the overtake restriction' }, pt = { 'violar a restricao de ultrapassagem' } },
+        { 'K13', en = { 'cutting' }, pt = { 'por cortar' } },
+        { 'K14', en = { 'ignoring the blue flags' }, pt = { 'ignorar a bandeira azul' } },
+        { 'K15', en = { 'rejoining the track at high speed' }, pt = { 'retornar a pista em alta velocidade' } },
+      },
+      -- 2.2 Infraction points (money_penalty, "Penalty +1 (3/100): ..."): points and limit (pattern, decision 210)
+      points = { en = { '^%s*penalty%s*%+%d+%s*%((%d+)/(%d+)%)' }, pt = { '^%s*penalidade%s*%+%d+%s*%((%d+)/(%d+)%)' } },
+      -- 2.3 Safety rating (the KMR money; decision 215). The balance after the message (patterns): welcome_money,
+      -- kmr_money_output, money_penalty, damage_*_notification, towing_cost, race_entry_fee, qualify_top_3_prize,
+      -- all_times_fastest_lap_prize, session_balance_overview
+      ratingNow = { en = { 'you now have ' .. N, 'you have ' .. N .. '%S* in your account' },
+        pt = { 'voce agora possui ' .. N, 'agora voce possui ' .. N, 'voce possui ' .. N .. '%S* na sua conta' } },
+      -- Amount added with no balance in the message (patterns): race_pay, race_fastest_lap_prize,
+      -- race_clean_gain_reward, laptime_challenge_reward
+      ratingAdded = { en = { 'you have been paid ' .. N, 'paid you additional ' .. N, 'you earned ' .. N },
+        pt = { 'voce foi pago ' .. N, 'pagaram um adicional de ' .. N, 'voce ganhou ' .. N } },
+    },
+    -- 3. ACSM driver swap (race_control.go, handleDriverSwap; English only)
+    acsm = {
+      swapWait = { en = { 'please wait (%S+) before leaving the pits', '^free to leave pits in (%S+)' } },   -- patterns
+      swapClear = { en = { 'you are clear to leave the pits' } },
+      swapEarly = { en = { 'during a driver swap' } },
+      kicked = { en = { 'kicked' } },
+    },
+  }
+  -- Each entry: one list with every language (en first); the reasons keep their category in [1]
+  local LANGS = { 'en', 'pt' }
+  local function merge(t)
+    local out = {}
+    if t[1] then out[1] = t[1] end
+    for _, l in ipairs(LANGS) do
+      for _, w in ipairs(t[l] or {}) do out[#out + 1] = w end
+    end
+    return out
+  end
+  local function walk(t)
+    for k, v in pairs(t) do
+      if type(v) == 'table' then
+        if v.en or v.pt then t[k] = merge(v) else walk(v) end
+      end
+    end
+  end
+  walk(DICT)
+  -- Reasons: { category, word, word, ... } -> { category, words }
+  for i, r in ipairs(DICT.kmr.reasons) do
+    local words = {}
+    for j = 2, #r do words[#words + 1] = r[j] end
+    DICT.kmr.reasons[i] = { cat = r[1], words = words }
+  end
+  -- The captures of the first pattern of the list that matches the text (lower case), or nil
+  function DICT.match(text, patterns)
+    for _, p in ipairs(patterns) do
+      local a, b = text:match(p)
+      if a then return a, b end
+    end
+    return nil
+  end
+end
 
 -- Kinds that start CODE-80
 local CODE80_KINDS = { VSC = true, SC = true, ['CODE-80'] = true }
@@ -1609,21 +1740,22 @@ end
 -- as it names no other connected driver
 local function classifyServerMessage(message)
   local low = message:lower()
-  if hasAny(low, DICT.green) then return 'GREEN FLAG' end
-  local isVSC = low:find('%f[%w]vsc%f[%W]') or hasAny(low, DICT.vsc)
-  if isVSC and hasAny(low, DICT.ended) then return 'GREEN FLAG' end
+  local F = DICT.flags
+  if hasAny(low, F.green) then return 'GREEN FLAG' end
+  local isVSC = low:find('%f[%w]vsc%f[%W]') or hasAny(low, F.vsc)
+  if isVSC and hasAny(low, F.ended) then return 'GREEN FLAG' end
   if isVSC then return 'VSC' end
-  if hasAny(low, DICT.sc) then return 'SC' end
-  if hasAny(low, DICT.code80) then return 'CODE-80' end
-  if hasAny(low, DICT.rolling) then return 'ROLLING START' end
+  if hasAny(low, F.sc) then return 'SC' end
+  if hasAny(low, F.code80) then return 'CODE-80' end
+  if hasAny(low, F.rolling) then return 'ROLLING START' end
   local name = tostring(ac.getDriverName(0) or '')
-  if hasAny(low, DICT.driveThrough) then
+  if hasAny(low, DICT.kmr.driveThrough) then
     if name ~= '' and message:find(name, 1, true) then return 'DT' end
     -- "Other Name: ..." is the KMR line of another driver (also after that driver left); "Penalty: ..." and
     -- "Penalidade: ..." are the KMR messages to this car (en.json / pt.json)
     local head = message:match('^%s*([^:]+):%s')
-    if head and hasAny(head:lower(), DICT.penalty) then head = nil end
-    if hasAny(low, DICT.penalty) and not head and not namesAnother(message) then
+    if head and hasAny(head:lower(), DICT.kmr.penalty) then head = nil end
+    if hasAny(low, DICT.kmr.penalty) and not head and not namesAnother(message) then
       return 'DT'
     end
   end
@@ -1702,10 +1834,12 @@ do
     end
   end
 end
--- ACSM driver swap messages to the driver taking the car (race_control.go, handleDriverSwap). Returns true if handled.
+-- ACSM driver swap messages to the driver taking the car (race_control.go, handleDriverSwap; texts in DICT.acsm).
+-- Returns true if handled.
 local function onDriverSwapMessage(message)
   local low = message:lower()
-  local wait = low:match('please wait (%S+) before leaving the pits') or low:match('^free to leave pits in (%S+)')
+  local A = DICT.acsm
+  local wait = DICT.match(low, A.swapWait)
   if wait then
     local seconds = parseGoDuration(wait)
     state.swap.entered = true
@@ -1717,17 +1851,17 @@ local function onDriverSwapMessage(message)
     end
     return true
   end
-  if low:find('you are clear to leave the pits', 1, true) then
+  if hasAny(low, A.swapClear) then
     state.swap.remaining = nil
     state.swap.clearUntil = state.ui.clock + SERVER_NOTICE_SECONDS
     return true
   end
-  if low:find('during a driver swap', 1, true) then
+  if hasAny(low, A.swapEarly) then
     -- ACSM penalty for leaving the pits early (time penalty, or kick = DSQ by the ACSM): shown in the penalty message box
     -- and kept in the log; applied by the ACSM, not by this script
     state.swap.remaining = nil
     showNotice(TEXTS.rcTitle, message, nil, SERVER_NOTICE_SECONDS)
-    local kicked = low:find('kicked', 1, true) ~= nil
+    local kicked = hasAny(low, A.kicked)
     ac.log('race-control: ACSM driver swap penalty: ' .. message)
     rcLog(kicked and 'Disqualified by ACSM' or 'ACSM penalty', message)
     return true
@@ -1965,10 +2099,14 @@ end
 -- KMR points (decision 210): the KMR message of an infraction ("Penalty +1 (3/100): ... You now have 21p.",
 -- Portuguese "Penalidade +1 (3/100): ..."; KMR language file, money_penalty) gives the driver's infraction points
 -- before the bar; the limit is the key kmrPoints (limit:100); a limit in the message that differs goes to the log.
--- Kept per driver in the car record 'kmr' on this computer: back after a crash; another driver starts at '-'.
+-- KMR safety rating (decision 215): the KMR money, used as the safety rating of the driver. Every KMR message with the
+-- balance gives it (the welcome message at the entry, damage, tow, entry fee, prizes, the infraction); a reward with
+-- no balance adds its amount (texts in DICT.kmr). At or under the key kmrRating (dsqAt:0) it is a DSQ (KmrDT).
+-- Both kept per driver in the car record 'kmr' on this computer: back after a crash; another driver starts at '-'.
 -- ============================================================
 
-local Audit = { items = {}, window = {}, open = false, scroll = 0, points = nil, pointsDriver = nil }
+local Audit = { items = {}, window = {}, open = false, scroll = 0, points = nil, pointsDriver = nil, rating = nil,
+  ratingSeq = 0 }
 do
   local MAX_ITEMS = 200
   local STORAGE_KEY = 'rc.audit'
@@ -1995,12 +2133,27 @@ do
         if t then Audit.items[#Audit.items + 1] = { t = tonumber(t), src = src, text = msg } end
       end
     end
-    -- KMR points of the driver in the car
+    -- KMR points and safety rating of the driver in the car (driver|points|rating, '-' = not known)
     local body = Record.load('kmr')
-    local driver, points = tostring(body or ''):match('^(%d+)|(%d+)$')
+    local driver, points, rating = tostring(body or ''):match('^(%d+)|([^|]*)|?([^|]*)$')
     local me = nameCode(ac.getDriverName(0))
-    if driver and tonumber(driver) == me then Audit.points, Audit.pointsDriver = tonumber(points), me
-    else Audit.points, Audit.pointsDriver = nil, nil end
+    if driver and tonumber(driver) == me then
+      Audit.points, Audit.rating, Audit.pointsDriver = tonumber(points), tonumber(rating), me
+    else
+      Audit.points, Audit.rating, Audit.pointsDriver = nil, nil, nil
+    end
+    Audit.ratingSeq = Audit.ratingSeq + 1
+  end
+
+  local function kmrSave()
+    Audit.pointsDriver = nameCode(ac.getDriverName(0))
+    Record.save('kmr', math.floor(serverTimeMs()), string.format('%d|%s|%s', Audit.pointsDriver,
+      Audit.points and tostring(Audit.points) or '-', Audit.rating and Audit.num(Audit.rating) or '-'))
+  end
+
+  -- A number of the KMR as the KMR writes it: whole, or with its decimals
+  function Audit.num(v)
+    return (v == math.floor(v)) and string.format('%d', v) or (string.format('%.2f', v):gsub('0+$', ''))
   end
 
   -- A message taken off the chat: kept; shown in the message window for a few seconds only when no other part of our
@@ -2027,22 +2180,44 @@ do
 
   -- KMR infraction message: points of this driver (the number before the bar), limit checked against the key
   function Audit.kmrPoints(message)
-    local points, limit = tostring(message):match('^%s*Penal%a*%s*%+%d+%s*%((%d+)/(%d+)%)')
+    local points, limit = DICT.match(tostring(message):lower(), DICT.kmr.points)
     if not points then return false end
-    Audit.points, Audit.pointsDriver = tonumber(points), nameCode(ac.getDriverName(0))
-    Record.save('kmr', Audit.points, string.format('%d|%d', Audit.pointsDriver, Audit.points))
+    Audit.points = tonumber(points)
+    kmrSave()
     if tonumber(limit) ~= config.kmrPoints.limit then
       ac.log(string.format('race-control: KMR limit in the message %s differs from the key kmrPoints (%d)', limit,
         config.kmrPoints.limit))
     end
     return true
   end
+
+  -- KMR message with the safety rating of this driver: the balance after it, or a reward added to the balance known
+  function Audit.kmrRating(message)
+    local low = tostring(message):lower()
+    local now = DICT.match(low, DICT.kmr.ratingNow)
+    local added = not now and DICT.match(low, DICT.kmr.ratingAdded)
+    local v = tonumber((tostring(now or added or ''):gsub(',', '')))
+    if not v then return false end
+    if added then
+      if Audit.rating == nil then
+        ac.log('race-control: KMR reward with no balance known: ' .. message)
+        return true
+      end
+      v = Audit.rating + v
+    end
+    Audit.rating = v
+    Audit.ratingSeq = Audit.ratingSeq + 1
+    kmrSave()
+    ac.log('race-control: KMR safety rating ' .. Audit.num(v))
+    return true
+  end
 end
 -- Chat: Race Control lines are for the server log only, hidden from the chat of every client. Server messages
--- (fromServer: KMR or ACSM) that match the dictionary are also shown in the penalty message box, and the
--- ACSM driver swap messages feed the driver swap panel. Those, and the KMR infraction points, are taken off the chat
--- (decision 209: with the chat minimized the CSP shows the chat on top of the screen): they go to the Audit and to our
--- message window under the panel. Other server messages (free text of the Race Control) stay in the chat.
+-- (fromServer: KMR or ACSM) that match the dictionary (DICT, the one place of the outside texts) are also shown in the
+-- penalty message box, and the ACSM driver swap messages feed the driver swap panel. Those, the KMR infraction points
+-- and the KMR safety rating (every message with the balance) are taken off the chat (decision 209: with the chat
+-- minimized the CSP shows the chat on top of the screen): they go to the Audit and to our message window over the
+-- panel. Other server messages (free text of the Race Control) stay in the chat, with a line in the log.
 -- A message from the server: -1 (SDK: "or -1 if message comes from server"; a broadcast, e.g. VSC), or a sender that
 -- is no connected car: a message the server sends to one car (ACSM chat to the driver, udp SendChat; KMR messages to
 -- the driver) arrives with no name in the chat. A driver's message always comes from the driver's own car.
@@ -2058,8 +2233,8 @@ ac.onChatMessage(function(message, senderCarIndex)
   -- Audit: every chat line about a drive-through or a penalty goes to the server log with the sender the game gives
   -- (the SDK documents only -1 for the server; a KMR message to this car may come another way)
   local low = message:lower()
-  if message:sub(1, #TEXTS.rcPrefix) ~= TEXTS.rcPrefix and (low:find('drive-through', 1, true)
-      or low:find('drive through', 1, true) or low:find('penalty', 1, true)) then
+  if message:sub(1, #TEXTS.rcPrefix) ~= TEXTS.rcPrefix and (hasAny(low, DICT.kmr.driveThrough)
+      or hasAny(low, DICT.kmr.penalty)) then
     rcLog('Chat seen', string.format('sender %s - %s', tostring(senderCarIndex), message:sub(1, 90)))
   end
   if message:sub(1, #TEXTS.rcPrefix) == TEXTS.rcPrefix then
@@ -2096,10 +2271,15 @@ ac.onChatMessage(function(message, senderCarIndex)
     Audit.add('ACSM', message)
     return true
   end
-  -- KMR infraction: the points of this driver (decision 210)
-  if (server or senderCarIndex == 0) and Audit.kmrPoints(message) then
-    Audit.add('KMR', message, true)
-    return true
+  -- KMR messages of this driver: the infraction points (decision 210) and the safety rating (decision 215); an
+  -- infraction message carries both
+  if server or senderCarIndex == 0 then
+    local points = Audit.kmrPoints(message)
+    local rating = Audit.kmrRating(message)
+    if points or rating then
+      Audit.add('KMR', message, true)
+      return true
+    end
   end
   if server then
     local kind = classifyServerMessage(message)
@@ -2120,6 +2300,8 @@ ac.onChatMessage(function(message, senderCarIndex)
       Audit.add('KMR', message)
       return true
     end
+    -- Not in the dictionary: stays in the chat; the line shows what a new server message looks like
+    ac.log(string.format('race-control: server message not read (sender %s): %s', tostring(senderCarIndex), message))
   end
   return false
 end)
@@ -2773,8 +2955,10 @@ do
       and not CarState.search)
   end
 
-  -- Session start or script reload
-  function CarState.load()
+  -- Session start or script reload. dropReset: a new session within the running script whose start came after the reset
+  -- of the car (restart): the record that reset saved under the new session key is the car of the session before; the
+  -- new session starts with no record, and the car is saved once it settles (decision 218)
+  function CarState.load(dropReset)
     CarState.pending = nil
     CarState.appliedSeq = -1
     CarState.dirtyT = nil
@@ -2784,6 +2968,12 @@ do
     CarState.startT = state.ui.clock
     local body, seq, source = Record.load('car')
     CarState.seq = seq or 0
+    if dropReset then
+      CarState.restoring = false
+      CarState.dirtyT = state.ui.clock
+      ac.log('race-control: car state of the session before not carried over')
+      return
+    end
     if source == 'store' then
       -- Script reload in the same connection: the car is the same; the suspension reference comes from the record
       CarState.restoring = false
@@ -3260,7 +3450,10 @@ do
     local p = PitStops.pass
     if p and car.isInPit and not CarState.restoring then
       p.snap = p.snap or CarRead.snapshot(car)
-      if not p.stop and state.pitService == nil and CarRead.serviced(car, p.snap) then
+      local serviced, what = false, nil
+      if not p.stop and state.pitService == nil then serviced, what = CarRead.serviced(car, p.snap) end
+      if serviced then
+        ac.log('race-control: change in the car at the pit place: ' .. tostring(what))
         PitStops.noteService('service')
         PitStops.countStop()
       end
@@ -3691,9 +3884,13 @@ do
       and not CarState.restoring
     -- Choosing: the D-pad anywhere, the keyboard only at the pit place
     -- The D-pad only with the focus on the box (or no focus, decision 205); the keyboard at the pit place
-    -- (set by the desktops, which come later in the script: PitBox.padFor)
+    -- (set by the desktops, which come later in the script: PitBox.padFor); the arrows recorded by the tool act like
+    -- the D-pad (PitBox.ownDir, decision 217)
     local padOn = not PitBox.padFor or PitBox.padFor('pitbox')
-    local function hit(name) return (padOn and PAD[name]:pressed()) or (KEYS[name]:pressed() and PitBox.open) end
+    local function hit(name)
+      local own = PitBox.ownDir and PitBox.ownDir(name)
+      return (padOn and (PAD[name]:pressed() or own)) or (KEYS[name]:pressed() and PitBox.open)
+    end
     local up, down, left, right = hit('up'), hit('down'), hit('left'), hit('right')
     if up then PitBox.row = (PitBox.row - 2) % #ROWS + 1 end
     if down then PitBox.row = PitBox.row % #ROWS + 1 end
@@ -4306,43 +4503,38 @@ end
 local KmrDT = {}
 -- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
 do
-  -- Reason of the message -> category (TEXTS.kmrReasons)
-  -- English and Portuguese reason of each category (for_* entries of en.json / pt.json, lower case, no accents)
-  local KMR_REASONS = {
-    { 'crossing the pit exit line', 'K1' }, { 'por cruzar o pitlane na pista', 'K1' },
-    { 'pit lane speeding', 'K2' }, { 'excesso de velocidade no pit lane', 'K2' },
-    { 'reaching the infraction limit', 'K3' }, { 'atingir o limite de infracoes', 'K3' },
-    { 'colliding with a car that was lapping you', 'K4' }, { 'estava lhe aplicando uma volta', 'K4' },
-    { 'colliding with a car in the hotlap', 'K5' }, { 'colidir com um carro em volta rapida', 'K5' },
-    { 'disturbing another driver hotlap', 'K6' }, { 'atrapalhar a volta rapida', 'K6' },
-    { 'driving in reverse gear', 'K7' }, { 'pilotar em marcha re', 'K7' },
-    { 'parking the car in proximity of the track', 'K8' }, { 'parar o carro nas proximidades da pista', 'K8' },
-    { 'too many collisions', 'K9' }, { 'muitas colisoes', 'K9' },
-    { 'speeding during the virtual safety car', 'K10' }, { 'excesso de velocidade durante o safety car virtual', 'K10' },
-    { 'slowing down too much during the virtual safety car', 'K11' }, { 'lento durante muito tempo no safety car virtual', 'K11' },
-    { 'violating the overtake restriction', 'K12' }, { 'violar a restricao de ultrapassagem', 'K12' },
-    { 'cutting', 'K13' }, { 'por cortar', 'K13' },
-    { 'ignoring the blue flags', 'K14' }, { 'ignorar a bandeira azul', 'K14' },
-    { 'rejoining the track at high speed', 'K15' }, { 'retornar a pista em alta velocidade', 'K15' },
-  }
-
+  -- Reason of the message -> category (TEXTS.kmrReasons; the words in DICT.kmr.reasons)
   local function category(low)
-    for _, r in ipairs(KMR_REASONS) do
-      if low:find(r[1], 1, true) then return r[2] end
+    for _, r in ipairs(DICT.kmr.reasons) do
+      if hasAny(low, r.words) then return r.cat end
     end
     return 'K0'
   end
 
   -- Deadline of the message: laps (0 = this lap), 'next race', or nil (not a DT given now)
   local function deadline(low)
-    if low:find('next race', 1, true) or low:find('proxima corrida', 1, true) then return 'next race' end
-    if low:find('this lap', 1, true) or low:find('desta volta', 1, true) then return 0 end
-    local n = low:match('within (%d+) lap') or low:match('dentro de no maximo (%d+)')
+    local K = DICT.kmr
+    if hasAny(low, K.nextRace) then return 'next race' end
+    if hasAny(low, K.thisLap) then return 0 end
+    local n = DICT.match(low, K.withinLaps)
     if n then return tonumber(n) end
     return nil
   end
 
+  -- Safety rating of the KMR at or under the limit of the key kmrRating (decision 215): our DSQ, once for each new
+  -- balance (a DSQ taken off by the race direction is not given again for the same balance)
+  local ratingSeen = nil
+  local function ratingCheck()
+    local r = config.kmrRating
+    if not r.on or Audit.rating == nil or Audit.ratingSeq == ratingSeen then return end
+    ratingSeen = Audit.ratingSeq
+    if Audit.rating > r.dsqAt or state.dtDsqActive or state.pitDsqActive then return end
+    ac.log(string.format('race-control: DSQ, KMR safety rating %s (limit %s)', Audit.num(Audit.rating), Audit.num(r.dsqAt)))
+    carDsq(1, string.format(TEXTS.kmrRatingDsq, Audit.num(Audit.rating), Audit.num(r.dsqAt)))
+  end
+
   function KmrDT.update()
+    ratingCheck()
     local msgs = state.kmrMessages
     if #msgs == 0 then return end
     state.kmrMessages = {}
@@ -4350,7 +4542,7 @@ do
       local text = m.text
       local via = ' - chat sender ' .. tostring(m.sender)
       local low = text:lower()
-      local laps = hasAny(low, DICT.penalty) and deadline(low)
+      local laps = hasAny(low, DICT.kmr.penalty) and deadline(low)
       if laps then
         local cat = category(low)
         local base = TEXTS.kmrReasons[cat]
@@ -5826,7 +6018,7 @@ do
     Desktop.focus = list[at].g
   end
 
-  -- Left / right on the screen in focus (the pit stop box reads the D-pad itself)
+  -- Left / right on the screen in focus: the gamepad D-pad or the arrows recorded (the pit stop box reads them itself)
   local function valueStep(g, dir)
     if g == 'relative' or g == 'standings' then
       local list, seen = { 'ALL' }, {}
@@ -5915,6 +6107,33 @@ do
     down[name] = now
     return now and not was
   end
+  -- Arrows (decision 217): up / down / left / right recorded by the tool like the navigation, on any device (keyboard,
+  -- D-pad or button of a wheel or button box, gamepad); the keyboard arrows by default, so a driver with no D-pad can
+  -- record any button. They act on the screen in focus and on the pit stop box. Cleared: 'none' (the default does not
+  -- come back). Left / right held: again every 0.08 s after 0.4 s (the value rows of the box)
+  local DIRS = { up = 'k:38', down = 'k:40', left = 'k:37', right = 'k:39' }
+  local DIR_REPEAT = { left = true, right = true }
+  for name, b in pairs(DIRS) do Desktop.binds[name] = Desktop.binds[name] or b end
+  Desktop.dir = {}
+  local dirNext = {}           -- held: clock of the next repeat (math.huge = the press that recorded it)
+  local function dirUpdate()
+    for name in pairs(DIRS) do
+      local b = Desktop.binds[name]
+      local now = b and held(b) or false
+      local hit = false
+      if not now then dirNext[name] = nil
+      elseif not dirNext[name] then dirNext[name], hit = state.ui.clock + 0.4, true
+      elseif DIR_REPEAT[name] and state.ui.clock >= dirNext[name] then dirNext[name], hit = state.ui.clock + 0.08, true end
+      Desktop.dir[name] = hit and not Desktop.capture
+    end
+  end
+  -- For the pit stop box (it comes before in the script: PitBox.ownDir): the arrow recorded, except a keyboard arrow,
+  -- which the box already reads by its own buttons (CSP controls) at the pit place: one press, one step
+  local ARROW_KEYS = { ['k:37'] = true, ['k:38'] = true, ['k:39'] = true, ['k:40'] = true }
+  function Desktop.ownDir(name)
+    return Desktop.dir[name] == true and not ARROW_KEYS[Desktop.binds[name] or '']
+  end
+  PitBox.ownDir = Desktop.ownDir
   -- Every input held now: the snapshot of the recording (the first input that changes is the button)
   local function snapshot()
     local out = {}
@@ -5942,11 +6161,11 @@ do
   function Desktop.startCapture(name)
     Desktop.capture = { name = name, before = snapshot(), untilT = state.ui.clock + config.screens.buttonSeconds }
   end
-  function Desktop.clearBind(name) Desktop.binds[name] = nil; bindSave() end
+  function Desktop.clearBind(name) Desktop.binds[name] = DIRS[name] and 'none' or nil; bindSave() end
   -- Name of the device and the button of a binding, for the screen
   function Desktop.bindText(name)
     local b = Desktop.binds[name]
-    if not b then return nil end
+    if not b or b == 'none' then return nil end
     local kind, a, c, d = b:match('^(%a):([^:]*):?([^:]*):?([^:]*)$')
     if kind == 'j' or kind == 'p' then
       local j = ac.getJoystickIndexByInstanceGUID and ac.getJoystickIndexByInstanceGUID(a)
@@ -5954,7 +6173,7 @@ do
       return kind == 'j' and string.format(TEXTS.navButton, dev, tonumber(c) + 1)
         or string.format(TEXTS.navPov, dev, tonumber(d) / 100)
     elseif kind == 'g' then return string.format(TEXTS.navGamepad, tonumber(a) + 1, c)
-    elseif kind == 'k' then return string.format(TEXTS.navKey, a) end
+    elseif kind == 'k' then return string.format(TEXTS.navKey, TEXTS.navKeyNames[tonumber(a)] or a) end
     return b
   end
   local function captureUpdate()
@@ -5966,6 +6185,7 @@ do
       if not cap.before[b] then
         Desktop.binds[cap.name] = b
         down[cap.name] = true         -- the press that recorded it does not act
+        if DIRS[cap.name] then dirNext[cap.name] = math.huge end
         bindSave()
         Desktop.capture = nil
         return
@@ -5977,6 +6197,7 @@ do
   function Desktop.update(car)
     events(car)
     captureUpdate()
+    dirUpdate()
     local nav = not Desktop.capture
     if nav and (NAV.nextDesktop:pressed() or bindPressed('nextDesktop')) then Desktop.go(1) end
     if nav and (NAV.prevDesktop:pressed() or bindPressed('prevDesktop')) then Desktop.go(-1) end
@@ -5987,8 +6208,8 @@ do
     Desktop.wasInPit = car.isInPitlane
     local g = Desktop.focus
     if g and g ~= 'pitbox' and PitBox.PAD then
-      if PitBox.PAD.left:pressed() then valueStep(g, -1) end
-      if PitBox.PAD.right:pressed() then valueStep(g, 1) end
+      if PitBox.PAD.left:pressed() or Desktop.dir.left then valueStep(g, -1) end
+      if PitBox.PAD.right:pressed() or Desktop.dir.right then valueStep(g, 1) end
     end
   end
 end
@@ -7343,7 +7564,8 @@ local drawRaceScreens = (function()
   end
 
   -- Race status by the approved model (screen 4, decision 211): session lines; GAPS; OBLIGATIONS in 2 x 2 chips with
-  -- the state light; tyres, track and pending; and the KMR points (decision 210)
+  -- the state light; tyres, track and pending; the KMR points (decision 210) and safety rating (decision 215).
+  -- A chip with nothing to check (nothing required: 0 stops, 0 swaps, no stint limit) is grey, count shown (decision 216)
   local function chip2(p, wdt, s, title, value, light)
     local a, b = vec2(p.x, p.y), vec2(p.x + wdt, p.y + 26 * s)
     ui.drawRect(a, b, rgbm(1, 1, 1, 0.2), 3 * s)
@@ -7354,8 +7576,8 @@ local drawRaceScreens = (function()
   local function raceScreen(car, w, h, s)
     local me = RaceTable.byIndex[0]
     local session = ac.getSession(sim.currentSessionIndex)
-    -- Height: 3 lines of 14, a category and 3 gap rows, a category and 2 rows of chips, 4 rows, the separators
-    local content = 3 * 14 + 14 + 3 * ROW + 8 + 14 + 2 * 30 + 8 + 4 * ROW
+    -- Height: 3 lines of 14, a category and 3 gap rows, a category and 2 rows of chips, 5 rows, the separators
+    local content = 3 * 14 + 14 + 3 * ROW + 8 + 14 + 2 * 30 + 8 + 5 * ROW
     local p1, p2, y = frame('race', w, h, s, content / ROW, TEXTS.scrRace, TEXTS.sessionName[sim.raceSessionType] or '')
     local x0, xr = p1.x + 14 * s, p2.x - 14 * s
     local function line(label, value, color)
@@ -7395,16 +7617,17 @@ local drawRaceScreens = (function()
     local cw = (p2.x - p1.x - 28 * s - 4 * s) / 2
     local req = config.pitStopsRequired
     local stops = config.pitStopsEnabled and string.format('%d / %d', PitRecord.stops, req) or '-'
-    local stopsLight = (not config.pitStopsEnabled) and COLOR_OFF or ((req <= 0 or PitRecord.stops >= req) and GREEN or YELLOW)
+    local stopsLight = (not config.pitStopsEnabled or req <= 0) and COLOR_OFF or (PitRecord.stops >= req and GREEN or YELLOW)
     local swapReq = config.swapOn() and config.swapRequired
     local swaps = swapReq and string.format('%d / %d', SwapRecord.validNow(), swapReq) or '-'
-    local swapsLight = not swapReq and COLOR_OFF or ((swapReq <= 0 or SwapRecord.validNow() >= swapReq) and GREEN or YELLOW)
+    local swapsLight = (not swapReq or swapReq <= 0) and COLOR_OFF or (SwapRecord.validNow() >= swapReq and GREEN or YELLOW)
     local pit = Panel.cellPit()
     local pitLight = not pit and COLOR_OFF or (pit.color == 'red' and RED or pit.color == 'yellow' and YELLOW or GREEN)
     local ms = RaceTable.stintMs()
     local rule = config.driverStint
     local stint = ms and (mmss(ms / 1000) .. (rule.minMinutes > 0 and string.format(' / min %d', rule.minMinutes) or '')) or '-'
-    local stintLight = not ms and COLOR_OFF or (rule.minMinutes > 0 and ms < rule.minMinutes * 60000 and YELLOW)
+    local stintLight = (not ms or (rule.minMinutes <= 0 and rule.maxMinutes <= 0)) and COLOR_OFF
+      or (rule.minMinutes > 0 and ms < rule.minMinutes * 60000 and YELLOW)
       or ((rule.maxMinutes > 0 and ms > rule.maxMinutes * 60000) and RED) or GREEN
     chip2(vec2(x0, y), cw, s, TEXTS.scrStops, stops, stopsLight)
     chip2(vec2(x0 + cw + 4 * s, y), cw, s, TEXTS.scrSwaps, swaps, swapsLight)
@@ -7413,16 +7636,19 @@ local drawRaceScreens = (function()
     y = y + 60 * s
     drawSeparator(p1, p2, y + 3 * s, s)
     y = y + 8 * s
-    -- Tyres, track, pending, KMR points
+    -- Tyres, track, pending, KMR points and safety rating
     local life = CarRead.tyreLife(car, 0, state.tyreLineKm[0] or 0)
     local wet = CarRead.num(sim.rainWetness) > 0.05
     local pen = Panel.cellPenalties()
     local kmr = Audit.points and string.format('%d / %d', Audit.points, config.kmrPoints.limit) or '-'
+    local rt = config.kmrRating
+    local rating = Audit.rating and Audit.num(Audit.rating) or '-'
     for _, l in ipairs({
       { TEXTS.scrTyres, string.format('%d laps%s', state.tyreLaps[0] or 0, life and string.format(' - %d%%', math.floor(life)) or '') },
       { TEXTS.scrTrack, string.format('%s - grip %d%%', wet and 'WET' or 'DRY', math.floor(CarRead.num(sim.roadGrip) * 100)) },
       { TEXTS.scrPending, pen and pen.value or '-', pen and ORANGE },
-      { TEXTS.scrKmr, kmr, Audit.points and Audit.points >= config.kmrPoints.limit * 0.8 and RED or nil } }) do
+      { TEXTS.scrKmr, kmr, Audit.points and Audit.points >= config.kmrPoints.limit * 0.8 and RED or nil },
+      { TEXTS.scrKmrRating, rating, rt.on and Audit.rating and Audit.rating <= rt.dsqAt and RED or nil } }) do
       row(p1, y, s, { { l[1], 14, COLOR_DIM }, { l[2], 286, l[3] or COLOR_TITLE, true } })
       y = y + ROW * s
     end
@@ -7688,7 +7914,7 @@ local drawDesktopUI = (function()
     end
   end
 
-  -- Audit screen (decision 209): the server messages taken off the chat, newest first, and the KMR points
+  -- Audit screen (decision 209): the server messages taken off the chat, newest first, the KMR points and rating
   local AUDIT_ROWS = 16
   local SRC_COLOR = { KMR = PANEL_COLORS.yellow, ACSM = PANEL_COLORS.blue }
   local function audit(w, h, s)
@@ -7704,7 +7930,8 @@ local drawDesktopUI = (function()
     drawText(TEXTS.auditTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     local pts = Audit.points and string.format(TEXTS.auditPoints, Audit.points, config.kmrPoints.limit)
       or string.format(TEXTS.auditPoints, 0, config.kmrPoints.limit):gsub('^(%S+ %S+ )0', '%1-')
-    drawTextRight(pts .. '   ' .. string.format(TEXTS.auditCount, #Audit.items), FONT_MONO, 11 * s, p2.x - 34 * s,
+    local rating = string.format(TEXTS.auditRating, Audit.rating and Audit.num(Audit.rating) or '-')
+    drawTextRight(pts .. '   ' .. rating .. '   ' .. string.format(TEXTS.auditCount, #Audit.items), FONT_MONO, 11 * s, p2.x - 34 * s,
       p1.y + 5 * s, COLOR_TITLE)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Audit.open = false end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
@@ -7731,10 +7958,12 @@ local drawDesktopUI = (function()
     if n == 0 then drawText(TEXTS.auditEmpty, FONT_MONO, 9.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM) end
   end
 
-  -- Buttons screen (decision 212): each command of the navigation, the button recorded by the tool (Set: press it on any
-  -- device within 10 s; Clear), and the binding in the CSP controls, which also works
+  -- Buttons screen (decisions 212, 217): each command of the navigation and the arrows, the button recorded by the tool
+  -- (Set: press it on any device within 10 s; Clear), and the binding in the CSP controls, which also works (the arrows:
+  -- the gamepad D-pad of the pit stop box)
   local NAV_ROWS = { { 'nextScreen', TEXTS.navNextScreen }, { 'prevScreen', TEXTS.navPrevScreen },
-    { 'nextDesktop', TEXTS.navNextDesktop }, { 'prevDesktop', TEXTS.navPrevDesktop } }
+    { 'nextDesktop', TEXTS.navNextDesktop }, { 'prevDesktop', TEXTS.navPrevDesktop },
+    { 'up', TEXTS.navUp }, { 'down', TEXTS.navDown }, { 'left', TEXTS.navLeft }, { 'right', TEXTS.navRight } }
   local function buttonsScreen(w, h, s)
     local W3, H3 = 560, 44 + #NAV_ROWS * 22 + 22
     local p1, p2 = windowAt('buttons', W3, H3, w, h, s)
@@ -7759,7 +7988,7 @@ local drawDesktopUI = (function()
       drawText(own, FONT_MONO, 9.5 * s, vec2(p1.x + 150 * s, y + 1.5 * s), cap and PANEL_COLORS.yellow or (own == '-' and COLOR_OFF or COLOR_TITLE))
       local x = chip(TEXTS.navSet, vec2(p1.x + 330 * s, y), s, cap, nil, function() Desktop.startCapture(name) end)
       chip(TEXTS.navClear, vec2(x, y), s, false, PANEL_COLORS.red, function() Desktop.clearBind(name) end)
-      local b = Desktop.NAV[name]
+      local b = Desktop.NAV[name] or PitBox.PAD[name]
       local csp = b and b.boundTo and b:boundTo() or '-'
       drawText(csp, FONT_MONO, 9.5 * s, vec2(p1.x + 420 * s, y + 1.5 * s), csp == '-' and COLOR_OFF or COLOR_TITLE)
       y = y + 22 * s
@@ -8269,6 +8498,80 @@ function script.update(dt)
   local inPit = car.isInPitlane
   local lapCount = car.lapCount
   state.ui.clock = state.ui.clock + dt
+  -- A reset of the car seen since the last frame (ac.onCarJumped): read by the session start below, then cleared
+  local jumpedNow = state.jumpSinceUpdate
+  state.jumpSinceUpdate = false
+  -- Session start (decision 218): another session index (and the first frame of the script), or the start / restart
+  -- event of the SDK (a restarted session keeps its index). First thing in the frame: nothing of the session before
+  -- reaches the new one (the pit pass, the stops, the car record)
+  if sim.currentSessionIndex ~= state.lastSessionIndex or state.sessionStartPending then
+    -- Within the running script (not its first frame): the car was reset by the game, not moved by the driver
+    local transition = state.lastSessionIndex ~= -1
+    ac.log(string.format('race-control: session start (index %d%s%s)', sim.currentSessionIndex,
+      state.sessionStartPending and ', start event' or '', transition and '' or ', script start'))
+    state.sessionStartPending = false
+    l.curLap = lapCount
+    state.lastSessionIndex = sim.currentSessionIndex
+    -- The reset of the car by the session start is no tow (a tow of the session before does not go on)
+    l.jumped = false
+    state.prevInPitlane = {}
+    state.cutPassPenalized = {}
+    state.zonePass = {}
+    GainRef.load()
+    state.cutChecks = {}
+    state.slowdowns = {}
+    state.pitDsqActive = false
+    state.dtDsqActive = false
+    state.code80 = nil
+    state.code80Ended = false
+    state.dsqFlagPutBack = nil
+    -- CODE-80 in force: kept on a script reload; otherwise it comes from the other drivers (RecordSync.askOwn below)
+    TrackList.load()
+    -- Car state: put back after a new connection or a driver swap (from this computer or the other drivers)
+    CarState.load(transition and jumpedNow)
+    -- Stops with service and the hold in progress (it goes on after a new connection)
+    state.hold = nil
+    PitRecord.load()
+    PitStops.wasInPitlane = nil
+    PitStops.passInWindow = false
+    PitStops.pass = nil
+    PitStops.line = 0
+    PitStops.endChecked = false
+    DriverTable.reset()
+    RaceTable.load()
+    Audit.load()
+    WrongWay.reset()
+    PitBox.reset()
+    state.swap.swapInfo = nil
+    state.tow.jumpPending = false
+    state.tow.repairDone = false
+    state.tow.damage = nil
+    state.tow.lastRead = nil
+    l.endOfLap = {}
+    l.lastLap = lapCount
+    l.prevInPit = inPit
+    -- A DSQ belongs to its session: the controls locked and the game black flag of the session before are released
+    -- (Rules.sessionSync puts them back if the record of this session has a DSQ)
+    physics.lockUserControlsFor(0)
+    if g.t == BLACK_FLAG then
+      physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag)
+      g = { t = 0, p = 0 }
+    end
+    l.prevGame = { t = g.t, p = g.p }
+    -- Sync with the game on session start or reload
+    Rules.sessionSync(g)
+    -- Panel records of this session (script reload keeps them)
+    local window = Record.load('window')
+    state.pit.done = window == 'done'
+    state.pit.missed = window == 'missed'
+    SwapRecord.apply(Record.load('swap'))
+    -- The records of this car kept by the other drivers (reconnection, restarted game, driver swap)
+    RecordSync.askOwn()
+    ac.log(string.format('race-control: laps car=%d leaderboard=%s server time=%d ms', lapCount,
+      tostring(leaderboardLaps()), serverTimeMs()))
+    state.ui.lastSeq = l.seq
+    state.ui.notice = nil
+  end
   CarControls.update(dt)
   -- Movement of the car (position frame to frame): shared by the spin check and the wrong way rule
   CarRead.updateMotion(car)
@@ -8330,67 +8633,6 @@ function script.update(dt)
   -- Table lap: only advances after the line crossing is processed
   l.curLap = l.lastLap
 
-  if sim.currentSessionIndex ~= state.lastSessionIndex then
-    l.curLap = lapCount
-    state.lastSessionIndex = sim.currentSessionIndex
-    state.prevInPitlane = {}
-    state.cutPassPenalized = {}
-    state.zonePass = {}
-    GainRef.load()
-    state.cutChecks = {}
-    state.slowdowns = {}
-    state.pitDsqActive = false
-    state.dtDsqActive = false
-    state.code80 = nil
-    state.code80Ended = false
-    state.dsqFlagPutBack = nil
-    -- CODE-80 in force: kept on a script reload; otherwise it comes from the other drivers (RecordSync.askOwn below)
-    TrackList.load()
-    -- Car state: put back after a new connection or a driver swap (from this computer or the other drivers)
-    CarState.load()
-    -- Stops with service and the hold in progress (it goes on after a new connection)
-    state.hold = nil
-    PitRecord.load()
-    PitStops.wasInPitlane = nil
-    PitStops.passInWindow = false
-    PitStops.pass = nil
-    PitStops.line = 0
-    PitStops.endChecked = false
-    DriverTable.reset()
-    RaceTable.load()
-    Audit.load()
-    WrongWay.reset()
-    PitBox.reset()
-    state.swap.swapInfo = nil
-    state.tow.jumpPending = false
-    state.tow.repairDone = false
-    state.tow.damage = nil
-    state.tow.lastRead = nil
-    l.endOfLap = {}
-    l.lastLap = lapCount
-    l.prevInPit = inPit
-    -- A DSQ belongs to its session: the controls locked and the game black flag of the session before are released
-    -- (Rules.sessionSync puts them back if the record of this session has a DSQ)
-    physics.lockUserControlsFor(0)
-    if g.t == BLACK_FLAG then
-      physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag)
-      g = { t = 0, p = 0 }
-    end
-    l.prevGame = { t = g.t, p = g.p }
-    -- Sync with the game on session start or reload
-    Rules.sessionSync(g)
-    -- Panel records of this session (script reload keeps them)
-    local window = Record.load('window')
-    state.pit.done = window == 'done'
-    state.pit.missed = window == 'missed'
-    SwapRecord.apply(Record.load('swap'))
-    -- The records of this car kept by the other drivers (reconnection, restarted game, driver swap)
-    RecordSync.askOwn()
-    ac.log(string.format('race-control: laps car=%d leaderboard=%s server time=%d ms', lapCount,
-      tostring(leaderboardLaps()), serverTimeMs()))
-    state.ui.lastSeq = l.seq
-    state.ui.notice = nil
-  end
   -- Opening: after the session records are loaded (it may skip the short opening when there is something to show)
   Intro.update(car)
 
