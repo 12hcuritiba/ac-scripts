@@ -6751,7 +6751,9 @@ local drawRaceScreens = (function()
     local pl = PLACE[g]
     local k = h / 1080
     local bw = pl[3] * s
-    local bh = (26 + rows * ROW + 10) * s
+    -- Rows start 5 px under the title line; the same visual margin under the last one (a row is 13 px for a 10 px
+    -- font, so 3 px of it are already under the text)
+    local bh = (26 + rows * ROW + 2) * s
     local o = Drag.offset(g, h)
     local p1 = vec2(math.floor(pl[1] * k + o.x), math.floor(pl[2] * k + o.y))
     local p2 = vec2(p1.x + bw, p1.y + bh)
@@ -6784,11 +6786,13 @@ local drawRaceScreens = (function()
   end
 
   -- One row: cells { text, x (px at 1080p from the left), color, right-aligned, font }
+  -- A value not known ('-') has no color: always the dim color
   local function row(p1, y, s, cells)
     for _, c in ipairs(cells) do
       local font = c[5] or FONT_MONO
-      if c[4] then drawTextRight(c[1], font, FS * s, p1.x + c[2] * s, y, c[3] or COLOR_TITLE)
-      else drawText(c[1], font, FS * s, vec2(p1.x + c[2] * s, y), c[3] or COLOR_TITLE) end
+      local col = c[1] == '-' and COLOR_OFF or (c[3] or COLOR_TITLE)
+      if c[4] then drawTextRight(c[1], font, FS * s, p1.x + c[2] * s, y, col)
+      else drawText(c[1], font, FS * s, vec2(p1.x + c[2] * s, y), col) end
     end
   end
 
@@ -6821,9 +6825,9 @@ local drawRaceScreens = (function()
       local pos = filter.relative == 'ALL' and ('P' .. r.pos) or ('C' .. tostring(r.classPos or '-'))
       local gap = mine and 0 or -ac.getGapBetweenCars(0, r.index)
       row(p1, y, s, {
-        { pos, 30, mine and YELLOW or COLOR_DIM, true },
-        { '#' .. r.number, 36, col },
-        { r.name .. (r.inPit and '  PIT' or ''), 70, col, false, mine and FONT_TITLE or FONT_TEXT },
+        { pos, 36, mine and YELLOW or COLOR_DIM, true },
+        { '#' .. r.number, 42, col },
+        { r.name .. (r.inPit and '  PIT' or ''), 76, col, false, mine and FONT_TITLE or FONT_TEXT },
         { r.class or '', 250, COLOR_OFF, true },
         { string.format('%+.1f', gap), 286, col, true },
       })
@@ -6844,8 +6848,8 @@ local drawRaceScreens = (function()
     local last = math.min(#list, first + 9)
     local p1, p2, y = frame('standings', w, h, s, last - first + 2, TEXTS.scrStandings, nil)
     chips('standings', p1, p2, s)
-    row(p1, y, s, { { 'P', 18, COLOR_AXIS, true }, { 'CL', 38, COLOR_AXIS, true }, { '#', 46, COLOR_AXIS },
-      { 'DRIVER', 76, COLOR_AXIS }, { 'CLASS', 236, COLOR_AXIS }, { 'LAPS', 300, COLOR_AXIS, true },
+    row(p1, y, s, { { 'P', 32, COLOR_AXIS, true }, { 'CL', 52, COLOR_AXIS, true }, { '#', 58, COLOR_AXIS },
+      { 'DRIVER', 88, COLOR_AXIS }, { 'CLASS', 240, COLOR_AXIS }, { 'LAPS', 300, COLOR_AXIS, true },
       { 'GAP', 346, COLOR_AXIS, true }, { 'BEST', 416, COLOR_AXIS, true } })
     y = y + ROW * s
     local leader = list[1]
@@ -6860,9 +6864,9 @@ local drawRaceScreens = (function()
         gap = dl >= 1 and string.format('%d L', dl) or string.format('%.1f', math.abs(ac.getGapBetweenCars(r.index, leader.index)))
       end
       row(p1, y, s, {
-        { tostring(r.pos), 18, col, true }, { tostring(r.classPos or '-'), 38, COLOR_DIM, true },
-        { '#' .. r.number, 46, col }, { r.name, 76, col, false, me and FONT_TITLE or FONT_TEXT },
-        { r.class or '', 236, COLOR_OFF }, { tostring(r.laps), 300, col, true }, { gap, 346, col, true },
+        { tostring(r.pos), 32, col, true }, { tostring(r.classPos or '-'), 52, COLOR_DIM, true },
+        { '#' .. r.number, 58, col }, { r.name, 88, col, false, me and FONT_TITLE or FONT_TEXT },
+        { r.class or '', 240, COLOR_OFF }, { tostring(r.laps), 300, col, true }, { gap, 346, col, true },
         { lapTime(r.best), 416, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
       })
       y = y + ROW * s
@@ -6902,7 +6906,8 @@ local drawRaceScreens = (function()
     local sessionBest = CarRead.num(sim.bestLapTimeMs)
     local optimal = 0
     for k = 0, 2 do optimal = optimal + (car.bestSplits and CarRead.num(car.bestSplits[k]) or 0) end
-    local lastValid = car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0
+    -- No last lap yet: only the dash (no color, no cut)
+    local lastValid = CarRead.num(car.previousLapTimeMs) <= 0 or (car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0)
     for _, l in ipairs({
       { TEXTS.scrLast, lapTime(CarRead.num(car.previousLapTimeMs)) .. (lastValid and '' or ' cut'), lastValid and COLOR_TITLE or RED },
       { TEXTS.scrBest, lapTime(best), (best > 0 and best == sessionBest) and PURPLE or GREEN },
@@ -6916,7 +6921,7 @@ local drawRaceScreens = (function()
 
   -- Delta of the game (car.performanceMeter, decision 193), bar of +/- 1 s
   local function deltaScreen(car, w, h, s)
-    local p1, p2, y = frame('delta', w, h, s, 2, TEXTS.scrDelta, TEXTS.scrVsBest)
+    local p1, p2, y = frame('delta', w, h, s, 1.9, TEXTS.scrDelta, TEXTS.scrVsBest)
     local d = CarRead.num(car.performanceMeter)
     local bx1, bx2 = p1.x + 14 * s, p2.x - 14 * s
     local mid = (bx1 + bx2) / 2
@@ -6970,7 +6975,6 @@ local drawRaceScreens = (function()
 
   local function raceScreen(car, w, h, s)
     local me = RaceTable.byIndex[0]
-    local p1, p2, y = frame('race', w, h, s, 11, TEXTS.scrRace, TEXTS.sessionName[sim.raceSessionType] or '')
     local left = CarRead.num(sim.sessionTimeLeft) / 1000
     local lines = {
       { TEXTS.scrTime, left > 0 and string.format('%d:%02d:%02d', math.floor(left / 3600), math.floor(left / 60) % 60,
@@ -7005,7 +7009,8 @@ local drawRaceScreens = (function()
       life and string.format(' - %d%%', math.floor(life)) or '') }
     local pen = Panel.cellPenalties()
     lines[#lines + 1] = { TEXTS.scrPending, pen and pen.value or '-' }
-    for i = 1, math.min(#lines, 11) do
+    local p1, p2, y = frame('race', w, h, s, #lines, TEXTS.scrRace, TEXTS.sessionName[sim.raceSessionType] or '')
+    for i = 1, #lines do
       local l = lines[i]
       row(p1, y, s, { { l[1], 14, COLOR_DIM, false, FONT_TEXT }, { l[2], 286, i == #lines and pen and RED or COLOR_TITLE, true } })
       y = y + ROW * s
