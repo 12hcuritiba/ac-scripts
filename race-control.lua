@@ -590,7 +590,7 @@ local TEXTS = {
   scrWindow = 'Pit window', scrStintLine = 'Stint', scrTyres = 'Tyres', scrPending = 'Pending',
   sessionName = { [ac.SessionType.Practice] = 'PRACTICE', [ac.SessionType.Qualify] = 'QUALIFY', [ac.SessionType.Race] = 'RACE' },
   -- desktop editor and indicator (draw/desktop_editor.lua)
-  edTitle = 'SCREENS', edPitDesk = 'Pit desktop', edDeskOf = 'Desktop %s of %d', edHint = 'drag the title line to move this window',
+  edTitle = 'SCREENS', edPitDesk = 'Pit desktop', edDeskOf = 'Desktop %s of %d', edHint = 'drag a screen to its place - title line moves this window',
   edAll = 'all', edScreens = 'Screens', edReset = 'Reset desktop', edCopy = 'Copy from 1', edDelete = 'Delete desktop',
   edPitOn = 'PIT desktop on', edPitOff = 'PIT desktop off',
   edPitWarning = 'PIT desktop off: nothing more is shown in the pit lane - at your own risk',
@@ -7023,10 +7023,9 @@ local drawDesktopUI = (function()
   local RECT = { pitbox = { 1397, 837, 288, 195 }, setup = { 48, 772, 474, 260 }, status = { 1701, 718, 171, 314 },
     race = { 48, 110, 300, 190 }, laps = { 48, 420, 330, 160 }, standings = { 745, 560, 430, 180 },
     relative = { 1572, 380, 300, 180 }, laptime = { 1612, 640, 260, 150 }, delta = { 830, 860, 260, 70 } }
-  local MODE_LETTER = { visible = 'V', auto = 'A', hidden = 'H' }
+  local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }   -- as the screen icons
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local drag = nil                      -- card being dragged: { g, entry, dx, dy }
-  local selected = nil                  -- card chosen: its actions on the line under the canvas
   local move = nil                      -- the editor being moved by its title line: grab offset
   local pos = vec2(0, 0)                -- offset of the editor from the middle of the screen, px
 
@@ -7048,7 +7047,7 @@ local drawDesktopUI = (function()
   end
 
   local function editor(w, h, s)
-    local H = (Desktop.pitOn and 348 or 362)
+    local H = (Desktop.pitOn and 334 or 348)
     local p1 = vec2(math.floor(w / 2 - W * s / 2 + pos.x), math.floor(h / 2 - H * s / 2 + pos.y))
     local p2 = vec2(p1.x + W * s, p1.y + H * s)
     Drag.group = nil
@@ -7098,17 +7097,31 @@ local drawDesktopUI = (function()
         local r = RECT[g]
         if r then
           local a, b = toCanvas(r[1] + e.x, r[2] + e.y), toCanvas(r[1] + e.x + r[3], r[2] + e.y + r[4])
+          -- Room for the name and the icons on a small card
+          b = vec2(math.max(b.x, a.x + 44 * s), math.max(b.y, a.y + 22 * s))
           local dragging = drag and drag.g == g
           ui.drawRectFilled(a, b, rgbm(0.16, 0.17, 0.2, 0.95), 2 * s)
-          local chosen = selected and selected.g == g
-          ui.drawRect(a, b, (dragging or chosen) and PANEL_COLORS.yellow or (L[2] and PANEL_COLORS.green or rgbm(1, 1, 1, 0.45)), 2 * s)
+          ui.drawRect(a, b, dragging and PANEL_COLORS.yellow or (L[2] and PANEL_COLORS.green or rgbm(1, 1, 1, 0.45)), 2 * s)
           ui.pushClipRect(a, b)
           drawText(TEXTS.screenNames[g] or g, FONT_TEXT, 7.5 * s, vec2(a.x + 3 * s, a.y + 1 * s), COLOR_TITLE)
           ui.popClipRect()
-          -- A click chooses the card (its actions under the canvas) and drags it
-          if not drag and not move and ui.mouseClicked() and m.x >= a.x and m.x <= b.x and m.y >= a.y and m.y <= b.y then
+          -- Icons at the bottom right of the card: on all desktops (green), mode (visible / auto-hide / hidden), remove
+          local isz = 9 * s
+          local ix, iy = b.x - 3 * (isz + 2 * s) - 1 * s, b.y - isz - 2 * s
+          local function icon(id, col, fn)
+            local q1, q2 = vec2(ix, iy), vec2(ix + isz, iy + isz)
+            ui.drawIcon(id, q1, q2, col)
+            Drag.clickable(vec2(q1.x - 1 * s, q1.y - 1 * s), vec2(q2.x + 1 * s, q2.y + 1 * s), fn)
+            ix = ix + isz + 2 * s
+          end
+          icon(ui.Icons.Monitor, L[2] and PANEL_COLORS.green or COLOR_DIM, function() Desktop.pinAll(L[2] and 'all' or desk, g) end)
+          icon(MODE_ICON[e.mode] or ui.Icons.Eye, COLOR_TITLE, function() e.mode = MODE_NEXT[e.mode]; Desktop.save() end)
+          icon(ui.Icons.Trash, PANEL_COLORS.red, function() Desktop.remove(L[2] and 'all' or desk, g) end)
+          -- Drag the card by its body (not the icons)
+          local onIcons = m.x >= b.x - 3 * (isz + 2 * s) - 2 * s and m.y >= iy - 1 * s
+          if not drag and not move and not onIcons and ui.mouseClicked() and m.x >= a.x and m.x <= b.x
+              and m.y >= a.y and m.y <= b.y then
             drag = { g = g, entry = e, dx = (m.x - a.x) / cs, dy = (m.y - a.y) / cs }
-            selected = { g = g, all = L[2] }
           end
         end
       end
@@ -7136,26 +7149,8 @@ local drawDesktopUI = (function()
       Drag.clickable(a, b, function() Desktop.toggle(desk, g) end)
       ly = ly + 18 * s
     end
-    -- Actions of the card chosen: pin to all desktops (green), mode, remove
-    local sy = c2.y + 6 * s
-    local sel = selected and ((selected.all and Desktop.place.all[selected.g]) or (Desktop.place[desk] and Desktop.place[desk][selected.g]))
-    if sel then
-      local g, all = selected.g, selected.all
-      local sx = c1.x
-      drawText(TEXTS.screenNames[g] or g, FONT_TEXT, 9 * s, vec2(sx, sy + 1 * s), COLOR_TITLE)
-      sx = sx + textWidth(TEXTS.screenNames[g] or g, FONT_TEXT, 9 * s) + 8 * s
-      sx = chip(all and TEXTS.edPinned or TEXTS.edPin, vec2(sx, sy), s, all, PANEL_COLORS.green,
-        function() Desktop.pinAll(all and 'all' or desk, g); selected.all = not all end)
-      sx = chip(string.format(TEXTS.edMode, sel.mode), vec2(sx, sy), s, false, COLOR_TITLE,
-        function() sel.mode = MODE_NEXT[sel.mode]; Desktop.save() end)
-      chip(TEXTS.edRemove, vec2(sx, sy), s, false, PANEL_COLORS.red,
-        function() Desktop.remove(all and 'all' or desk, g); selected = nil end)
-    else
-      selected = nil
-      drawText(TEXTS.edChoose, FONT_MONO, 8.5 * s, vec2(c1.x, sy + 2 * s), COLOR_DIM)
-    end
     -- Buttons of the desktop and the pit desktop
-    local by = sy + 20 * s
+    local by = c2.y + 8 * s
     local bx = c1.x
     bx = chip(TEXTS.edReset, vec2(bx, by), s, false, nil, function()
       for _, e in pairs(Desktop.place[desk] or {}) do e.x, e.y = 0, 0 end
