@@ -6143,6 +6143,20 @@ do
 
   local function inside(m, a, b) return m.x >= a.x and m.x <= b.x and m.y >= a.y and m.y <= b.y end
 
+  -- Top of the panel and its boxes on the screen with room for the message window (decision 213): the window goes over
+  -- the panel, or under its boxes when there is no room over it, so the panel keeps Drag.panelExtra px free on one of
+  -- the two sides. top, height: px; returns the top that fits
+  Drag.panelExtra = 0
+  function Drag.fitPanel(top, height, h)
+    top = math.min(math.max(top, 0), math.max(h - height, 0))
+    local extra = Drag.panelExtra
+    if extra > 0 and top < extra and top + height > h - extra then
+      local over, under = math.min(extra, math.max(h - height, 0)), math.max(h - extra - height, 0)
+      top = (math.abs(top - over) <= math.abs(top - under)) and over or under
+    end
+    return top
+  end
+
   -- Position set from outside (the desktop editor), px at 1080p; a pinned (locked) screen does not move
   function Drag.pinned(g) return pins[g] == true end
   function Drag.setOffset(g, v)
@@ -6168,6 +6182,10 @@ do
       if ui.mouseDown() then
         local nx = math.min(math.max(m.x - a.grab.x, a.o.x - a.min.x), a.o.x + w - a.max.x)
         local ny = math.min(math.max(m.y - a.grab.y, a.o.y - a.min.y), a.o.y + h - a.max.y)
+        if a.group == 'panel' then
+          local top = a.min.y + (ny - a.o.y)
+          ny = ny + (Drag.fitPanel(top, a.max.y - a.min.y, h) - top)
+        end
         setOff(a.group, vec2(nx / k, ny / k))
       else
         save(a.group)
@@ -7443,8 +7461,31 @@ local drawDesktopUI = (function()
   local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }   -- as the screen icons
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local drag = nil                      -- card being dragged: { g, entry, dx, dy }
-  local move = nil                      -- the editor being moved by its title line: grab offset
-  local pos = vec2(0, 0)                -- offset of the editor from the middle of the screen, px
+  -- Windows of the tool (editor, Audit, Buttons) move by their title line (decision 213): offset from the middle of the
+  -- screen, px at 1080p, kept on this computer (ac.storage 'rc.win.<id>'); always inside the screen
+  local moving = nil                    -- { id, grab } window being moved
+  local function windowAt(id, W, H, w, h, s)
+    local k = h / 1080
+    local ox, oy = tostring(ac.storage['rc.win.' .. id] or ''):match('^(%-?[%d%.]+),(%-?[%d%.]+)$')
+    local o = vec2((tonumber(ox) or 0) * k, (tonumber(oy) or 0) * k)
+    local bw, bh = W * s, H * s
+    local m = ui.mousePos()
+    if moving and moving.id == id then
+      if ui.mouseDown() then o = vec2(m.x - moving.grab.x, m.y - moving.grab.y)
+      else moving = nil end
+    end
+    -- Inside the screen
+    local x = math.min(math.max(w / 2 - bw / 2 + o.x, 0), math.max(w - bw, 0))
+    local y = math.min(math.max(h / 2 - bh / 2 + o.y, 0), math.max(h - bh, 0))
+    o = vec2(x - (w / 2 - bw / 2), y - (h / 2 - bh / 2))
+    if moving and moving.id == id then ac.storage['rc.win.' .. id] = string.format('%.0f,%.0f', o.x / k, o.y / k) end
+    local p1 = vec2(math.floor(x), math.floor(y))
+    local p2 = vec2(p1.x + bw, p1.y + bh)
+    local onTitle = m.x >= p1.x and m.x <= p2.x - 34 * s and m.y >= p1.y and m.y <= p1.y + 21 * s
+    if onTitle then ui.setMouseCursor(ui.MouseCursor.ResizeAll) end
+    if not moving and onTitle and ui.mouseClicked() then moving = { id = id, grab = vec2(m.x - o.x, m.y - o.y) } end
+    return p1, p2
+  end
 
   local function chip(text, p, s, on, color, fn)
     local tw = textWidth(text, FONT_MONO, 9 * s)
@@ -7467,21 +7508,12 @@ local drawDesktopUI = (function()
     -- The canvas has the shape of this screen; the editor height follows it
     local canvasH = CANVAS_W * h / w
     local H = canvasH + (Desktop.pitOn and 96 or 110)
-    local p1 = vec2(math.floor(w / 2 - W * s / 2 + pos.x), math.floor(h / 2 - H * s / 2 + pos.y))
-    local p2 = vec2(p1.x + W * s, p1.y + H * s)
+    local p1, p2 = windowAt('editor', W, H, w, h, s)
     Drag.group = nil
     Drag.modal = { p1, p2 }
     local m = ui.mousePos()
     if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
-    -- Moved by its title line (outside the canvas and the lists)
-    if move then
-      if ui.mouseDown() then pos = vec2(m.x - move.x, m.y - move.y) else move = nil end
-    elseif ui.mouseClicked() and m.x >= p1.x and m.x <= p2.x - 34 * s and m.y >= p1.y and m.y <= p1.y + 21 * s then
-      move = vec2(m.x - pos.x, m.y - pos.y)
-    end
-    if m.y >= p1.y and m.y <= p1.y + 21 * s and m.x >= p1.x and m.x <= p2.x - 34 * s then
-      ui.setMouseCursor(ui.MouseCursor.ResizeAll)
-    end
+    local move = moving and moving.id == 'editor'
     drawPanel(p1, p2, BORDER_BASE, s)
     local desk = Desktop.editDesk
     drawText(TEXTS.edTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
@@ -7526,7 +7558,7 @@ local drawDesktopUI = (function()
     if pr and not drag and not move and not Drag.pinned('panel') and ui.mouseClicked() and m.x >= pa.x and m.x <= pb.x
         and m.y >= pa.y and m.y <= pb.y then
       drag = { g = 'panel', dx = (m.x - pa.x) / cs, dy = (m.y - pa.y) / cs, base = pr.base,
-        size = vec2(pr.max.x - pr.min.x, 66 * k) }
+        size = vec2(pr.max.x - pr.min.x, pr.max.y - pr.min.y) }
     end
     drawText(TEXTS.rcTitle, FONT_TEXT, 7.5 * s, vec2(pa.x + 3 * s, pa.y + 1 * s), COLOR_DIM)
     local lists = { { Desktop.place.all, true } }
@@ -7575,6 +7607,7 @@ local drawDesktopUI = (function()
         local tx = math.min(math.max((m.x - c1.x) / cs - drag.dx, 0), w - drag.size.x)
         local ty = math.min(math.max((m.y - c1.y) / cs - drag.dy, 0), h - drag.size.y)
         if drag.g == 'panel' then
+          ty = Drag.fitPanel(ty, drag.size.y, h)
           Drag.setOffset('panel', vec2((tx - drag.base.x) / k, (ty - drag.base.y) / k))
         else
           drag.entry.x = math.floor((tx - drag.base.x) / k)
@@ -7661,8 +7694,7 @@ local drawDesktopUI = (function()
   local function audit(w, h, s)
     local W2, ROW2 = 620, 14
     local H2 = 44 + AUDIT_ROWS * ROW2 + 10
-    local p1 = vec2(math.floor(w / 2 - W2 * s / 2), math.floor(h / 2 - H2 * s / 2))
-    local p2 = vec2(p1.x + W2 * s, p1.y + H2 * s)
+    local p1, p2 = windowAt('audit', W2, H2, w, h, s)
     Drag.group = nil
     Drag.modal = { p1, p2 }
     local m = ui.mousePos()
@@ -7705,8 +7737,7 @@ local drawDesktopUI = (function()
     { 'nextDesktop', TEXTS.navNextDesktop }, { 'prevDesktop', TEXTS.navPrevDesktop } }
   local function buttonsScreen(w, h, s)
     local W3, H3 = 560, 44 + #NAV_ROWS * 22 + 22
-    local p1 = vec2(math.floor(w / 2 - W3 * s / 2), math.floor(h / 2 - H3 * s / 2))
-    local p2 = vec2(p1.x + W3 * s, p1.y + H3 * s)
+    local p1, p2 = windowAt('buttons', W3, H3, w, h, s)
     Drag.group = nil
     Drag.modal = { p1, p2 }
     local m = ui.mousePos()
@@ -7735,24 +7766,30 @@ local drawDesktopUI = (function()
     end
   end
 
-  -- Message window under the panel (decision 209): the server message taken off the chat, a few seconds, narrower
+  -- Message window over the panel (decisions 209, 213): the server message taken off the chat, a few seconds, narrower
   local function messageWindow(w, h, s)
+    -- Over the panel (decision 213); under the panel and its boxes when there is no room over it. 460 x 56: the source
+    -- and two whole lines. Its room is kept in the limit of the panel drag (Drag.fitPanel), message or not
+    local mw, mh, gapW = 460 * s, 56 * s, 6 * s
+    Drag.panelExtra = mh + gapW
     local msg = Audit.current()
     if not msg then return end
-    -- Under the panel and its boxes; with the panel off, under its place (screen.lua: 18% of the height + 10 px)
+    -- The panel and its boxes; with the panel off, its place (screen.lua: 18% of the height + 10 px, 66 px high)
     local pr = Drag.lastRects.panel
     local o = Drag.offset('panel', h)
     local cx = pr and (pr.min.x + pr.max.x) / 2 or (w / 2 + o.x)
-    local top = pr and pr.max.y or (h * 0.18 + 10 * s + o.y + 66 * s)
-    local mw = 380 * s
-    local p1 = vec2(math.floor(cx - mw / 2), math.floor(top + 6 * s))
-    local p2 = vec2(p1.x + mw, p1.y + 42 * s)
+    local top = pr and pr.min.y or (h * 0.18 + 10 * s + o.y)
+    local bottom = pr and pr.max.y or (top + 66 * s)
+    local y = top - gapW - mh
+    if y < 0 then y = bottom + gapW end
+    local p1 = vec2(math.floor(math.min(math.max(cx - mw / 2, 0), w - mw)), math.floor(y))
+    local p2 = vec2(p1.x + mw, p1.y + mh)
     Drag.group = nil
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(msg.src, FONT_TITLE, 10 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), SRC_COLOR[msg.src] or COLOR_TITLE)
+    drawText(msg.src, FONT_TITLE, 10 * s, vec2(p1.x + 14 * s, p1.y + 5 * s), SRC_COLOR[msg.src] or COLOR_TITLE)
     ui.pushDWriteFont(FONT_TEXT)
-    ui.setCursor(vec2(p1.x + 14 * s, p1.y + 17 * s))
-    ui.dwriteTextAligned(msg.text, 10 * s, ui.Alignment.Start, ui.Alignment.Start, vec2(mw - 28 * s, 24 * s), true, COLOR_TITLE)
+    ui.setCursor(vec2(p1.x + 14 * s, p1.y + 20 * s))
+    ui.dwriteTextAligned(msg.text, 10.5 * s, ui.Alignment.Start, ui.Alignment.Start, vec2(mw - 28 * s, 30 * s), true, COLOR_TITLE)
     ui.popDWriteFont()
   end
 
