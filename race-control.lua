@@ -5550,18 +5550,23 @@ do
   -- editing); in the pit lane the pit desktop instead of the current one (not both); else the current desktop.
   -- The pit stop box of the pit desktop also counts on track: its own auto-hide rule shows it after a D-pad press
   -- (decision 159) and during the stop
+  -- Second value: true when it is the pit stop box of the pit desktop used away from the pit lane
   function Desktop.entry(g)
     local p = Desktop.place
     if p.all[g] then return p.all[g] end
     if Desktop.editor then return p[Desktop.editDesk] and p[Desktop.editDesk][g] or nil end
     if pitNow() then return p.pit[g] end
     local cur = p[Desktop.current] and p[Desktop.current][g]
-    return cur or (g == 'pitbox' and p.pit[g]) or nil
+    if cur then return cur end
+    if g == 'pitbox' and p.pit[g] then return p.pit[g], true end
+    return nil
   end
-  -- Mode of a screen now; with the editor open every screen of the desktop being edited is shown
+  -- Mode of a screen now; with the editor open every screen of the desktop being edited is shown. The pit stop box of
+  -- the pit desktop away from the pit lane only by its auto-hide rule (D-pad press, stop running), whatever its mode
   function Desktop.mode(g)
-    local e = Desktop.entry(g)
+    local e, away = Desktop.entry(g)
     if e and Desktop.editor then return 'visible' end
+    if away then return e.mode == 'hidden' and 'hidden' or 'auto' end
     return e and e.mode or 'hidden'
   end
   function Desktop.offset(g)
@@ -5580,8 +5585,8 @@ do
   end
   -- Shown / auto-hide of a screen on the current desktop (the panel icons, the delta button): added when missing
   function Desktop.setMode(g, mode)
-    local e = Desktop.entry(g)
-    if not e then
+    local e, away = Desktop.entry(g)
+    if not e or away then
       e = { x = 0, y = 0, mode = mode }
       Desktop.place[Desktop.current][g] = e
     end
