@@ -7796,6 +7796,9 @@ do
       row[#row + 1] = { ui.Icons.Settings, (Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen)
         and ICON_ON or ICON_COLOR,
         function() Desktop.menu = not Desktop.menu end }
+      -- The next desktop (decision 289): without a button recorded, the desktops are reached by the mouse; one after
+      -- the other, the indicator shows which
+      row[#row + 1] = { ui.Icons.Monitor, ICON_COLOR, function() Desktop.go(1) end }
       -- Quick access to every screen of the desktops (order of 30/09, decision 280): lit = shown on this desktop; a
       -- click shows it here, or back to auto-hide
       for _, it in ipairs({ { ui.Icons.Sliders, 'setup' }, { ui.Icons.PitStop, 'pitbox' },
@@ -10802,7 +10805,10 @@ local drawDesktopUI = (function()
       local fast = not c.isInPitlane and kmh > config.flags.redSpeedKmh
       if fast then over = over + 1 end
       drawText('#' .. tostring(ac.getDriverNumber(e.i) or e.i), FONT_MONO, 9.5 * s, vec2(x0, y), COLOR_TITLE)
-      drawText(tostring(ac.getDriverName(e.i) or ''), FONT_TEXT, 9.5 * s, vec2(p1.x + 60 * s, y), COLOR_TITLE)
+      local carName = tostring(ac.getDriverName(e.i) or '')
+      drawText(carName, FONT_TEXT, 9.5 * s, vec2(p1.x + 60 * s, y), Direction.target == carName and PANEL_COLORS.yellow or COLOR_TITLE)
+      -- A click on the name puts it in the driver field (decision 290: ballast, restrictor, reset of this driver)
+      if cmd then Drag.clickable(vec2(x0, y - 1 * s), vec2(p1.x + 205 * s, y + 13 * s), function() Direction.target = carName end) end
       drawText(where, FONT_MONO, 9.5 * s, vec2(p1.x + 210 * s, y),
         c.isInPit and PANEL_COLORS.green or (c.isInPitlane and PANEL_COLORS.yellow or PANEL_COLORS.red))
       drawTextRight(string.format('%.0f', kmh), FONT_MONO, 9.5 * s, p1.x + 300 * s, y, fast and PANEL_COLORS.red or COLOR_TITLE)
@@ -10815,6 +10821,9 @@ local drawDesktopUI = (function()
           sendKmr('player_give_drive_through ' .. slot .. '|1', 'DT ' .. name) end)
         ax = confirmChip(TEXTS.dirCancelDt, 'cdt' .. slot, vec2(ax, y - 1 * s), s, nil, function()
           sendKmr('player_cancel_drive_through ' .. slot, 'cancel DT ' .. name) end)
+        -- The stop & go of the platform relaxed (RC RELAX SG, decision 274), with the penalty commands (decision 288)
+        ax = confirmChip(TEXTS.dirNoSg, 'nosg' .. slot, vec2(ax, y - 1 * s), s, nil, function()
+          sendKmr('admin_say RC RELAX ' .. slot .. ' SG', 'relax S&G ' .. name) end)
         ax = confirmChip('KICK', 'kick' .. slot, vec2(ax, y - 1 * s), s, PANEL_COLORS.red, function()
           sendKmr('player_kick ' .. slot, 'kick ' .. name) end)
         ax = confirmChip('BAN 60', 'ban' .. slot, vec2(ax, y - 1 * s), s, PANEL_COLORS.red, function()
@@ -10830,11 +10839,8 @@ local drawDesktopUI = (function()
         -- Release by the KMR (decision 274): money and driving stats back to zero
         ax = confirmChip(TEXTS.dirMoney, 'money' .. slot, vec2(ax, y - 1 * s), s, nil, function()
           releaseDriver('driver_reset_money', name, 'reset money') end)
-        ax = confirmChip(TEXTS.dirStats, 'stats' .. slot, vec2(ax, y - 1 * s), s, nil, function()
+        confirmChip(TEXTS.dirStats, 'stats' .. slot, vec2(ax, y - 1 * s), s, nil, function()
           releaseDriver('driver_reset_driving_stats', name, 'reset stats') end)
-        -- The stop & go of the platform relaxed (RC RELAX SG, decision 274)
-        confirmChip(TEXTS.dirNoSg, 'nosg' .. slot, vec2(ax, y - 1 * s), s, nil, function()
-          sendKmr('admin_say RC RELAX ' .. slot .. ' SG', 'relax S&G ' .. name) end)
       end
       -- The KMR numbers of the driver (decision 278), sent by his client: points, safety rating, crashes and
       -- infractions with the rate per 100 km
