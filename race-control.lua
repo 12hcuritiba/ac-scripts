@@ -169,6 +169,17 @@ local cfg = ac.configValues({
   --   incident, the same exceptions; a car passed has to get the place back within yellowGiveBackSeconds, otherwise a
   --   stop & go of yellowPassSG seconds (VSC, SC and FCY: the KMR rules). The stop & go needs stopAndGo mode SG.
   flags = '',
+  -- restart = gridDelay:5 | gridSeconds:30 | lights:5 | stepSeconds:1 | releaseLight:3 | randomMin:0.2 |
+  --   randomMax:3 | jumpMeters:0.5 | jumpLaps:2 | screenLightsFrom:22
+  --   Standing restart after the red flag (decisions 293, 298), when the race direction chooses it (RC RESTART ALL;
+  --   the rolling restart under the VSC stays the default): gridDelay seconds after the command every car in the pits
+  --   is put on its grid place (AC_START nodes of the track, in the restart order), controls locked; gridSeconds later
+  --   the lights: one more every stepSeconds up to lights, the controls free at releaseLight (as the AC does), all off
+  --   after a random time from randomMin to randomMax seconds (the same on every client) = green flag. Moving forward
+  --   more than jumpMeters (from where the car stood when the controls were freed) before the lights go out = jump
+  --   start, a drive-through within jumpLaps laps. The lights on screen from the grid place screenLightsFrom back (the front ones see the gantry of the track). A car in a driver swap leaves
+  --   the pit lane at the green. RC RESTART OFF ALL before the green cancels it: red flag again, controls locked.
+  restart = '',
 
   -- ------------------------------------------------------------
   -- 2. General data (optional, filled in by the organizer)
@@ -585,6 +596,7 @@ local TEXTS = {
     SD2 = 'Exclusion zone cut - zone 2',
     PSE = 'Pit lane speeding',
     RC = 'Race Control decision',
+    JS = 'Jump start at the standing restart',
   },
   -- KMR drive-through reasons (category K<n>); on screen with " (KMR)", in the log with " (issued by KMR)"
   kmrReasons = {
@@ -649,7 +661,7 @@ local TEXTS = {
   edIndicator = 'DESKTOP %d / %d - %s',
   menuButtons = 'Buttons', navTitle = 'BUTTONS', navOwn = 'RECORDED BY THE TOOL', navCsp = 'CSP CONTROLS',
   navNextScreen = 'Next screen', navPrevScreen = 'Previous screen', navNextDesktop = 'Next desktop',
-  navPrevDesktop = 'Previous desktop', navSet = 'Set', navClear = 'Clear', navPress = 'Press a button... %d s',
+  navPrevDesktop = 'Previous desktop', navShowPanel = 'Show panel (5 s)', navSet = 'Set', navClear = 'Clear', navPress = 'Press a button... %d s',
   navInUseAc = 'in use by the AC: %s - choose another', navInUseOwn = 'in use by %s of this tool - choose another',
   navButton = '%s - button %d', navPov = '%s - D-pad %d deg', navGamepad = 'Gamepad %d - %s', navKey = 'Key %s',
   navDeviceOff = 'device off',
@@ -680,11 +692,13 @@ local TEXTS = {
   dirKmrLine = 'KMR  points %s / %d  -  safety %s  -  %s  -  infractions %s (%s / 100 km)',
   dirKmrCrashes = 'crashes %s (%s / 100 km)', dirBalRes = 'ballast %.0f kg  restrictor %.0f', dirKmrLaps = '  -  laps %d best %s', dirKmrNoStats = 'stats: none yet (not driven enough)',
   dirKmrNone = 'KMR  no numbers from this driver yet',
+  dirPenNone = 'Penalties  none', dirPenTitle = 'Penalties  ', dirPenDt = '%s DT%d', dirPenSg = 'S&G %d s', dirPenDsq = 'DSQ',
+  dirPenUnknown = 'Penalties  no list from this driver yet',
   dirDriver = 'Driver',
   dirWebLine = 'money %s - %s - infr %s (%s/100km) - crashes %s (%s/100km) - laps %d best %s',
   dirWebOthers = 'Registered in the KMR',
   dirWebErr = 'KMR web stats not read: %s', dirWebOff = 'KMR web stats: key kmrStatsUrl empty', dirValue = 'Value', dirBallast = 'BALLAST', dirRestrictor = 'RESTRICTOR',
-  dirNeedCarValue = 'Ballast / restrictor: a driver on the server in the field and a value', dirList = 'DRIVERS', dirListBtn = 'LIST', dirSessionTime = '%s elapsed / %s left',
+  dirNeedCarValue = 'Ballast / restrictor: a driver on the server in the field and a value', dirList = 'DRIVERS', dirListBtn = 'LIST', dirCmdBtn = 'COMMANDS', dirCmdTitle = 'COMMANDS', dirCmdHow = 'How: ', dirSessionTime = '%s elapsed / %s left',
   dirSessionLaps = 'lap %d', dirSessionLapsOf = 'lap %d / %d - %d left',
   dirLeft = 'Left the server', dirGuidAsk = 'Asking the KMR the GUID of %s',
   dirGuidNone = 'The KMR gave no GUID for %s (the name is case sensitive)', dirGuidGot = 'GUID of %s: %s',
@@ -709,7 +723,7 @@ local TEXTS = {
   scrEvent = 'EVENT', scrEventInfo = 'event info', evStops = 'Pit stops required', evSwaps = 'Driver swaps required',
   evStint = 'Stint', evOrder = 'Pit stop order', evPitSpeed = 'Pit lane speed', evRating = 'KMR rating',
   flagRed = 'RED FLAG',
-  flagRedLine = 'Slow down - no overtaking - return to the pit lane',
+  flagRedLine = 'Slow down - no overtaking - complete the lap on track, then the pits',
   flagRedNeutral = 'Race neutralized by Race Control',
   flagRedSpeed = 'Max %d km/h - you: %.0f km/h',
   redFlagLineDsq = 'Line crossed in the pit lane with the red flag (leaving the pits)',
@@ -747,6 +761,12 @@ local TEXTS = {
   startPlace = 'P%d - stay behind %s', startLeader = 'nobody: you lead', startBehindYou = ' - %s behind you',
   startPassedBy = ' - %s passed you', startGiveBack = 'GIVE THE PLACE BACK TO %s', startPassAllowed = 'P%d - %s can be passed (KMR)',
   flagRedLocked = 'Stay at your pit place - controls locked until the restart',
+  srTitle = 'STANDING RESTART', srGrid = 'Grid P%d - controls locked', srGridFree = 'Grid P%d', srGridSoon = 'Grid in %d s - stay at your pit place',
+  srSwap = 'Driver swap: leave the pit lane at the green', srLightsIn = 'Lights in %d s', srLights = 'Lights %d / %d',
+  srFree = 'Controls free - do not move before the lights go out', srGo = 'GREEN FLAG - GO GO',
+  srGoLine = 'Standing restart', srCancelled = 'Standing restart cancelled - red flag',
+  srGridLocked = 'Stay on the grid - controls locked', srNoNode = 'no grid place AC_START_%d on this track',
+  dirStanding = 'STANDING RESTART', dirStandingOff = 'CANCEL RESTART',
   flagRestart = 'Restart P%d - behind %s', flagRestartFirst = 'Restart P%d - first car',
   flagRestartSwap = 'Restart P%d - driver swap: back of the field, behind %s',
   appMissing = 'Race Control app not running - install it from the event page - the game closes in %d s',
@@ -868,6 +888,9 @@ local config = {
   flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
     greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30, redOverSeconds = 10, redNoLineSG = 120,
     yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
+  -- Standing restart after the red flag (decisions 293, 298)
+  restart = structKey('restart', { gridDelay = 5, gridSeconds = 30, lights = 5, stepSeconds = 1, releaseLight = 3,
+    randomMin = 0.2, randomMax = 3, jumpMeters = 0.5, jumpLaps = 2, screenLightsFrom = 22 }),
   driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
   kmrPoints = structKey('kmrPoints', { limit = 100 }),
   eventName = tostring(cfg.eventName or ''),
@@ -2175,7 +2198,8 @@ end
 -- own record; when a client starts, the others answer with theirs and the one with the latest change wins.
 -- A script reload keeps it (ac.store). The file on this computer (ac.storage) is not used: while the game was closed
 -- the chat was missed, so it may be old.
--- Body: <VSC|SC|CODE-80|GREEN>|<server time of the change, ms>|<RED or ->|<reason of the red flag>
+-- Body: <VSC|SC|CODE-80|GREEN>|<server time of the change, ms>|<RED or ->|<reason of the red flag>|<time of the
+-- standing restart command in progress, ms, or empty> (older records without it are still read)
 -- The red flag (decision 196) goes in the same record: who enters during it gets it from the other drivers
 -- ============================================================
 
@@ -2187,8 +2211,8 @@ local TrackList = {
 do
   local function trackBody()
     local red = state.redFlag
-    return string.format('%s|%d|%s|%s', state.code80 or 'GREEN', math.floor(TrackList.since), red and 'RED' or '-',
-      red and red.reason and (red.reason:gsub('[|\r\n]', ' ')) or '')
+    return string.format('%s|%d|%s|%s|%s', state.code80 or 'GREEN', math.floor(TrackList.since), red and 'RED' or '-',
+      red and red.reason and (red.reason:gsub('[|\r\n]', ' ')) or '', state.restart and math.floor(state.restart.t0) or '')
   end
 
   local function trackSave()
@@ -2203,7 +2227,7 @@ do
 
   -- A track record (from this process or from the other drivers): applied when its change is newer than the one in force
   local function trackApply(body, source)
-    local kind, since, red, reason = tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?(.*)$')
+    local kind, since, red, reason, rt = tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)$')
     since = tonumber(since)
     if not since or since <= TrackList.since then return false end
     local code80 = kind ~= 'GREEN' and kind or nil
@@ -2216,6 +2240,7 @@ do
       ac.log('race-control: red flag ' .. (red == 'RED' and 'on' or 'off') .. ' (' .. source .. ')')
     end
     state.redFlag = red == 'RED' and { reason = reason ~= '' and reason or nil } or nil
+    state.restart = (rt or '') ~= '' and { t0 = tonumber(rt) } or nil
     TrackList.since = since
     return true
   end
@@ -4945,7 +4970,7 @@ function Rules.line(viaPit, g, lapCount)
   l.curLap = lapCount
   -- CODE-80 with frozen deadlines: no lap is taken and nobody is disqualified at this line. The red flag too (decision
   -- 267): every car crosses the line on track to receive it, and the penalties are served after the restart
-  local frozen = (state.code80 ~= nil and config.code80Freeze) or state.redFlag ~= nil
+  local frozen = (state.code80 ~= nil and config.code80Freeze) or state.redFlag ~= nil or state.restart ~= nil
   if viaPit then
     -- Rule 3: the pit pass serves one DT, position 0 (DT0 before DT1; same deadline, the oldest first).
     -- After a teleport there is no pit pass: nothing is paid. During CODE-80 nothing is paid either.
@@ -5212,7 +5237,7 @@ do
       return
     end
     -- Stop at the own pit place: driven into it now, or resuming the same driver's interrupted stop & go
-    if state.code80 or state.redFlag or StopAndGo.serviced or not CarRead.parked(car) then return end
+    if state.code80 or state.redFlag or state.restart or StopAndGo.serviced or not CarRead.parked(car) then return end
     if not (StopAndGo.drove or StopAndGo.resume) then return end
     StopAndGo.stopping = true
     StopAndGo.base = sgFields(sg)
@@ -5483,6 +5508,8 @@ end
 --   Red flag (decisions 174, 196, 203): REDFLAG ALL [- reason] gives it to every car; REDFLAG OFF ALL takes it off;
 --   FUEL <ID> unlocks the fuel of the car under the red flag (decision 270: a car already going to the pits)
 --   KMR <ID>: the client of the car asks its KMR numbers again (kmr stats, kmr money; decision 282: after a reset)
+--   Standing restart (decisions 293, 298): RESTART ALL [@<server time ms>] with the red flag up takes it off and starts
+--   the procedure (flags/restart.lua); RESTART OFF ALL before the green cancels it (red flag again)
 -- Every command goes to the server log ([RC] line) and to the driver's message box; the car record is kept up to date.
 -- ============================================================
 
@@ -5594,6 +5621,21 @@ do
           rcLog(on and 'Red flag' or 'Red flag off', reason ~= '' and reason or '-')
           ac.log('race-control: red flag ' .. (on and 'on' or 'off') .. (reason ~= '' and (' - ' .. reason) or ''))
         end
+      end
+      -- Standing restart: the time of the command (@ms, sent by the direction window) is the same on every client;
+      -- typed by hand without it, the next whole 5 s of the server time
+      local rs, rsT = body:upper():match('^%s*RC%s+RESTART%s+(%a+)%s*@?(%d*)')
+      if rs == 'ALL' and state.redFlag and not state.restart then
+        state.restart = { t0 = tonumber(rsT) or math.ceil(serverTimeMs() / 5000) * 5000 }
+        state.redFlag = nil
+        TrackList.changed()
+        rcLog('Standing restart', reason ~= '' and reason or '-')
+        ac.log('race-control: standing restart command, time ' .. math.floor(state.restart.t0))
+      elseif rs == 'OFF' and state.restart then
+        state.restart = nil
+        state.redFlag = { reason = reason ~= '' and reason or nil }
+        TrackList.changed()
+        rcLog('Standing restart cancelled', reason ~= '' and reason or '-')
       end
       local action, id, value = body:match('^%s*[Rr][Cc]%s+(%a+)%s+(%d+)%s*(%S*)')
       if action and not red and isMine(id) then
@@ -5865,6 +5907,7 @@ do
     end
     return nil
   end
+  Flags.restartPlace = restartPlace
   local function restartText()
     if not Flags.restartUntil or sim.raceSessionType ~= ac.SessionType.Race then return nil end
     local k, ahead = restartPlace()
@@ -5878,10 +5921,11 @@ do
   local RESTART_WAIT = 10
   local function restartUpdate()
     local clock = state.ui.clock
-    if state.redFlag then
+    if state.redFlag or state.restart then
+      -- The standing restart keeps the order until its green (restart.lua)
       Flags.restartUntil = math.huge
       -- A driver swap under this red flag (its start: TrackList.since)
-      if DriverTable.swapMs and DriverTable.swapMs >= TrackList.since and not Flags.mySwapMs then
+      if state.redFlag and DriverTable.swapMs and DriverTable.swapMs >= TrackList.since and not Flags.mySwapMs then
         Flags.mySwapMs = DriverTable.swapMs
         rcLog('Red flag', 'driver swap: restart at the back of the field')
       end
@@ -5918,6 +5962,10 @@ do
         or (not car.isInPitlane and TEXTS.flagRedToBox)
         or (state.redFlag.reason or TEXTS.flagRedNeutral), over }
     end
+    -- A car kept on the grid after a standing restart cancelled (restart.lua)
+    if red and Flags.onGrid then red[4], red[5] = TEXTS.srCancelled, TEXTS.srGridLocked end
+    -- The standing restart in progress (group 1, in the place of the red flag it follows)
+    if not red and Flags.standingFlag then red = Flags.standingFlag(car) end
     -- 2 neutralizations from the chat (KMR) or the Race Control
     if state.code80 then
       yellow = { 2, 'yellow', TEXTS.flagCode80[state.code80] or state.code80, TEXTS.flagCode80Line,
@@ -5983,6 +6031,9 @@ do
     local top = red or yellow
     if Flags.lastGroup and Flags.lastGroup <= 2 and not top then Flags.greenUntil = clock + cfg.greenSeconds end
     Flags.lastGroup = top and top[1] or nil
+    if not normal and clock < (Flags.srGoUntil or 0) then
+      normal = { 5, 'green', TEXTS.srGo, TEXTS.srGoLine, '', nil, true }
+    end
     if not normal and clock < Flags.greenUntil then
       normal = { 5, 'green', TEXTS.flagGreen, TEXTS.flagGreenLine, '' }
     end
@@ -6244,7 +6295,9 @@ do
     local up = state.redFlag ~= nil
     -- The restart (the red flag goes down): a car that did not enter the pits under the red flag is disqualified
     -- (decision 262); before it the race direction can disqualify it or send it to the pits (RC DSQ / RC TELEPORT)
-    if Flags.redWasUp and not up and not car.isInPitlane and not (state.dtDsqActive or state.pitDsqActive) then
+    -- A car kept on its grid place by a standing restart cancelled is where the race direction put it (restart.lua)
+    if Flags.redWasUp and not up and not car.isInPitlane and not Flags.onGrid
+        and not (state.dtDsqActive or state.pitDsqActive) then
       ac.log('race-control: DSQ, not in the pits at the restart after the red flag')
       carDsq(1, TEXTS.redFlagNoPitDsq)
     end
@@ -6264,7 +6317,8 @@ do
       end
     elseif Flags.redLocked and not up then
       Flags.redLocked = false
-      if not ownLock then physics.lockUserControlsFor(0) end
+      -- A standing restart keeps them locked until its release light (restart.lua)
+      if not ownLock and not state.restart then physics.lockUserControlsFor(0) end
       rcLog('Red flag', 'controls released at the pit place')
     end
     -- A tow under the red flag (decision 270): its hold, tow and repair, starts at the restart
@@ -6290,8 +6344,229 @@ do
     publish(car)
     redRules(car, lineFrame)
     restartUpdate()
+    if Flags.standingUpdate then Flags.standingUpdate(car) end
     yellowRules(car)
     Flags.current = pick(car)
+  end
+end
+-- ============================================================
+-- Standing restart after the red flag (decisions 293, 298; design: docs/projeto/Levantamento — 30-09, próxima etapa,
+-- section 5). The rolling restart under the VSC of the KMR (RC REDFLAG OFF ALL) stays the default; the race direction
+-- can choose the standing one: RC RESTART ALL [@<server time ms>] takes the red flag off and starts the procedure
+-- (decision 262: who is not in the pits then is disqualified, flags.lua). Timeline from the time of the command (the
+-- direction window sends it, so every client counts from the same time; typed by hand, the time the chat arrives):
+--   gridDelay s     every car in the pits is put on its grid place, AC_START_<place - 1> of the track, in the restart
+--                   order (decision 264: a car whose driver was swapped under the red flag stays in the pits and leaves
+--                   the pit lane at the green, decision 293), the controls locked
+--   + gridSeconds   the lights: one more every stepSeconds up to `lights`; the controls free at `releaseLight` (as the
+--                   AC does: time to engage the gear and rev); all off after a random time from randomMin to randomMax
+--                   seconds, the same on every client (from the time of the command) = green flag, the official restart
+--   moving forward more than jumpMeters before the lights go out = jump start: a drive-through within jumpLaps laps
+--   (decision 298: DT2). Measured as the start systems do (the car against its own place, a small tolerance for the
+--   clutch; decision 314): from where the car stands when the controls are freed (it settled on its place for
+--   gridSeconds, controls locked: the drop of the teleport and the suspension do not count), only forward along where
+--   it points, on the ground plane (rolling back or sideways is not a jump start). The largest forward movement before
+--   the green goes to the log, to check the tolerance in the game
+-- RC RESTART OFF ALL before the green cancels it: the red flag again and the controls locked again where the car is
+-- (on the grid: kept locked while the red flag is up; the next RC RESTART ALL puts it on its place again). The track
+-- is told ('race-control.restart': 'grid', 'lights:<n>', 'go', 'off'; again every 2 s while it lasts) to light its
+-- gantry (sessionlights.lua of the track, docs/projeto/Pista); the lights on screen from the grid place
+-- restart.screenLightsFrom back, as the own start lights (decision 257). Everything goes to the log.
+-- ============================================================
+
+do
+  local TRACK_EVENT = 'race-control.restart'
+  Flags.sr = {}
+  Flags.onGrid, Flags.srGoUntil = false, 0
+
+  local function reset(t0)
+    Flags.sr = { t0 = t0, placed = false, released = false, go = false, jumped = false, gridPos = nil, k = nil,
+      sent = Flags.sr.sent, sentT = Flags.sr.sentT or -1e9, lockT = -1e9, goT = nil, relPos = nil, relLook = nil,
+      creep = 0 }
+  end
+
+  -- The same random delay on every client: integer steps from the time of the command (no floating functions that
+  -- could differ between computers)
+  local function randomDelay(t0)
+    local c = config.restart
+    local x = ((math.floor(t0) % 100000) * 16807 + 12345) % 2147483647 / 2147483647
+    return c.randomMin + (c.randomMax - c.randomMin) * x
+  end
+
+  -- Grid, first light, step, last light and lights out, ms from the command
+  local function timeline(t0)
+    local c = config.restart
+    local gridAt = c.gridDelay * 1000
+    local lightsAt = gridAt + c.gridSeconds * 1000
+    local step = c.stepSeconds * 1000
+    local lastAt = lightsAt + (c.lights - 1) * step
+    return gridAt, lightsAt, step, lastAt + randomDelay(t0) * 1000
+  end
+  local function lit(d, lightsAt, step)
+    if d < lightsAt then return 0 end
+    return math.min(config.restart.lights, math.floor((d - lightsAt) / step) + 1)
+  end
+
+  local function send(ev)
+    local sr = Flags.sr
+    if ev ~= sr.sent or state.ui.clock - (sr.sentT or -1e9) >= 2 then
+      if ev ~= sr.sent then ac.log('race-control: standing restart: track told ' .. ev) end
+      sr.sent, sr.sentT = ev, state.ui.clock
+      ac.broadcastSharedEvent(TRACK_EVENT, ev)
+    end
+  end
+
+  local function ownLock() return state.pitService or state.dtDsqActive or state.pitDsqActive end
+
+  -- This car on its grid place (the node AC_START_<place - 1>), aligned along the track (SDK: direction nil = the AI
+  -- spline); the place and the position kept for the jump start
+  local function place()
+    local k = Flags.restartPlace()
+    if not k then return end
+    local node = ac.findNodes('AC_START_' .. (k - 1))
+    local m = node and node:size() > 0 and node:getWorldTransformationRaw()
+    local pos = m and m.position
+    if not pos then
+      ac.log('race-control: standing restart: ' .. string.format(TEXTS.srNoNode, k - 1))
+      rcLog('Standing restart', string.format(TEXTS.srNoNode, k - 1))
+      return
+    end
+    physics.setCarPosition(0, pos, nil)
+    Flags.sr.gridPos, Flags.sr.k = { x = pos.x, y = pos.y, z = pos.z }, k
+    Flags.onGrid = true
+    ac.log(string.format('race-control: standing restart: grid place P%d (AC_START_%d)', k, k - 1))
+    rcLog('Standing restart', string.format('grid place P%d', k))
+  end
+
+  -- Forward movement on the ground plane from the place where the controls were freed, along where the car pointed then
+  local function forward(pos, from, look)
+    local lx, lz = look.x or 0, look.z or 0
+    local n = math.sqrt(lx * lx + lz * lz)
+    if n < 1e-6 then return 0 end
+    return (((pos.x or 0) - from.x) * lx + ((pos.z or 0) - from.z) * lz) / n
+  end
+
+  function Flags.standingUpdate(car)
+    local r = state.restart
+    local sr = Flags.sr
+    local clock = state.ui.clock
+    if not r then
+      if sr.t0 and not sr.go then
+        -- Cancelled before the green (RC RESTART OFF ALL): the red flag again, the controls locked again
+        ac.log('race-control: standing restart cancelled: red flag again, controls locked')
+        rcLog('Standing restart', 'cancelled')
+        sr.t0 = nil
+        send('off')
+      end
+      if Flags.onGrid and state.redFlag then
+        if clock >= sr.lockT and not ownLock() then
+          physics.lockUserControlsFor(3)
+          sr.lockT = clock + 2
+        end
+      elseif Flags.onGrid then
+        Flags.onGrid = false
+      end
+      if sr.go and sr.sent == 'go' and clock - sr.goT > 3 then send('off') end
+      return
+    end
+    if sr.t0 ~= r.t0 then
+      reset(r.t0)
+      sr = Flags.sr
+      ac.log('race-control: standing restart: command at server time ' .. math.floor(r.t0))
+    end
+    local c = config.restart
+    local d = serverTimeMs() - r.t0
+    local gridAt, lightsAt, step, offAt = timeline(r.t0)
+    local releaseAt = lightsAt + (c.releaseLight - 1) * step
+    local swap = Flags.mySwapMs ~= nil
+    if d >= offAt then
+      -- Lights out: the green flag, the official restart (decision 262)
+      sr.go, sr.goT = true, clock
+      if sr.relPos then
+        ac.log(string.format('race-control: standing restart: largest forward movement before the green %.2f m (tolerance %.2f m)',
+          sr.creep, config.restart.jumpMeters))
+      end
+      state.restart = nil
+      TrackList.changed()
+      Flags.onGrid = false
+      Flags.srGoUntil = clock + config.flags.greenSeconds
+      if not ownLock() then physics.lockUserControlsFor(0) end
+      send('go')
+      ac.log('race-control: standing restart: lights out, green flag')
+      rcLog('Standing restart', 'green flag')
+      return
+    end
+    if not sr.placed and d >= gridAt then
+      sr.placed = true
+      if swap then
+        rcLog('Standing restart', 'driver swap: leaves the pit lane at the green')
+      elseif not (state.dtDsqActive or state.pitDsqActive) and (car.isInPitlane or Flags.onGrid) then
+        place()
+      end
+    end
+    -- Controls: locked until the release light on the grid; in the pits (driver swap) until the green
+    if (d < releaseAt or swap or not Flags.onGrid) and not ownLock() then
+      if clock >= sr.lockT then
+        physics.lockUserControlsFor(3)
+        sr.lockT = clock + 2
+      end
+    elseif not sr.released then
+      sr.released = true
+      if not ownLock() then physics.lockUserControlsFor(0) end
+      -- The place the car settled on: the reference of the jump start
+      if car.position and car.look then
+        sr.relPos = { x = car.position.x, z = car.position.z }
+        sr.relLook = { x = car.look.x, z = car.look.z }
+      end
+      ac.log(string.format('race-control: standing restart: controls free at light %d', c.releaseLight))
+    end
+    -- Jump start: the car moved forward from where it stood at the release before the lights went out
+    local moved = Flags.onGrid and sr.relPos and car.position and forward(car.position, sr.relPos, sr.relLook) or 0
+    sr.creep = math.max(sr.creep or 0, moved)
+    if Flags.onGrid and sr.relPos and not sr.jumped and moved > c.jumpMeters then
+      sr.jumped = true
+      ac.log(string.format('race-control: standing restart: jump start (%.2f m forward before the lights went out)', moved))
+      if listAdd('JS', c.jumpLaps) then
+        Rules.finalize()
+        rcLog('Drive-through', TEXTS.reason.JS)
+        showNotice(TEXTS.rcTitle, TEXTS.reason.JS)
+      end
+    end
+    local n = lit(d, lightsAt, step)
+    send(n == 0 and 'grid' or ('lights:' .. n))
+  end
+
+  -- The flag box during the procedure (group 1, as the red flag it replaces)
+  function Flags.standingFlag(car)
+    local r = state.restart
+    if not r then return nil end
+    local c = config.restart
+    local d = serverTimeMs() - r.t0
+    local gridAt, lightsAt, step = timeline(r.t0)
+    local releaseAt = lightsAt + (c.releaseLight - 1) * step
+    local k = Flags.onGrid and Flags.sr.k
+    local line1 = (Flags.mySwapMs and TEXTS.srSwap)
+      or (k and string.format(d >= releaseAt and TEXTS.srGridFree or TEXTS.srGrid, k))
+      or string.format(TEXTS.srGridSoon, math.max(math.ceil((gridAt - d) / 1000), 0))
+    local n = lit(d, lightsAt, step)
+    local line2 = (n == 0 and string.format(TEXTS.srLightsIn, math.max(math.ceil((lightsAt - d) / 1000), 0)))
+      or (d >= releaseAt and not Flags.mySwapMs and TEXTS.srFree)
+      or string.format(TEXTS.srLights, n, c.lights)
+    return { 1, 'start', TEXTS.srTitle, line1, line2 }
+  end
+
+  -- The lights on screen (the gantry of screen.lua): from the grid place restart.screenLightsFrom back, as the own
+  -- start lights (decision 257); otherwise the standing start of the race
+  local raceStartLights = Flags.startLights
+  function Flags.startLights(car)
+    local r = state.restart
+    local k = Flags.onGrid and Flags.sr.k
+    if r and Flags.sr.t0 == r.t0 and k and k >= config.restart.screenLightsFrom then
+      local _, lightsAt, step = timeline(r.t0)
+      local n = lit(serverTimeMs() - r.t0, lightsAt, step)
+      if n > 0 then return n end
+    end
+    return raceStartLights(car)
   end
 end
 -- ============================================================
@@ -7185,8 +7460,11 @@ do
   Desktop.SCREENS = SCREENS
 
   local function button(name) return ac.ControlButton('12hcuritiba.race-control/' .. name) end
+  -- Show panel (decision 309): the Race Control panel for 5 s (screens.autoSeconds), even with nothing to show and in
+  -- any mode, like the mouse over its place
   local NAV = { nextScreen = button('Next screen'), prevScreen = button('Previous screen'),
-    nextDesktop = button('Next desktop'), prevDesktop = button('Previous desktop') }
+    nextDesktop = button('Next desktop'), prevDesktop = button('Previous desktop'), showPanel = button('Show panel') }
+  Desktop.panelUntil = 0
   Desktop.NAV = NAV
 
   local function defaults()
@@ -7678,6 +7956,9 @@ do
     if nav and (NAV.prevDesktop:pressed() or bindPressed('prevDesktop')) then Desktop.go(-1) end
     if nav and (NAV.nextScreen:pressed() or bindPressed('nextScreen')) then moveFocus(1) end
     if nav and (NAV.prevScreen:pressed() or bindPressed('prevScreen')) then moveFocus(-1) end
+    if nav and (NAV.showPanel:pressed() or bindPressed('showPanel')) then
+      Desktop.panelUntil = state.ui.clock + config.screens.autoSeconds
+    end
     -- In the pit lane the pit stop box takes the focus
     if car.isInPitlane and Desktop.wasInPit == false then Desktop.focus, Desktop.focusByNav = 'pitbox', false end
     Desktop.wasInPit = car.isInPitlane
@@ -7688,6 +7969,168 @@ do
     end
   end
 end
+-- ============================================================
+-- Every command the race direction can use (order of 30/09), by service: the Race Control (config/server/Comandos do
+-- Race Control.txt; src/penalties/commands.lua), the KMR (readme.txt of the official package v1.6f: console commands
+-- and the player chat commands, generated from it), the AC server behind the ACSM (admin chat commands). Only shown:
+-- the COMMANDS window of the race direction (desktop_editor.lua).
+-- ============================================================
+
+Desktop.commands = {
+  { key = 'rc', title = 'RACE CONTROL', how = 'KMR chat: /kmr admin_say RC ... (the buttons of this window) - ACSM live timing: Chat to the driver or Broadcast Chat', rows = {
+    { 'RC RELAX <ID> ALL', 'clears the list: drive-throughs, stop & go and slowdowns' },
+    { 'RC RELAX <ID> DT', 'removes the first item of the list' },
+    { 'RC RELAX <ID> SG', 'removes the stop & go (NO S&G button)' },
+    { 'RC RELAX <ID> SD', 'cancels the slowdown in progress' },
+    { 'RC RELAX <ID> HOLD', 'ends the hold (or tow / repair) and frees the controls' },
+    { 'RC RELAX <ID> REPAIR', 'removes the repair required (black flag with orange disc)' },
+    { 'RC RELAX <ID> DSQ', 'cancels the disqualification and frees the controls' },
+    { 'RC UNLOCK <ID>', 'frees the controls and ends the hold (list and DSQ kept)' },
+    { 'RC DT <ID> [laps]', 'drive-through within the laps (0 = this lap)' },
+    { 'RC HOLD <ID> <seconds>', 'hold: the car locked at its pit place' },
+    { 'RC TELEPORT <ID>', 'the car to the pits, damage kept (TO PIT button)' },
+    { 'RC DSQ <ID>', 'disqualification of the Race Control (DSQ button)' },
+    { 'RC LOCK <ID> <seconds>', 'locks the controls (up to 86400 s)' },
+    { 'RC FUEL <ID>', 'fuel unlocked under the red flag (FUEL button)' },
+    { 'RC KMR <ID>', 'the car asks its KMR numbers again' },
+    { 'RC REDFLAG ALL [- reason]', 'red flag to every car (RED FLAG button)' },
+    { 'RC REDFLAG OFF ALL', 'red flag off: rolling restart under the VSC' },
+    { 'RC RESTART ALL', 'standing restart, red flag up (STANDING RESTART button)' },
+    { 'RC RESTART OFF ALL', 'cancels the standing restart before the green' },
+  } },
+  { key = 'kmr', title = 'KMR', how = 'KMR chat: /kmr login <password> once, then /kmr <command> - or the KMR console', rows = {
+    { 'help', 'shows a full list of commands' },
+    { 'help config_get', 'shows help for the config_get command' },
+    { 'json_verify {"PRACTICE"', '"remove", "QUALIFY": {"TIME": 10}, "RACE": {"LAPS": 10}}: verifies if the provided string is valid JSON to be used for any command that requires this kind of format' },
+    { 'config_get max_ping', 'gets the current value of the max_ping configuration entry' },
+    { 'config_set id|value', 'sets the config_id config.json entry to value' },
+    { 'config_set max_ping|300', 'sets max_ping to 300 and saves the config.json' },
+    { 'config_set currency_symbol|"$"', 'sets the currency_symbol to "$" and saves the config.json' },
+    { 'backup_list', 'lists the available backup dates to be used with the backup_restore command' },
+    { 'backup_create', 'creates a new backup' },
+    { 'backup_restore 2017-11-24_165120', 'restores the backup with id 2017-11-24_165120 and exits the plugin. You will have to relaunch the plugin after the restore is complete' },
+    { 'database_sharing_active_connections_list', 'shows a list of the active Database Sharing connections' },
+    { 'database_sharing_overwrite_local_data_with_remote', 'overwrites the local database with the remote database' },
+    { 'refresh', 'reinitializes session and connections' },
+    { 'save', 'saves all the data in memory to files' },
+    { 'exit', 'quits and saves the stats' },
+    { 'admin_next_session', 'skips to next session' },
+    { 'admin_restart_session', 'restart the current session' },
+    { 'admin_send_command /ballast 0 100', 'sends the "/ballast 0 100" command to the Assetto Corsa server just like if you typed it in the chat' },
+    { 'admin_say hello', 'broadcast "hello" to all players' },
+    { 'rolling_start_toggle', 'toggles the rolling start flag for the next races' },
+    { 'virtual_safety_car_deploy 60', 'deploys the Virtual Safety Car for 60 seconds' },
+    { 'player_list', 'gives a list of the online players' },
+    { 'player_name 0', 'returns the player name associated with the slot number 0' },
+    { 'player_parking_permit_toggle 0', 'allows/disallows the player in slot 0 to park everywhere on the track' },
+    { 'player_give_drive_through 0|1', 'gives a drive through to be served within 1 lap to the player associated with the slot number 0' },
+    { 'player_cancel_drive_through 0', 'cancels the drive through penalty for the player associated with the slot number 0' },
+    { 'player_drive_through_list', 'lists all the drive-through penalties that haven\'t been cleared yet' },
+    { 'player_kick 0', 'kicks the player associated with the slot number 0' },
+    { 'player_temporary_ban 0|60', 'bans the player in slot number 0 for 60 minutes' },
+    { 'player_temporary_ban_guid 12345678901234567|60', 'bans the player with GUID 12345678901234567 for 60 minutes' },
+    { 'player_ban_list', 'lists all the banned players' },
+    { 'player_unban 12345678901234567', 'unbans the player with GUID 12345678901234567' },
+    { 'reserved_slots_list', 'shows a list of the reserved slots' },
+    { 'reserved_slots_add 12345678901234567', 'adds a reserved slot for steam GUID 12345678901234567' },
+    { 'reserved_slots_remove 1', 'removes the reserved slots that has id = 1 in the output of the reserved_slots_list command' },
+    { 'reserved_slots_announce', 'announces the reserved slots list to the Kissmyrank Master server' },
+    { 'driver_get_guid Rockfeller', 'shows the GUID of "Rockfeller"' },
+    { 'driver_reset_money 12345678901234567', 'resets the money for Steam GUID 12345678901234567' },
+    { 'driver_reset_times 12345678901234567', 'clears all the times for Steam GUID 12345678901234567' },
+    { 'driver_reset_driving_stats 12345678901234567', 'clears the driving stats' },
+    { 'driver_privacy_erase_personal_data_and_ban 12345678901234567', 'removes the driver with Steam GUID 12345678901234567 from the stats and bans him from the server' },
+    { 'driver_privacy_cancel_ban 12345678901234567', 'cancels the privacy ban for the driver with Steam GUID 12345678901234567 allowing him to join the server again' },
+    { 'track_get_length', 'returns the current track length in meters' },
+    { 'track_set_length 5422', 'sets the current track length to 5422m' },
+    { 'track_get_name', 'returns the name of the current track' },
+    { 'track_set_name Monza', 'sets the current track human friendly name to Monza' },
+    { 'pit_origin_remove 6', 'unsets the pit origin for slot id 6. This can help when for whatever reason the pit origin is not correct. Kissmyrank will then rebuild the pit origin in time' },
+    { 'tracks_list', 'return a list of all the tracks defined in tracks.json' },
+    { 'tracks_export monza_|ks_silverstone_national|mugello_|imola_', 'exports the selected tracks to a JSON file in the "export" folder' },
+    { 'tracks_import tracks_to_import.json', 'imports the "tracks_to_import.json" file from the "import" folder to the tracks database' },
+    { 'track_rotation_next_track', 'switches to the next track in the server rotation' },
+    { 'track_rotation_list', 'shows a list of all the tracks in the rotation in the id|track|config|races format' },
+    { 'track_rotation_current_track', 'shows the current track in the rotation' },
+    { 'track_rotation_rotate_to 0', 'rotates to the track with id 0' },
+    { 'track_rotation_vote_reset', 'cancels the current track rotation vote' },
+    { 'track_rotation_get_races', 'shows the amount of races set for the current track in the rotation' },
+    { 'track_rotation_set_races 10', 'sets to 10 the amount of races for the current track in the rotation' },
+    { 'track_rotation_add vallelunga|extended_circuit|3|keep|{"PRACTICE"', '"remove", "QUALIFY": {"TIME": 10}, "RACE": {"LAPS": 10}}: adds {track: "vallelunga", config: "extended_circuit", "races": 3, entry_list_ini_path: "keep", ""ini_options": {"PRACTICE": "remove", "QUALIFY": {"TIME": 10}, "RACE": {"LAPS": 10}}} to the track list' },
+    { 'track_rotation_edit 1|vallelunga|extended_circuit|3|keep|{"PRACTICE"', '"remove", "QUALIFY": {"TIME": 10}, "RACE": {"LAPS": 10}}: sets track 1 to {track: "vallelunga", config: "extended_circuit", "races": 3, entry_list_ini_path: "keep", ""ini_options": {"PRACTICE": "remove", "QUALIFY": {"TIME": 10}, "RACE": {"LAPS": 10}}}' },
+    { 'track_rotation_remove 0', 'removes the track with id 0 from the rotation' },
+    { 'track_rotation_save', 'saves the current track list to the config.json making it permanent' },
+    { 'cut_line_list', 'shows a list of the cut_lines defined for the current track' },
+    { 'cut_line_remove 1', 'removes the cut line that has id 1 in the output of the cut_line_list_command' },
+    { 'cut_line_edit 1|pit entry speed limit line|80|0|0|0', 'updates the cut_line with id 1 in the cut_line_list with name=pit entry speed limit line, max_speed_kmh=80, outlap_only = 0, qualify_only= 0,race_only=0' },
+    { 'cut_line_drawer_begin', 'starts a new cut_line sketch' },
+    { 'cut_line_drawer_set_first_point 6', 'sets the first point of the cut line sketch on the current position of the car in the slot 6' },
+    { 'cut_line_drawer_set_second_point 6', 'sets the second point of the cut line sketch on the current position of the car in the slot 6' },
+    { 'cut_line_drawer_set_name pit entry speed limit line', 'set the name of the cut line sketch to pit entry' },
+    { 'cut_line_drawer_set_max_speed 80', 'sets the max speed of the cut line sketch to 80km/h' },
+    { 'cut_line_drawer_toggle_outlap_only', 'toggles the outlap only flag for the cut line sketch' },
+    { 'cut_line_drawer_toggle_qualify_only', 'toggles the qualify only flag for the cut line sketch' },
+    { 'cut_line_drawer_toggle_race_only', 'toggles the race only flag for the cut line sketch' },
+    { 'cut_line_drawer_save', 'saves the current sketch to a permanent cut line' },
+    { 'track_boundary_set_left 6', 'starts recording the left track boundary' },
+    { 'track_boundary_set_right 6', 'starts recording the right track boundary' },
+    { 'track_boundary_set_offset 1.0', 'sets the rendering offset of the track border to 1.0. This is not needed for regular tracks' },
+    { 'track_boundary_clear_left', 'clears all the left track boundary data' },
+    { 'track_boundary_clear_right', 'clears all the right track boundary data' },
+    { 'track_boundary_exclude_left_begin 6', 'starts recording of the left track boundary exclusion' },
+    { 'track_boundary_exclude_right_begin 6', 'starts recording of the right track boundary exclusion' },
+    { 'track_boundary_exclude_left_end 6', 'ends recording the left track boundary exclusion' },
+    { 'track_boundary_exclude_right_end 6', 'ends recording the right track boundary exclusion' },
+    { 'track_boundary_include_left_begin 6', 'starts recording of the left track boundary inclusion' },
+    { 'track_boundary_include_right_begin 6', 'starts recording of the right track boundary inclusion' },
+    { 'track_boundary_include_left_end 6', 'ends recording the left track boundary inclusion' },
+    { 'track_boundary_include_right_end 6', 'ends recording the right track boundary inclusion' },
+    { 'track_boundary_all_track_exclude_left', 'excludes the whole left track boundary' },
+    { 'track_boundary_all_track_exclude_right', 'excludes the whole right track boundary' },
+    { 'track_boundary_all_track_include_left', 'includes the whole left track boundary' },
+    { 'track_boundary_all_track_include_right', 'includes the whole right track boundary' },
+    { 'pit_boundary_set_left_begin 6', 'starts recording the left pit boundary' },
+    { 'pit_boundary_set_right_begin 6', 'starts recording the right pit boundary' },
+    { 'pit_boundary_set_left_end 6', 'ends recording the left pit boundary' },
+    { 'pit_boundary_set_right_end 6', 'ends recording the right pit boundary' },
+    { 'pit_boundary_clear_left', 'clears the left pit boundary data for the current track' },
+    { 'pit_boundary_clear_right', 'clears the right pit boundary data for the current track' },
+    { 'accessory_boundary_set_left_begin 6|Pit Entry Junction', 'starts recording the left Pit Entry Junction boundary' },
+    { 'accessory_boundary_set_right_begin 6|Pit Entry Junction', 'starts recording the right Pit Entry Junction boundary' },
+    { 'accessory_boundary_set_left_end 6', 'ends recording of the left Accessory Boundary area started by the car in slot 6' },
+    { 'accessory_boundary_set_right_end 6', 'ends recording of the right Accessory Boundary area started by the car in slot 6' },
+    { 'accessory_boundary_clear_left Pit Entry Junction', 'clears the left Pit Entry Junction boundary data for the current track' },
+    { 'accessory_boundary_clear_right Pit Entry Junction', 'clears the right Pit Entry Junction boundary data for the current track' },
+    { 'heuristic_all_tracks_all_data_clear', 'clears the heuristic data of all tracks (changelog)' },
+  } },
+  { key = 'server', title = 'AC SERVER (ACSM)', how = 'Chat: /admin <password> once, then the command - or /kmr admin_send_command /<command> - or ACSM Admin Command', rows = {
+    { '/admin <password>', 'logs in as server admin (chat)' },
+    { '/help', 'list of the server commands' },
+    { '/next_session', 'goes to the next session' },
+    { '/restart_session', 'restarts the current session' },
+    { '/client_list', 'car IDs with the drivers\' names' },
+    { '/kick <name>', 'kicks the driver by the name' },
+    { '/kick_id <car ID>', 'kicks the driver of the car ID' },
+    { '/ban <name>', 'bans the driver by the name' },
+    { '/ban_id <car ID>', 'bans the driver of the car ID' },
+    { '/ballast <car ID> <kg>', 'ballast on the car (BALLAST button)' },
+    { '/restrictor <car ID> <%>', 'restrictor on the car (RESTRICTOR button)' },
+  } },
+  { key = 'player', title = 'KMR PLAYERS', how = 'Any driver in the chat, no slash: kmr <command>', rows = {
+    { 'kmr help', 'shows a list of commands' },
+    { 'kmr language it', 'sets the language to "it" = Italian' },
+    { 'kmr leaderboard', 'shows the fastest time on the server with the car that the player is driving' },
+    { 'kmr level', 'shows the player level in the laptime challenge' },
+    { 'kmr money', 'shows the amount of money that a player has' },
+    { 'kmr best', 'shows the driver personal best with the car that the player is driving' },
+    { 'kmr next_track', 'shows the next track in the server rotation' },
+    { 'kmr rules', 'shows the server rules' },
+    { 'kmr stats', 'shows the driver\'s driving stats' },
+    { 'kmr toggle_notifications', 'toggles notifications while driving' },
+    { 'kmr vote_track', 'vote for track change' },
+    { 'kmr erase_my_personal_data_and_ban_myself', 'removes the player\'s personal data from the stats and prevents further access to the server' },
+  } },
+}
 -- ============================================================
 -- Screens controlled by the driver with the mouse. Groups: 'panel' (Race Control panel with the boxes below it, moved
 -- together), 'pitbox' (pit stop box), 'setup' (setup status), 'status' (car status).
@@ -8190,13 +8633,17 @@ do
     rows[#rows + 1] = { 'body', TEXTS.pitRepairBody, nil, p.times.body }
     -- The box grows one row per row over the 9 of the approved size (decision 158: same gaps)
     local boxH = BOX_H + math.max(#rows - 9, 0) * ROW_H
-    -- Width (finding 2 of 29-30/09): the approved 288 px, wider when a row does not fit (label, value, time), measured
+    -- Width (finding 2 of 29-30/09): the approved 288 px, wider when a row does not fit (label, value, time), measured.
+    -- The fuel row is measured with three digits in each number (added, after, tank), so the box keeps its width while
+    -- the values change (finding of 30/09)
     local fs = BOX.font * s
+    local fuelWidest = string.format(TEXTS.pitFuelValue, 999, 999, 999)
     local labelW = 0
     for _, r in ipairs(rows) do labelW = math.max(labelW, textWidth(r[2], FONT_TEXT, fs)) end
     local need = 0
     for _, r in ipairs(rows) do
       local vw = r[1] == 'tyres' and (3 * 26 * s + textWidth('RR', FONT_MONO, fs)) or textWidth(r[3] or TEXTS.pitRepairYes, FONT_MONO, fs)
+      if r[1] == 'fuel' then vw = math.max(vw, textWidth(fuelWidest, FONT_MONO, fs)) end
       local tw = r[4] and (textWidth(mmss(r[4]), FONT_MONO, fs) + 12 * s) or 0
       need = math.max(need, BOX.side * s + labelW + 8 * s + vw + tw + BOX.side * s)
     end
@@ -10014,7 +10461,7 @@ local drawDesktopUI = (function()
   -- the gamepad D-pad of the pit stop box)
   local NAV_ROWS = { { 'nextScreen', TEXTS.navNextScreen }, { 'prevScreen', TEXTS.navPrevScreen },
     { 'nextDesktop', TEXTS.navNextDesktop }, { 'prevDesktop', TEXTS.navPrevDesktop },
-    { 'up', TEXTS.navUp }, { 'down', TEXTS.navDown }, { 'left', TEXTS.navLeft }, { 'right', TEXTS.navRight } }
+    { 'showPanel', TEXTS.navShowPanel }, { 'up', TEXTS.navUp }, { 'down', TEXTS.navDown }, { 'left', TEXTS.navLeft }, { 'right', TEXTS.navRight } }
   local function buttonsScreen(w, h, s)
     -- Columns measured from their texts (finding of 30/09: a long button name ran over SET and CLEAR): the recorded
     -- button (and its conflict), then SET / CLEAR, then the CSP binding; the window as wide as they need
@@ -10668,6 +11115,80 @@ local drawDesktopUI = (function()
     end
   end
 
+  -- Every command by service (order of 30/09; the list in command_list.lua): Race Control, KMR, AC server (ACSM), the
+  -- KMR chat of the players. Only shown: the command, what it does and how to send it. On the left of the race direction
+  -- window when there is room, else over it; mouse wheel or the arrows scroll
+  Direction.cmdTab, Direction.cmdScroll = 'rc', 0
+  local function commandsList(w, h, s, dp1, dp2)
+    local LW, ROWC = 860 * s, 14 * s
+    local x = dp1.x - LW - 8 * s
+    if x < 4 * s then x = 4 * s end
+    local p1 = vec2(math.floor(x), math.floor(dp1.y))
+    local p2 = vec2(p1.x + LW, math.floor(math.max(dp2.y, math.min(p1.y + 560 * s, h - 4 * s))))
+    drawPanel(p1, p2, BORDER_BASE, s)
+    local m = ui.mousePos()
+    local over = m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y
+    if over then ui.captureMouse(true) end
+    drawText(TEXTS.dirCmdTitle, FONT_TITLE, 12 * s, vec2(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
+    chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Direction.cmdOpen = false end)
+    local tx = p1.x + 110 * s
+    local group
+    for _, g in ipairs(Desktop.commands) do
+      if g.key == Direction.cmdTab then group = g end
+      tx = chip(g.title, vec2(tx, p1.y + 4 * s), s, g.key == Direction.cmdTab, nil, function()
+        Direction.cmdTab, Direction.cmdScroll = g.key, 0
+      end)
+    end
+    group = group or Desktop.commands[1]
+    drawSeparator(p1, p2, p1.y + 21 * s, s)
+    drawText(TEXTS.dirCmdHow .. group.how, FONT_MONO, 8.5 * s, vec2(p1.x + 12 * s, p1.y + 25 * s), PANEL_COLORS.yellow)
+    local top = p1.y + 42 * s
+    local rowsFit = math.max(math.floor((p2.y - 6 * s - top) / ROWC), 1)
+    local maxScroll = math.max(#group.rows - rowsFit, 0)
+    if over then Direction.cmdScroll = Direction.cmdScroll - math.floor(ui.mouseWheel() * 3) end
+    if maxScroll > 0 then
+      local ax = chip('^', vec2(p2.x - 64 * s, p1.y + 23 * s), s, false, nil, function() Direction.cmdScroll = Direction.cmdScroll - rowsFit end)
+      chip('v', vec2(ax, p1.y + 23 * s), s, false, nil, function() Direction.cmdScroll = Direction.cmdScroll + rowsFit end)
+    end
+    Direction.cmdScroll = math.min(math.max(Direction.cmdScroll, 0), maxScroll)
+    ui.pushClipRect(vec2(p1.x, top), vec2(p2.x, p2.y - 4 * s))
+    local y = top
+    for i = Direction.cmdScroll + 1, math.min(#group.rows, Direction.cmdScroll + rowsFit) do
+      local r = group.rows[i]
+      drawText(r[1], FONT_MONO, 9 * s, vec2(p1.x + 12 * s, y), COLOR_TITLE)
+      drawText(r[2], FONT_TEXT, 9 * s, vec2(p1.x + 380 * s, y), COLOR_DIM)
+      y = y + ROWC
+    end
+    ui.popClipRect()
+  end
+
+  -- The penalties of a car (finding of 30/09): its own list on this client, the list the other cars send (RecordSync,
+  -- the record of each car, this session only): each drive-through with its zone or reason and deadline, the stop & go
+  -- in seconds, the DSQ
+  local function penaltyLine(i, c)
+    local items, dsq
+    if i == 0 then
+      items, dsq = state.list.items, state.list.dsq
+    else
+      local peer = RecordSync.peers[c.sessionID]
+      local rec = peer and peer.penalties and Record.decode(peer.penalties.text)
+      if not rec or not Record.sameSession(rec.key, Record.key()) then return TEXTS.dirPenUnknown, COLOR_OFF end
+      local d, list = rec.body:match('^%d+|%d+|%-?%d+|%d+|(%d)|%d|%d+|%d+|%d+|(.*)$')
+      dsq, items = tonumber(d) or 0, {}
+      for cat, kind, laps in (list or ''):gmatch('(%w+),(%w+),(%-?%d+),[^;]*') do
+        items[#items + 1] = { cat = cat, kind = kind, laps = tonumber(laps) }
+      end
+    end
+    local parts = {}
+    for _, it in ipairs(items) do
+      parts[#parts + 1] = it.cat:match('^SG%d+$') and string.format(TEXTS.dirPenSg, sgSeconds(it))
+        or string.format(TEXTS.dirPenDt, it.cat, math.max(it.laps or 0, 0))
+    end
+    if (dsq or 0) > 0 then parts[#parts + 1] = TEXTS.dirPenDsq end
+    if #parts == 0 then return TEXTS.dirPenNone, COLOR_DIM end
+    return TEXTS.dirPenTitle .. table.concat(parts, '  -  '), (dsq or 0) > 0 and PANEL_COLORS.red or PANEL_COLORS.yellow
+  end
+
   local function redWindow(w, h, s)
     local cars = {}
     for i = 0, (sim.carsCount or 1) - 1 do
@@ -10679,7 +11200,7 @@ local drawDesktopUI = (function()
       Direction.status, Direction.statusColor = string.format(TEXTS.dirGuidNone, Direction.guidJob.name), PANEL_COLORS.red
       Direction.statusT, Direction.guidJob = state.ui.clock, nil
     end
-    local W5, H5 = cmd and 940 or 560, 30 + 16 + (cmd and (22 + 22 + 22 + 22) or 0) + 18 + 16 + #cars * 32 + 22
+    local W5, H5 = cmd and 940 or 560, 30 + 16 + (cmd and (22 + 22 + 22 + 22) or 0) + 18 + 16 + #cars * 44 + 22
     -- Resizable by its corner (order of 30/09, decision 284): the size given is the smallest, what it needs
     local p1, p2 = windowAt('redflag', W5, H5, w, h, s, true)
     Drag.group = nil
@@ -10696,6 +11217,9 @@ local drawDesktopUI = (function()
     local y = p1.y + 28 * s
     local x0 = p1.x + 14 * s
     drawText(sessionLine(), FONT_MONO, 10 * s, vec2(x0, y), COLOR_TITLE)
+    -- The list of every command (order of 30/09), for every role; on the session line (the title bar moves the window)
+    chip(TEXTS.dirCmdBtn, vec2(p2.x - 14 * s - textWidth(TEXTS.dirCmdBtn, FONT_MONO, 9 * s) - 10 * s, y - 1 * s), s,
+      Direction.cmdOpen, nil, function() Direction.cmdOpen = not Direction.cmdOpen end)
     y = y + 16 * s
     if cmd then
       -- KMR admin: logged in, or the password field (Enter sends the login)
@@ -10775,7 +11299,7 @@ local drawDesktopUI = (function()
       end
       -- GREEN takes the red flag off (restart with the green at once). With the VSC of the KMR on (no command of the KMR
       -- ends it), the VSC is deployed again for 1 s so that it ends at once (finding of 30/09; to measure in the game)
-      chip(TEXTS.redGreen, vec2(x, y), s, false, (red or state.code80) and PANEL_COLORS.green or COLOR_OFF, function()
+      x = chip(TEXTS.redGreen, vec2(x, y), s, false, (red or state.code80) and PANEL_COLORS.green or COLOR_OFF, function()
         if state.redFlag then
           sendKmr('admin_say RC REDFLAG OFF ALL', 'GREEN')
         elseif state.code80 then
@@ -10784,6 +11308,18 @@ local drawDesktopUI = (function()
           Direction.status, Direction.statusT, Direction.statusColor = TEXTS.dirNoRed, state.ui.clock, PANEL_COLORS.yellow
         end
       end)
+      -- Standing restart (decisions 293, 298): with the red flag up; the time of the command 2 s ahead, the same on
+      -- every client; cancelled before the green by CANCEL RESTART (red flag again)
+      if red then
+        confirmChip(TEXTS.dirStanding, 'standing', vec2(x, y), s, PANEL_COLORS.yellow, function()
+          sendKmr(string.format('admin_say RC RESTART ALL @%d', math.ceil(serverTimeMs() / 1000) * 1000 + 2000),
+            'STANDING RESTART')
+        end)
+      elseif state.restart then
+        confirmChip(TEXTS.dirStandingOff, 'standingOff', vec2(x, y), s, PANEL_COLORS.red, function()
+          sendKmr('admin_say RC RESTART OFF ALL', 'CANCEL RESTART')
+        end)
+      end
       y = y + 22 * s
       -- Session
       x = confirmChip(TEXTS.dirNextSession, 'next', vec2(x0, y), s, nil, function() sendKmr('admin_next_session', 'NEXT SESSION') end)
@@ -10871,12 +11407,16 @@ local drawDesktopUI = (function()
       end
       -- Ballast and restrictor of the car now (decision 287; the SDK gives them for every car)
       kline = string.format(TEXTS.dirBalRes, CarRead.num(c.ballast), CarRead.num(c.restrictor)) .. '  -  ' .. kline
-      -- Under the chips of the car (finding of 30/09: the line touched them), with room before the next car
-      drawText(kline, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 16 * s), COLOR_DIM)
-      y = y + 32 * s
+      -- Under the chips of the car (finding of 30/09: the line touched them): its penalties on their own line (finding of
+      -- 30/09), then the KMR line, with room before the next car
+      local pen, penColor = penaltyLine(e.i, c)
+      drawText(pen, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 16 * s), penColor)
+      drawText(kline, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 28 * s), COLOR_DIM)
+      y = y + 44 * s
     end
     drawText(string.format(TEXTS.redCount, inPits, #cars, over), FONT_MONO, 9 * s, vec2(x0, y + 2 * s), COLOR_DIM)
     if cmd and Direction.listOpen then driversList(w, h, s, p1, p2) end
+    if Direction.cmdOpen then commandsList(w, h, s, p1, p2) end
     -- The KMR web stats also with the list closed: the lines under the cars use them (decision 286)
     webUpdate()
   end
@@ -11105,11 +11645,15 @@ function script.drawUI()
   end
   local text, color = Panel.message()
   -- Mode chosen by the driver (Drag): visible / auto-hide (something to show) / always hidden. In any mode the panel
-  -- shows up with the mouse over its place and stopped at the pit place. Always hidden: the boxes below it too
+  -- shows up with the mouse over its place, stopped at the pit place, and for 5 s by the Show panel button (decision
+  -- 309). Always hidden: the boxes below it too
   local pm = Drag.mode('panel')
   local panelPlace = { vec2(x, yMsg), vec2(x + boxW, yMsg + msgH) }
   Drag.zone('panel', panelPlace[1], panelPlace[2])
-  local forced = Drag.hovered('panel') or ac.getCar(0).isInPit
+  -- Auto-hide keeps the panel while the gear menu or one of its windows is open: the menu hangs below the panel and is
+  -- taller than it, so the mouse on it left the panel and the panel closed with the menu (finding of 30/09)
+  local forced = Drag.hovered('panel') or ac.getCar(0).isInPit or state.ui.clock < Desktop.panelUntil
+    or Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen
   local stackOn = pm ~= 'hidden' or forced
   if intro or (Intro.done and (pm == 'visible' or (pm == 'auto' and (anyOn or text)) or forced)) then
     local p1 = vec2(x, yMsg)
@@ -11552,6 +12096,7 @@ function script.update(dt)
       Record.fresh()
       -- The red flag belongs to its session (a script reload keeps it: the track record of this process)
       state.redFlag = nil
+      state.restart = nil
     end
     l.curLap = lapCount
     state.lastSessionIndex = sim.currentSessionIndex
