@@ -153,12 +153,20 @@ local cfg = ac.configValues({
   --   compound: green on its top (ideal); cold side graded to blue at edge % of the top grip; hot side graded to yellow
   --   at edge % (overheating), then to red at the lowest grip of its hot end (cliff).
   tyreTemp = '',
-  -- flags = slowMeters:300 | yellowMeters:500 | oilSeconds:300 | rainSlippery:0.2 | greenSeconds:5 | redSpeedKmh:60
+  -- flags = slowMeters:300 | yellowMeters:500 | oilSeconds:300 | rainSlippery:0.2 | greenSeconds:5 | redSpeedKmh:65 |
+  --   redGraceSeconds:10 | passSlowKmh:40 | passFarM:75 | redSpeedSG:30 | redOverSeconds:10 | yellowPassSG:10 | yellowGiveBackSeconds:10
   --   Flag box (every flag is the Race Control's; the game ones are hidden by the app). A car ahead that is slow
   --   (repair required) within slowMeters = white flag; stopped on track, broken down or with a blown engine within
   --   yellowMeters = yellow; the oil of a blown engine stays as the slippery flag (yellow and red) for oilSeconds;
   --   rain intensity (0..1) from rainSlippery up = slippery (0 = off); green flag for greenSeconds after a yellow or a
-  --   neutralization ends. With the red flag (RC REDFLAG ALL), over redSpeedKmh on track = warning in the flag box.
+  --   neutralization ends. With the red flag (RC REDFLAG ALL), CODE-65: over redSpeedKmh on track = warning in the
+  --   flag box (no limiter) and, over it for more than redOverSeconds (as the KMR under the VSC), a stop & go of
+  --   redSpeedSG seconds, served after the restart and added to the pending penalties;
+  --   overtaking forbidden after redGraceSeconds from the red flag (a manoeuvre already under way: warning only); a car
+  --   stopped, or slower than passSlowKmh and farther than passFarM from the car ahead of it, can be passed (the KMR
+  --   regime; the KMR exception of the slow leader does not apply to the red flag). Under the yellow flag of an
+  --   incident, the same exceptions; a car passed has to get the place back within yellowGiveBackSeconds, otherwise a
+  --   stop & go of yellowPassSG seconds (VSC, SC and FCY: the KMR rules). The stop & go needs stopAndGo mode SG.
   flags = '',
 
   -- ------------------------------------------------------------
@@ -646,7 +654,7 @@ local TEXTS = {
   dirLogin = 'KMR admin login', dirLoginSent = 'Login sent - waiting for the KMR', dirLoginOk = 'KMR admin: logged in',
   dirNoAnswer = 'No answer from the KMR in 5 s - login or command failed',
   dirFailed = 'Failed: %s', dirSent = 'Sent: %s - waiting for the KMR', dirAnswer = 'KMR: %s',
-  dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT',
+  dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT',
   setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', app = 'App' }, setPreset = 'Preset',
   setPresets = { verbose = 'Verbose', race = 'Race', minimal = 'Minimal', custom = 'Custom' }, setAlways = 'always - on the Race Control panel',
   setAreas = { rc = 'Race Control, flags, driver swap, race director', limits = 'Track limits and invalid laps',
@@ -679,15 +687,21 @@ local TEXTS = {
   scrMapLegend = { 'yellow you - blue lap ahead - beige lap down', 'grey pit - red stopped' },
   scrWeather = 'WEATHER', scrWeatherModes = { forecast = 'FORECAST', map = 'MAP' },
   scrWeatherAnim = 'forecast hour by hour', scrWeatherStatic = 'no forecast',
-  scrWxTime = 'Game time', scrWxNow = 'Now', scrWxAir = 'Air / track', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
+  scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
   scrEvent = 'EVENT', scrEventInfo = 'event info', evStops = 'Pit stops required', evSwaps = 'Driver swaps required',
   evStint = 'Stint', evOrder = 'Pit stop order', evPitSpeed = 'Pit lane speed', evRating = 'KMR rating',
   flagRed = 'RED FLAG',
   flagRedLine = 'Slow down - no overtaking - return to the pit lane',
   flagRedNeutral = 'Race neutralized by Race Control',
   flagRedSpeed = 'Max %d km/h - you: %.0f km/h',
-  redFlagLineDsq = 'Line crossed with the red flag',
+  redFlagLineDsq = 'Line crossed in the pit lane with the red flag (leaving the pits)',
+  flagRedGrace = 'No overtaking from now on - %d s', flagRedToLine = 'Complete your lap: cross the line on track',
+  flagRedToBox = 'Red flag received - go to your pit place',
+  redFlagLineAgainDsq = 'Line crossed again with the red flag - did not go to the pits',
   redFlagPassDsq = 'Overtake with the red flag (%s)',
+  redFlagSpeedSG = 'CODE-65: over %d km/h for more than %d s with the red flag', yellowPassSG = 'Overtake under the yellow flag (%s) not given back',
+  flagGiveBack = 'GIVE THE PLACE BACK TO %s - %d s', sgFlagGiven = 'Stop & go %d s - %s',
+  yellowGivenBack = 'Place given back to %s',
   flagCode80 = { VSC = 'VIRTUAL SAFETY CAR', SC = 'SAFETY CAR', ['CODE-80'] = 'FULL COURSE YELLOW' },
   flagCode80Line = 'Full course - no overtaking',
   flagRaceControl = 'Race Control',
@@ -714,7 +728,10 @@ local TEXTS = {
   startWaiting = 'Formation lap about to start', startNoPlace = 'Keep your place',
   startPlace = 'P%d - stay behind %s', startLeader = 'nobody: you lead', startBehindYou = ' - %s behind you',
   startPassedBy = ' - %s passed you', startGiveBack = 'GIVE THE PLACE BACK TO %s', startPassAllowed = 'P%d - %s can be passed (KMR)',
-  flagChequered = 'CHEQUERED FLAG',
+  flagRedLocked = 'Stay at your pit place - controls locked until the restart',
+  redFlagNoPitDsq = 'Not in the pits at the restart after the red flag',
+  flagChequered = 'CHEQUERED FLAG', flagChequeredMine = 'Session over for you', flagChequeredPos = 'P%d - %d laps',
+  flagTimeOver = 'SESSION TIME OVER', flagRaceOver = 'RACE OVER', flagFinishLap = 'Finish your lap - the chequered flag is at the line',
   flagChequeredLine = 'Session finished',
 }
 
@@ -826,7 +843,8 @@ local config = {
   tyreTemp = TYRE_TEMP,
   wrongWay = WRONG_WAY,
   flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
-    greenSeconds = 5, redSpeedKmh = 60 }),
+    greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30, redOverSeconds = 10,
+    yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
   driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
   kmrPoints = structKey('kmrPoints', { limit = 100 }),
   eventName = tostring(cfg.eventName or ''),
@@ -3029,7 +3047,8 @@ local function listSort()
 end
 
 -- Stop & go item of the list (stopAndGo mode SG), if any. Category 'SG<n>' (n = drive-throughs it holds), kind 'SG'
--- or, once the car has stopped for it, 'SGs<ms served>t<server s>d<driver code>'
+-- or, once the car has stopped for it, 'SGs<ms served>t<server s>d<driver code>'; then 'e<s>' = seconds of the flag
+-- infractions it holds (red flag speed, yellow flag overtake: decision 267), then the KMR categories 'x<n>'
 local function sgItem()
   for _, it in ipairs(state.list.items) do
     if it.kind:sub(1, 2) == 'SG' then return it end
@@ -3039,7 +3058,7 @@ end
 local function sgCount(it) return tonumber(it.cat:match('^SG(%d+)$')) or 0 end
 -- KMR categories held by the stop & go: kind suffix "x<n>x<n>..." (for the served lines in the log)
 local function sgKmrSuffix(it) return it.kind:match('(x[%dx]+)$') or '' end
-local function sgSeconds(it) return sgCount(it) * config.sgSecondsPerDT end
+local function sgSeconds(it) return sgCount(it) * config.sgSecondsPerDT + (tonumber(it.kind:match('e(%d+)')) or 0) end
 
 -- Reason of a category in the log: the KMR ones say who issued them
 local function reasonLog(cat)
@@ -3065,7 +3084,8 @@ local function listAdd(cat, laps)
     sg.seq = l.seq
     ac.log(string.format('race-control: stop & go +1 (%s): %d DT, %d s', cat, n, sgSeconds(sg)))
     rcLog(string.format('Stop & go %d s', sgSeconds(sg)), 'includes ' .. reasonLog(cat))
-    if n == config.sgMaxDT + 1 then Rules.sgOverLimit(n) end
+    -- The limit in seconds (maxDT x secondsPerDT): the flag infractions count by their seconds
+    if sgSeconds(sg) > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(n) end
     return sg
   end
   l.seq = l.seq + 1
@@ -4611,24 +4631,61 @@ end
 
 -- Stop & go (stopAndGo mode SG): two pending DT0 turn the whole list into one stop & go of secondsPerDT per
 -- drive-through, to serve by stopping at the own pit place within deadlineLaps (like a DT1). Nothing goes to the game
--- (decision 78): the panel shows it.
-function Rules.sgForm()
+-- (decision 78): the panel shows it. A flag infraction (extra seconds, why) forms it too, with the list pending.
+function Rules.sgForm(extra, why)
   local l = state.list
   local n = #l.items
+  extra = extra or 0
   local reasons = {}
   local kmr = ''
   for _, it in ipairs(l.items) do
     reasons[#reasons + 1] = reasonLog(it.cat)
     if TEXTS.kmrReasons[it.cat] then kmr = kmr .. 'x' .. it.cat:sub(2) end
   end
+  if why then reasons[#reasons + 1] = why end
+  if not l.owner then l.owner = nameCode(ac.getDriverName(0)) end
   l.seq = l.seq + 1
   local laps = config.sgDeadlineLaps
-  l.items = { { cat = 'SG' .. n, kind = 'SG' .. kmr, laps = laps, givenLap = l.curLap, expireLap = l.curLap + laps, seq = l.seq,
-    dt0OnTrack = false } }
-  ac.log(string.format('race-control: stop & go %d s (%d DT)', n * config.sgSecondsPerDT, n))
-  rcLog(string.format('Stop & go %d s', n * config.sgSecondsPerDT), 'includes ' .. table.concat(reasons, ', '))
-  if n > config.sgMaxDT then Rules.sgOverLimit(n) end
+  l.items = { { cat = 'SG' .. n, kind = 'SG' .. (extra > 0 and ('e' .. extra) or '') .. kmr, laps = laps,
+    givenLap = l.curLap, expireLap = l.curLap + laps, seq = l.seq, dt0OnTrack = false } }
+  local seconds = n * config.sgSecondsPerDT + extra
+  ac.log(string.format('race-control: stop & go %d s (%d DT)', seconds, n))
+  rcLog(string.format('Stop & go %d s', seconds), 'includes ' .. table.concat(reasons, ', '))
+  if seconds > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(n) end
   listSave()
+end
+
+-- Flag infraction (decision 267): red flag speed (flags.redSpeedSG) or yellow flag overtake not given back
+-- (flags.yellowPassSG). A stop & go of those seconds, added to the pending penalties (the list becomes one stop & go,
+-- or the stop & go grows): progressive, up to the limit. Under the red flag it is served after the restart.
+-- stopAndGo mode HOLD has no stop & go: logged, not applied.
+function Rules.sgAddSeconds(seconds, why)
+  local l = state.list
+  if state.dtDsqActive or state.pitDsqActive then
+    ac.log('race-control: ' .. why .. ' after the DSQ: logged, not applied')
+    return
+  end
+  if not config.sg then
+    ac.log('race-control: ' .. why .. ': stopAndGo mode HOLD, logged, not applied')
+    rcLog(why, 'not applied (stopAndGo mode HOLD)')
+    return
+  end
+  local sg = sgItem()
+  if sg then
+    local suffix = sgKmrSuffix(sg)
+    local extra = (tonumber(sg.kind:match('e(%d+)')) or 0) + seconds
+    sg.kind = (sg.kind:sub(1, #sg.kind - #suffix):gsub('e%d+', '')) .. 'e' .. extra .. suffix
+    l.seq = l.seq + 1
+    sg.seq = l.seq
+    ac.log(string.format('race-control: stop & go +%d s (%s): %d s', seconds, why, sgSeconds(sg)))
+    rcLog(string.format('Stop & go %d s', sgSeconds(sg)), 'includes ' .. why)
+    if sgSeconds(sg) > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(sgCount(sg)) end
+    listSave()
+  else
+    Rules.sgForm(seconds, why)
+  end
+  sg = sgItem()
+  if sg then showNotice(TEXTS.rcTitle, string.format(TEXTS.sgFlagGiven, sgSeconds(sg), why), sg) end
 end
 
 -- More penalties than a stop & go can hold: our DSQ at once (rule 21). The game black flag comes as in every DSQ
@@ -4677,8 +4734,9 @@ function Rules.line(viaPit, g, lapCount)
   end
   local before = listDump()
   l.curLap = lapCount
-  -- CODE-80 with frozen deadlines: no lap is taken and nobody is disqualified at this line
-  local frozen = state.code80 ~= nil and config.code80Freeze
+  -- CODE-80 with frozen deadlines: no lap is taken and nobody is disqualified at this line. The red flag too (decision
+  -- 267): every car crosses the line on track to receive it, and the penalties are served after the restart
+  local frozen = (state.code80 ~= nil and config.code80Freeze) or state.redFlag ~= nil
   if viaPit then
     -- Rule 3: the pit pass serves one DT, position 0 (DT0 before DT1; same deadline, the oldest first).
     -- After a teleport there is no pit pass: nothing is paid. During CODE-80 nothing is paid either.
@@ -4786,7 +4844,8 @@ end
 -- car shown in the pits after connecting, does not count), stop, and stay stopped for the whole stop & go time. The
 -- controls are not locked: the driver holds the car. The car moves and stops again inside the pit place: the time
 -- starts again. It leaves the pit place: not served; the line decides (another lap to serve it, or DSQ). Stopping
--- during CODE-80 does not serve it; a stop already counting when the CODE-80 starts ends normally.
+-- during CODE-80 or the red flag does not serve it (decision 267: under the red flag it is served after the restart); a
+-- stop already counting when the CODE-80 starts ends normally.
 -- Service: a stop with service (fuel, tyres, repair) is allowed with a stop & go pending and does not serve it (the
 -- stop & go never has service); that pit pass cannot serve it any more: the limit is the deadline. Service is a real
 -- change in the car (CarRead.serviced), and the driver is told on screen.
@@ -4818,9 +4877,15 @@ do
     return tonumber(served) or 0, tonumber(t), tonumber(d)
   end
 
+  -- What follows the served time in the kind: the flag seconds and the KMR categories
+  local function sgTail(it)
+    local e = it.kind:match('e(%d+)')
+    return (e and ('e' .. e) or '') .. sgKmrSuffix(it)
+  end
+
   local function sgMark(it, served)
     it.kind = string.format('SGs%dt%dd%d', math.floor(served), math.floor(serverTimeMs() / 1000),
-      nameCode(ac.getDriverName(0))) .. sgKmrSuffix(it)
+      nameCode(ac.getDriverName(0))) .. sgTail(it)
   end
 
   -- Remaining ms of the stop & go
@@ -4863,7 +4928,7 @@ do
   local function notServed(sg, why, done)
     StopAndGo.stopping = false
     StopAndGo.resume = false
-    sg.kind = 'SG' .. sgKmrSuffix(sg)
+    sg.kind = 'SG' .. sgTail(sg)
     StopAndGo.checkedKind = sg.kind
     listSave()
     ac.log(string.format('race-control: stop & go not served: %s after %.1f s', why, done / 1000))
@@ -4935,7 +5000,7 @@ do
       return
     end
     -- Stop at the own pit place: driven into it now, or resuming the same driver's interrupted stop & go
-    if state.code80 or StopAndGo.serviced or not CarRead.parked(car) then return end
+    if state.code80 or state.redFlag or StopAndGo.serviced or not CarRead.parked(car) then return end
     if not (StopAndGo.drove or StopAndGo.resume) then return end
     StopAndGo.stopping = true
     StopAndGo.base = sgFields(sg)
@@ -5453,7 +5518,14 @@ end
 -- position. Ahead of this car: slow within flags.slowMeters = white; stopped or broken within flags.yellowMeters =
 -- yellow; oil = yellow while the car is there, then slippery for flags.oilSeconds; rain intensity over
 -- flags.rainSlippery = slippery (scale to measure, M13). Game flags read: Caution (yellow, the car that caused it in
--- raceFlagCause), FasterCar (blue), OneLapLeft (last lap), Finished (chequered): SDK, the ones that work.
+-- raceFlagCause), FasterCar (blue): SDK. The last lap and the chequered flag are ours (decision 257: the game's last
+-- lap, chequered flag and session time are not shown): the end of the session below.
+-- End of the session (decision 257, design 14): when the time ends (session by time), the cars on track see SESSION
+-- TIME OVER; the race by laps, when the leader completes them: RACE OVER; the race by time with an additional lap:
+-- LAST LAP for everyone from the leader's line after the time, RACE OVER after the leader's next line. The
+-- chequered flag is of each driver: at his line after that, when he enters the pit lane, or at once if he is already
+-- in the pit lane. The last lap of the race by laps: when the leader starts it, LAST LAP for everyone. The start
+-- lights of the game are hidden; ours from the 22nd place back (Flags.startLights, drawn by screen.lua).
 -- Last lap of a session by time (finding 9 of 29-30/09: the game gave no last lap flag in a qualifying by time): when
 -- the car enters the last sector, with the time left over its own best of that sector (it reaches the line before the
 -- end) and under that best plus its best lap (the time ends in the lap after), the lap after is the last one: LAST LAP
@@ -5463,7 +5535,9 @@ end
 -- ============================================================
 
 local Flags = { incidents = {}, own = 0, ownSince = nil, sentKind = 0, sentT = -1e9, greenUntil = 0, lastGroup = nil,
-  sector = nil, lastLap = nil, lastLapSession = nil }
+  sector = nil, lastLap = nil, lastLapSession = nil, ending = nil, endSession = nil, overLeader = nil,
+  prevPitlane = nil, hudOff = false, redSent = 'off', redSentT = -1e9, redLocked = false, redLockT = 0, redWasUp = false,
+  redSince = nil, redReceived = false, redOver = false, redOverSince = nil, localYellow = false, giveBack = {} }
 do
   local INC = { none = 0, slow = 1, stopped = 2, broken = 3, oil = 4 }
   local INC_RESEND = 20        -- seconds: an incident in progress is told again (for who connects later)
@@ -5537,11 +5611,17 @@ do
     local cfg = config.flags
     local clock = state.ui.clock
     local red, yellow, info, normal
+    Flags.localYellow = false
     -- 1 red (decisions 196, 224): the speed over the limit on track, or the reason of the Race Control
     if state.redFlag then
       local kmh = CarRead.num(car.speedKmh)
       local over = not car.isInPitlane and cfg.redSpeedKmh > 0 and kmh > cfg.redSpeedKmh
       red = { 1, 'red', TEXTS.flagRed, TEXTS.flagRedLine, over and string.format(TEXTS.flagRedSpeed, cfg.redSpeedKmh, kmh)
+        or (car.isInPit and TEXTS.flagRedLocked)
+        or ((state.ui.clock - (Flags.redSince or clock)) < cfg.redGraceSeconds and string.format(TEXTS.flagRedGrace,
+          math.ceil(cfg.redGraceSeconds - (state.ui.clock - (Flags.redSince or clock)))))
+        or (not car.isInPitlane and not Flags.redReceived and TEXTS.flagRedToLine)
+        or (not car.isInPitlane and TEXTS.flagRedToBox)
         or (state.redFlag.reason or TEXTS.flagRedNeutral), over }
     end
     -- 2 neutralizations from the chat (KMR) or the Race Control
@@ -5560,6 +5640,7 @@ do
             and not yellow then
           yellow = { 2, 'yellow', TEXTS.flagYellow, TEXTS.flagYellowLine,
             string.format(TEXTS.flagIncidentAhead, carTag(i), TEXTS.flagIncident[incNames[inc.kind]], d) }
+          Flags.localYellow = true
         elseif inc.kind == INC.slow and d <= cfg.slowMeters and not slow and not (c and c.isInPitlane) then
           slow = { 4, 'white', TEXTS.flagWhite, TEXTS.flagWhiteLine,
             string.format(TEXTS.flagSlowAhead, carTag(i), d, CarRead.num(c and c.speedKmh)) }
@@ -5574,6 +5655,14 @@ do
     if g == ac.FlagType.Caution and not yellow then
       yellow = { 2, 'yellow', TEXTS.flagYellow, TEXTS.flagYellowLine,
         cause and cause >= 0 and string.format(TEXTS.flagCausedBy, carTag(cause)) or '' }
+      Flags.localYellow = true
+    end
+    -- A place to give back (overtake under the yellow flag): the count on the yellow flag box
+    for i, t in pairs(Flags.giveBack) do
+      if yellow and Flags.localYellow then
+        yellow[5] = string.format(TEXTS.flagGiveBack, carTag(i), math.max(math.ceil(cfg.yellowGiveBackSeconds - (clock - t)), 0))
+      end
+      break
     end
     if not slip and cfg.rainSlippery > 0 and CarRead.num(sim.rainIntensity) >= cfg.rainSlippery then
       slip = { 4, 'slippery', TEXTS.flagSlippery, TEXTS.flagWet, '' }
@@ -5581,13 +5670,19 @@ do
     if g == ac.FlagType.FasterCar then
       info = { 4, 'blue', TEXTS.flagBlue, TEXTS.flagBlueLine,
         cause and cause >= 0 and string.format('%s - %.1f s', carTag(cause), math.abs(ac.getGapBetweenCars(0, cause))) or '' }
-    elseif g == ac.FlagType.OneLapLeft or (Flags.lastLap and Flags.lastLapSession == sim.currentSessionIndex
+    elseif Flags.ending == 'lastLap' or (Flags.lastLap and Flags.lastLapSession == sim.currentSessionIndex
         and car.lapCount == Flags.lastLap) then
       info = { 4, 'white', TEXTS.flagLastLap, TEXTS.flagLastLapLine, '' }
     end
+    if Flags.ending == 'timeOver' then
+      info = { 4, 'white', TEXTS.flagTimeOver, TEXTS.flagFinishLap, '' }
+    elseif Flags.ending == 'raceOver' then
+      info = { 4, 'white', TEXTS.flagRaceOver, TEXTS.flagFinishLap, '' }
+    end
     info = info or slow or slip
-    if g == ac.FlagType.Finished then
-      normal = { 5, 'checkered', TEXTS.flagChequered, TEXTS.flagChequeredLine, '' }
+    if Flags.ending == 'finished' then
+      normal = { 5, 'checkered', TEXTS.flagChequered, TEXTS.flagChequeredMine,
+        string.format(TEXTS.flagChequeredPos, CarRead.num(car.racePosition), CarRead.num(car.lapCount)) }
     end
     -- Green: some seconds after a neutralization or a yellow ends
     local top = red or yellow
@@ -5605,21 +5700,126 @@ do
     return { group = f[1], kind = f[2], title = f[3], line1 = f[4], line2 = f[5], alert = f[6], lights = f[7] }
   end
 
-  -- Red flag rules (decisions 196, 203): the line is after the pits, so crossing it with the red flag is leaving the
-  -- pits: DSQ; overtaking a moving car on track with the red flag: DSQ (a car stopped or in the pit lane is no
-  -- overtake). Relative place on track of each car: ahead of this one within half a lap or behind it
+  -- Red flag rules (decisions 196, 203, 263): the line inside the pit lane is after the boxes, so crossing it there
+  -- with the red flag is leaving the pits: DSQ. On track the line is crossed on purpose: every car completes the lap it
+  -- was doing (the game cannot take laps back, so the laps of the cars stay aligned) and receives the red flag there,
+  -- then goes to its box (Flags.redReceived). Overtaking a moving car on track with the red flag: DSQ, after
+  -- flags.redGraceSeconds from the red flag (a manoeuvre already under way: the flag box warns only); a car stopped or
+  -- in the pit lane is no overtake. Relative place on track of each car: ahead of this one within half a lap or behind it
   local RED_PASS_SPLINE = 0.02    -- a pass is a change of side this close (about 2% of the lap)
   local RED_MOVING_KMH = 10
+  -- A car that can be passed (decision 266, the KMR regime without the slow leader): stopped, or slower than
+  -- flags.passSlowKmh and farther than flags.passFarM from the car ahead of it on track
+  local function passAllowed(i, c)
+    local kmh = CarRead.num(c.speedKmh)
+    if kmh <= RED_MOVING_KMH then return true end
+    if kmh >= config.flags.passSlowKmh then return false end
+    local len = tonumber(sim.trackLengthM) or 0
+    local nearest = math.huge
+    -- The cars ahead of it other than this one (the car passing it)
+    for j = 1, (sim.carsCount or 1) - 1 do
+      local o = ac.getCar(j)
+      if j ~= i and o and o.isConnected and not o.isInPitlane then
+        nearest = math.min(nearest, ((CarRead.num(o.splinePosition) - CarRead.num(c.splinePosition)) % 1) * len)
+      end
+    end
+    return nearest > config.flags.passFarM
+  end
+  -- Metres the car c is ahead of this one (negative: behind), within half a lap
+  local function sideOf(car, c)
+    local d = CarRead.num(car.splinePosition) - CarRead.num(c.splinePosition)
+    if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
+    return d
+  end
+
+  -- Yellow flag (decision 267): while the flag box shows the yellow of an incident (or of the game), no overtaking,
+  -- with the exceptions of the red flag (passAllowed); until the green shows when the area is clear. A car passed has
+  -- to get the place back within flags.yellowGiveBackSeconds (the count on the yellow flag box), otherwise a stop &
+  -- go of flags.yellowPassSG seconds. The neutralizations (VSC, SC, FCY) stay with the KMR rules.
+  local yellowSide = {}
+  local function yellowRules(car)
+    if state.redFlag or state.dtDsqActive or state.pitDsqActive then
+      yellowSide, Flags.giveBack = {}, {}
+      return
+    end
+    local clock = state.ui.clock
+    for i, t in pairs(Flags.giveBack) do
+      local c = ac.getCar(i)
+      if not c or not c.isConnected or c.isInPitlane or car.isInPitlane then
+        Flags.giveBack[i] = nil
+        ac.log(string.format('race-control: yellow flag overtake of car %d: the car left the track, nothing to give back', i))
+      elseif sideOf(car, c) < 0 then
+        Flags.giveBack[i] = nil
+        ac.log(string.format('race-control: yellow flag overtake of car %d: place given back', i))
+        showNotice(TEXTS.rcTitle, string.format(TEXTS.yellowGivenBack, carTag(i)))
+      elseif clock - t >= config.flags.yellowGiveBackSeconds then
+        Flags.giveBack[i] = nil
+        ac.log(string.format('race-control: yellow flag overtake of car %d not given back: stop & go', i))
+        Rules.sgAddSeconds(config.flags.yellowPassSG, string.format(TEXTS.yellowPassSG, carTag(i)))
+      end
+    end
+    if not Flags.localYellow or state.code80 then
+      yellowSide = {}
+      return
+    end
+    for i = 1, (sim.carsCount or 1) - 1 do
+      local c = ac.getCar(i)
+      if c and c.isConnected and not c.isInPitlane and not car.isInPitlane then
+        local d = sideOf(car, c)
+        local side = d > 0 and 1 or -1
+        if yellowSide[i] == -1 and side == 1 and math.abs(d) < RED_PASS_SPLINE and not Flags.giveBack[i] then
+          if passAllowed(i, c) then
+            ac.log(string.format('race-control: car %d passed under the yellow flag: allowed (stopped, or slow and far)', i))
+          else
+            Flags.giveBack[i] = clock
+            ac.log(string.format('race-control: overtake under the yellow flag (car %d): give the place back', i))
+            showNotice(TEXTS.rcTitle, string.format(TEXTS.flagGiveBack, carTag(i), config.flags.yellowGiveBackSeconds))
+          end
+        end
+        yellowSide[i] = side
+      else
+        yellowSide[i] = nil
+      end
+    end
+  end
+
   local redSide = {}
   local function redRules(car, lineFrame)
     if not state.redFlag or state.dtDsqActive or state.pitDsqActive then
       redSide = {}
+      Flags.redOver, Flags.redOverSince = false, nil
       return
     end
-    if lineFrame then
-      ac.log('race-control: DSQ, line crossed with the red flag')
+    if lineFrame and car.isInPitlane then
+      ac.log('race-control: DSQ, line crossed in the pit lane with the red flag (leaving the pits)')
       carDsq(1, TEXTS.redFlagLineDsq)
       return
+    elseif lineFrame and not Flags.redReceived then
+      Flags.redReceived = true
+      ac.log('race-control: red flag received at the line on track')
+      rcLog('Red flag', 'received at the line on track')
+    elseif lineFrame then
+      -- The red flag received at the line, the car goes to its box: the line on track again is DSQ (decision 265)
+      ac.log('race-control: DSQ, line crossed again on track with the red flag (did not go to the pits)')
+      carDsq(1, TEXTS.redFlagLineAgainDsq)
+      return
+    end
+    local grace = state.ui.clock - (Flags.redSince or state.ui.clock) < config.flags.redGraceSeconds
+    -- CODE-65 (decisions 267, 269): speed on track over flags.redSpeedKmh, no limiter, the driver controls it; as the
+    -- KMR does under the VSC, over the limit for more than flags.redOverSeconds = a stop & go of flags.redSpeedSG
+    -- seconds, served after the restart; back under the limit, a new time over it counts again
+    local cfg = config.flags
+    local over = not car.isInPitlane and cfg.redSpeedKmh > 0 and CarRead.num(car.speedKmh) > cfg.redSpeedKmh
+    if not over then
+      Flags.redOver, Flags.redOverSince = false, nil
+    else
+      Flags.redOverSince = Flags.redOverSince or state.ui.clock
+      if not Flags.redOver and state.ui.clock - Flags.redOverSince > cfg.redOverSeconds then
+        Flags.redOver = true
+        ac.log(string.format('race-control: CODE-65, over %d km/h for more than %d s with the red flag: stop & go %d s',
+          cfg.redSpeedKmh, cfg.redOverSeconds, cfg.redSpeedSG))
+        Rules.sgAddSeconds(cfg.redSpeedSG, string.format(TEXTS.redFlagSpeedSG, cfg.redSpeedKmh, cfg.redOverSeconds))
+      end
     end
     local me = CarRead.num(car.splinePosition)
     for i = 1, (sim.carsCount or 1) - 1 do
@@ -5629,7 +5829,12 @@ do
         if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
         local side = d > 0 and 1 or -1
         local was = redSide[i]
-        if was == -1 and side == 1 and math.abs(d) < RED_PASS_SPLINE and CarRead.num(c.speedKmh) > RED_MOVING_KMH then
+        local passed = was == -1 and side == 1 and math.abs(d) < RED_PASS_SPLINE
+        if passed and passAllowed(i, c) then
+          ac.log(string.format('race-control: car %d passed with the red flag: allowed (stopped, or slow and far)', i))
+        elseif passed and grace then
+          ac.log(string.format('race-control: overtake with the red flag in the grace time (car %d): warning only', i))
+        elseif passed then
           ac.log(string.format('race-control: DSQ, overtake with the red flag (car %d)', i))
           rcLog('Disqualified', string.format(TEXTS.redFlagPassDsq, carTag(i)))
           carDsq(1, string.format(TEXTS.redFlagPassDsq, carTag(i)))
@@ -5664,10 +5869,113 @@ do
     end
   end
 
+  -- Laps of the leader (race position 1) now, or nil
+  local function leaderLaps()
+    for i = 0, (sim.carsCount or 1) - 1 do
+      local c = ac.getCar(i)
+      if c and (i == 0 or c.isConnected) and CarRead.num(c.racePosition) == 1 then return CarRead.num(c.lapCount) end
+    end
+    return nil
+  end
+  -- End of the session and the last lap of the race by laps (decision 257)
+  local function sessionEnd(car, lineFrame)
+    if Flags.endSession ~= sim.currentSessionIndex then
+      Flags.endSession, Flags.ending, Flags.overLeader, Flags.prevPitlane = sim.currentSessionIndex, nil, nil, nil
+    end
+    local enteredPit = car.isInPitlane and Flags.prevPitlane == false
+    Flags.prevPitlane = car.isInPitlane
+    if Flags.ending == 'finished' or not sim.isSessionStarted then return end
+    local session = ac.getSession(sim.currentSessionIndex)
+    if not session then return end
+    local race = session.type == ac.SessionType.Race
+    local timed = (session.durationMinutes or 0) > 0 and (not race or session.isTimedRace)
+    local lead = leaderLaps()
+    local was = Flags.ending
+    local now = was
+    if timed and CarRead.num(sim.sessionTimeLeft) <= 0 then
+      if race and session.hasAdditionalLap then
+        Flags.overLeader = Flags.overLeader or lead
+        if lead and Flags.overLeader and lead >= Flags.overLeader + 2 then now = 'raceOver'
+        elseif lead and Flags.overLeader and lead >= Flags.overLeader + 1 then now = 'lastLap'
+        else now = now or nil end
+      else
+        now = 'timeOver'
+      end
+    elseif not timed and race and (session.laps or 0) > 0 and lead then
+      if lead >= session.laps then now = 'raceOver'
+      elseif lead == session.laps - 1 then now = 'lastLap' end
+    end
+    -- Over: the chequered flag at this car's line, entering the pit lane, or at once already in the pit lane
+    if now == 'timeOver' or now == 'raceOver' then
+      local startedNow = was ~= now
+      if (startedNow and car.isInPitlane) or (not startedNow and (lineFrame or enteredPit)) then
+        now = 'finished'
+      end
+    end
+    if now ~= was then
+      Flags.ending = now
+      if now then rcLog('Session end', now) end
+    end
+  end
+
+  -- Own start lights (decision 257, design 10): standing start of the race, this car from the 22nd place back; in
+  -- the last 5 s before the start one column more lit each second, all off at the start. Number of columns lit, or nil
+  local START_LIGHTS_FROM = 22
+  function Flags.startLights(car)
+    if Start.phase then return nil end
+    if sim.raceSessionType ~= ac.SessionType.Race or sim.isSessionStarted then return nil end
+    if CarRead.num(car.racePosition) < START_LIGHTS_FROM then return nil end
+    local t = CarRead.num(sim.timeToSessionStart)
+    if t <= 0 or t > 5000 then return nil end
+    return math.min(5, 6 - math.ceil(t / 1000))
+  end
+
+  -- Red flag at the pit place and the pit lights (decision 261): the car stopped at its pit place has the controls locked
+  -- until the red flag goes down (service and driver swap stay allowed: regulation 13.3.3; a service or a DSQ keeps its
+  -- own lock); the track script is told ('race-control.redflag': 'on' every 2 s while it is up, 'off' when it goes
+  -- down) and lights the pit exit red, then green
+  local RED_TRACK_EVENT = 'race-control.redflag'
+  local function redPit(car)
+    local up = state.redFlag ~= nil
+    -- The restart (the red flag goes down): a car that did not enter the pits under the red flag is disqualified
+    -- (decision 262); before it the race direction can disqualify it or send it to the pits (RC DSQ / RC TELEPORT)
+    if Flags.redWasUp and not up and not car.isInPitlane and not (state.dtDsqActive or state.pitDsqActive) then
+      ac.log('race-control: DSQ, not in the pits at the restart after the red flag')
+      carDsq(1, TEXTS.redFlagNoPitDsq)
+    end
+    if up and not Flags.redWasUp then Flags.redSince, Flags.redReceived = state.ui.clock, false end
+    Flags.redWasUp = up
+    local ev = up and 'on' or 'off'
+    if ev ~= Flags.redSent or (up and state.ui.clock - Flags.redSentT >= 2) then
+      Flags.redSent, Flags.redSentT = ev, state.ui.clock
+      ac.broadcastSharedEvent(RED_TRACK_EVENT, ev)
+    end
+    local ownLock = state.pitService or state.dtDsqActive or state.pitDsqActive
+    if up and car.isInPit and not ownLock then
+      if not Flags.redLocked or state.ui.clock >= Flags.redLockT then
+        physics.lockUserControlsFor(3)
+        Flags.redLocked, Flags.redLockT = true, state.ui.clock + 2
+      end
+    elseif Flags.redLocked and not up then
+      Flags.redLocked = false
+      if not ownLock then physics.lockUserControlsFor(0) end
+      rcLog('Red flag', 'controls released at the pit place')
+    end
+  end
+
   function Flags.update(car, lineFrame)
+    redPit(car)
+    -- The game's session time and start lights are not shown (ours only), once
+    if not Flags.hudOff then
+      Flags.hudOff = true
+      ac.disableExtraHUDElements('sessionTime', true)
+      ac.disableExtraHUDElements('startingLights', true)
+    end
+    sessionEnd(car, lineFrame)
     lastLapCheck(car)
     publish(car)
     redRules(car, lineFrame)
+    yellowRules(car)
     Flags.current = pick(car)
   end
 end
@@ -7375,25 +7683,26 @@ local function drawPanel(p1, p2, border, s, alpha)
   ui.drawRect(p1, p2, border, r, nil, 1.5 * s)
 end
 
--- One light of a start gantry drawn as a real LED matrix (order of 30/09): a black housing, and inside it a round
--- cluster of small LEDs in rows, each with its own glow when lit; off, the LEDs stay visible, dark. c: centre, r: radius
+-- One light of a start gantry drawn as a real LED light (order of 30/09): a round light in a black housing, and inside
+-- it many small LEDs in straight rows and columns (a square grid cut round), each with its glow when lit; off, the
+-- LEDs stay visible, dark. c: centre, r: radius of the light
 local function drawLedLight(c, r, color, lit, s)
-  ui.drawCircleFilled(c, r, rgbm(0.03, 0.03, 0.035, 1), 24)
-  ui.drawCircle(c, r, rgbm(0.25, 0.25, 0.27, 1), 24, 1 * s)
-  local pitch = r / 3.2
-  local dot = pitch * 0.36
-  local n = math.floor(r / pitch)
+  ui.drawCircleFilled(c, r + 1.5 * s, rgbm(0.02, 0.02, 0.025, 1), 32)
+  ui.drawCircle(c, r + 1.5 * s, rgbm(0.28, 0.28, 0.3, 1), 32, 1 * s)
+  if lit then ui.drawCircleFilled(c, r, rgbm(color.r, color.g, color.b, 0.18), 32) end
+  local pitch = r / 4.5
+  local dot = pitch * 0.3
+  local n = math.ceil(r / pitch)
   for iy = -n, n do
     for ix = -n, n do
-      local off = (iy % 2 == 0) and 0 or pitch / 2
-      local p = vec2(c.x + ix * pitch + off, c.y + iy * pitch * 0.87)
-      local dx, dy = p.x - c.x, p.y - c.y
-      if dx * dx + dy * dy <= (r - dot * 1.6) ^ 2 then
+      local dx, dy = ix * pitch, iy * pitch
+      if dx * dx + dy * dy <= (r - pitch * 0.45) ^ 2 then
+        local p = vec2(c.x + dx, c.y + dy)
         if lit then
-          ui.drawCircleFilled(p, dot * 2.1, rgbm(color.r, color.g, color.b, 0.22), 8)
-          ui.drawCircleFilled(p, dot, rgbm(math.min(color.r + 0.25, 1), math.min(color.g + 0.25, 1), math.min(color.b + 0.25, 1), 1), 8)
+          ui.drawCircleFilled(p, dot * 1.9, rgbm(color.r, color.g, color.b, 0.25), 8)
+          ui.drawCircleFilled(p, dot, rgbm(math.min(color.r + 0.3, 1), math.min(color.g + 0.3, 1), math.min(color.b + 0.3, 1), 1), 8)
         else
-          ui.drawCircleFilled(p, dot, rgbm(color.r * 0.16, color.g * 0.16, color.b * 0.16, 1), 8)
+          ui.drawCircleFilled(p, dot, rgbm(color.r * 0.14, color.g * 0.14, color.b * 0.14, 1), 8)
         end
       end
     end
@@ -8488,9 +8797,23 @@ local drawRaceScreens = (function()
     local fc = Weather.forecast or {}
     local rows = mode == 'map' and 16 or (7 + (#fc > 0 and (#fc + 2) or 0))
     local p1, p2, y = frame('weather', w, h, s, rows, TEXTS.scrWeather, nil)
-    local clock = string.format('%02d:%02d', CarRead.num(sim.timeHours), CarRead.num(sim.timeMinutes))
-    drawText(clock, FONT_MONO, 11 * s, vec2(p1.x + 14 * s + textWidth(TEXTS.scrWeather, FONT_TITLE, 12 * s) + 10 * s, p1.y + 5 * s),
-      COLOR_TITLE)
+    -- Local time of the track with its UTC offset (the timezone of the track: TIMEZONE_ID of the server, CSP)
+    local off = nil
+    if ac.getTimeZoneOffset then off = CarRead.num(ac.getTimeZoneOffset())
+    elseif ac.getTrackTimezoneBaseDst then
+      local ok, tz = pcall(ac.getTrackTimezoneBaseDst, sim.timestamp)
+      if ok and tz then off = CarRead.num(tz.x) + CarRead.num(tz.y) end
+    end
+    local utc = ''
+    if off then
+      local m = math.floor(math.abs(off) / 60 + 0.5)
+      utc = string.format(' UTC%s%d', off < 0 and '-' or '+', math.floor(m / 60)) .. (m % 60 > 0 and string.format(':%02d', m % 60) or '')
+    end
+    local clock = string.format('%02d:%02d', CarRead.num(sim.timeHours), CarRead.num(sim.timeMinutes)) .. utc
+    if mode == 'map' then
+      drawText(clock, FONT_MONO, 11 * s, vec2(p1.x + 14 * s + textWidth(TEXTS.scrWeather, FONT_TITLE, 12 * s) + 10 * s, p1.y + 5 * s),
+        COLOR_TITLE)
+    end
     local x = p2.x - 14 * s
     for i = 2, 1, -1 do
       local m = i == 1 and 'forecast' or 'map'
@@ -8532,7 +8855,7 @@ local drawRaceScreens = (function()
       local kmhW = CarRead.num(sim.windSpeedKmh)
       local lines = {
         { TEXTS.scrWxTime, clock },
-        { TEXTS.scrWxNow, nowName or '-' },
+        { TEXTS.scrWxSky, nowName or '-' },
         { TEXTS.scrWxAir, string.format('%.0f / %.0f C', CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature)) },
         { TEXTS.scrWxWind, string.format('%.0f km/h %03.0f deg', kmhW, CarRead.num(sim.windDirectionDeg) % 360) },
         { TEXTS.scrWxRain, string.format('%.0f%% - wet %.0f%%', CarRead.num(sim.rainIntensity) * 100, CarRead.num(sim.rainWetness) * 100) },
@@ -9440,20 +9763,18 @@ local drawDesktopUI = (function()
       drawText(it.value, FONT_MONO, 12 * s, vec2(x, p1.y + 31 * s), on and PANEL_COLORS.yellow or COLOR_TITLE)
     end
   end
-  -- AERO (decisions 226, 229; order of 30/09): a screen of its own in the style of the other screens: the title AERO
-  -- (title font 12, the line under it), DRS as the section (10) and OPEN / CLOSED as the text (rows font 10); as wide as
-  -- the widest of these words needs (CLOSED)
+  -- AERO (decisions 226, 229, 256): a box of its own, in the fonts of the other boxes of the controls place (the groups
+  -- and the pit limiter): the title AERO, DRS as the item and OPEN / CLOSED as the value; as wide as CLOSED needs
   local function aeroBox(p1, s)
-    local side = 14 * s
-    local vw = math.max(textWidth('AERO', FONT_TITLE, 12 * s), textWidth('DRS', FONT_TITLE, 10 * s),
-      textWidth('CLOSED', FONT_MONO, 10 * s))
-    local p2 = vec2(p1.x + math.ceil(vw + 2 * side), p1.y + 56 * s)
+    -- The fonts of the other boxes of this place (the groups and the pit limiter): title 9, item 9, value 12
+    local vw = math.max(textWidth('AERO', FONT_TITLE, 9 * s), textWidth('DRS', FONT_TITLE, 9 * s),
+      textWidth('CLOSED', FONT_MONO, 12 * s))
+    local p2 = vec2(p1.x + vw + 24 * s, p1.y + 56 * s)
     local open = Controls.drs == true
     drawPanel(p1, p2, open and BORDER_GREEN or BORDER_BASE, s)
-    drawText('AERO', FONT_TITLE, 12 * s, vec2(p1.x + side, p1.y + 4 * s), COLOR_TITLE)
-    drawSeparator(p1, p2, p1.y + 21 * s, s)
-    drawText('DRS', FONT_TITLE, 10 * s, vec2(p1.x + side, p1.y + 26 * s), COLOR_DIM)
-    drawText(open and 'OPEN' or 'CLOSED', FONT_MONO, 10 * s, vec2(p1.x + side, p1.y + 39 * s),
+    drawText('AERO', FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, p1.y + 5 * s), open and PANEL_COLORS.green or COLOR_TITLE)
+    drawText('DRS', FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, p1.y + 19 * s), COLOR_DIM)
+    drawText(open and 'OPEN' or 'CLOSED', FONT_MONO, 12 * s, vec2(p1.x + 12 * s, p1.y + 31 * s),
       open and PANEL_COLORS.green or COLOR_TITLE)
   end
   -- PIT LIMITER: alone like the AERO, as wide as its words need
@@ -9635,7 +9956,7 @@ local drawDesktopUI = (function()
       if c and c.isConnected then cars[#cars + 1] = { i = i, c = c } end
     end
     local cmd = config.canCommand
-    local W5, H5 = 560, 30 + (cmd and (22 + 22 + 22) or 0) + 18 + 16 + #cars * 16 + 22
+    local W5, H5 = cmd and 680 or 560, 30 + (cmd and (22 + 22 + 22) or 0) + 18 + 16 + #cars * 16 + 22
     local p1, p2 = windowAt('redflag', W5, H5, w, h, s)
     Drag.group = nil
     Drag.modal = { p1, p2 }
@@ -9720,8 +10041,13 @@ local drawDesktopUI = (function()
           sendKmr('player_cancel_drive_through ' .. slot, 'cancel DT ' .. name) end)
         ax = confirmChip('KICK', 'kick' .. slot, vec2(ax, y - 1 * s), s, PANEL_COLORS.red, function()
           sendKmr('player_kick ' .. slot, 'kick ' .. name) end)
-        confirmChip('BAN 60', 'ban' .. slot, vec2(ax, y - 1 * s), s, PANEL_COLORS.red, function()
+        ax = confirmChip('BAN 60', 'ban' .. slot, vec2(ax, y - 1 * s), s, PANEL_COLORS.red, function()
           sendKmr('player_temporary_ban ' .. slot .. '|60', 'ban 60 min ' .. name) end)
+        -- The car to the pits or disqualified by the race direction (RC commands of the platform, decision 262)
+        ax = confirmChip(TEXTS.dirToPit, 'pit' .. slot, vec2(ax, y - 1 * s), s, nil, function()
+          sendKmr('admin_say RC TELEPORT ' .. slot, 'to the pits ' .. name) end)
+        confirmChip('DSQ', 'dsq' .. slot, vec2(ax, y - 1 * s), s, PANEL_COLORS.red, function()
+          sendKmr('admin_say RC DSQ ' .. slot, 'DSQ ' .. name) end)
       end
       y = y + 16 * s
     end
@@ -10017,16 +10343,34 @@ function script.drawUI()
     -- rolling start: the five lights green
     -- The lights as a real LED matrix (order of 30/09)
     if flag.kind == 'red' or flag.lights then
-      local r = 9 * s
+      local r = 10.5 * s
       local lit = flag.kind == 'red' and rgbm(1, 0.1, 0.08, 1) or rgbm(0.15, 1, 0.3, 1)
       for i = 1, 5 do
-        local c = vec2(p2.x - 16 * s - r - (5 - i) * (2 * r + 4 * s), (yTop + p2.y) / 2)
+        local c = vec2(p2.x - 14 * s - r - (5 - i) * (2 * r + 5 * s), (yTop + p2.y) / 2)
         drawLedLight(c, r, lit, true, s)
       end
     end
     return p2.y + gap
   end
   if stackOn and flag and flag.group <= 2 then ySd = drawFlag(ySd) end
+  -- Own start lights (decision 257, design 10): the gantry of the AC, 5 columns of 2 LED lights, over the guard of the
+  -- panel (the strip on demand), not in a box; from the 22nd place back, in the last 5 s of a standing start
+  local litColumns = Flags.startLights(ac.getCar(0))
+  if litColumns then
+    local r = 12 * s
+    local g = 6 * s
+    local colW = 2 * r + g
+    local gw, gh = 5 * colW + g, 4 * r + 3 * g
+    local cx = x + boxW / 2
+    local top = math.max(yMsg - (Drag.panelExtra or 0) - 6 * s - gh, 0)
+    ui.drawRectFilled(vec2(cx - gw / 2, top), vec2(cx + gw / 2, top + gh), rgbm(0.04, 0.04, 0.05, 0.92), 6 * s)
+    for i = 1, 5 do
+      local lx = cx - gw / 2 + g + r + (i - 1) * colW
+      for j = 0, 1 do
+        drawLedLight(vec2(lx, top + g + r + j * (2 * r + g)), r, rgbm(1, 0.1, 0.08, 1), i <= litColumns, s)
+      end
+    end
+  end
 
   -- Gain check box (cut with a reference), in the place of the slowdown box, same size. The bar is the time
   -- advantage still left over the reference x (1 + tolerance): red while the car is faster than allowed, empty when
