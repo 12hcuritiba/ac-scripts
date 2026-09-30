@@ -678,11 +678,12 @@ local TEXTS = {
   redTitle = 'RED FLAG CONTROL', redNone = 'no red flag', redConfirm = 'CONFIRM RED FLAG', redVsc = 'RESUME VSC %d s',
   redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET MONEY', dirStats = 'RESET STATS', dirNoSg = 'NO S&G',
   dirKmrLine = 'KMR  points %s / %d  -  safety %s  -  %s  -  infractions %s (%s / 100 km)',
-  dirKmrCrashes = 'crashes %s (%s / 100 km)', dirKmrNoStats = 'stats: none yet (not driven enough)',
+  dirKmrCrashes = 'crashes %s (%s / 100 km)', dirBalRes = 'ballast %.0f kg  restrictor %.0f', dirKmrLaps = '  -  laps %d best %s', dirKmrNoStats = 'stats: none yet (not driven enough)',
   dirKmrNone = 'KMR  no numbers from this driver yet',
   dirDriver = 'Driver',
   dirWebLine = 'money %s - %s - infr %s (%s/100km) - crashes %s (%s/100km) - laps %d best %s',
-  dirWebOthers = 'Registered in the KMR', dirValue = 'Value', dirBallast = 'BALLAST', dirRestrictor = 'RESTRICTOR',
+  dirWebOthers = 'Registered in the KMR',
+  dirWebErr = 'KMR web stats not read: %s', dirWebOff = 'KMR web stats: key kmrStatsUrl empty', dirValue = 'Value', dirBallast = 'BALLAST', dirRestrictor = 'RESTRICTOR',
   dirNeedCarValue = 'Ballast / restrictor: a driver on the server in the field and a value', dirList = 'DRIVERS', dirListBtn = 'LIST', dirSessionTime = '%s elapsed / %s left',
   dirSessionLaps = 'lap %d', dirSessionLapsOf = 'lap %d / %d - %d left',
   dirLeft = 'Left the server', dirGuidAsk = 'Asking the KMR the GUID of %s',
@@ -2678,8 +2679,10 @@ do
     Audit.askPending = false
     askedT = state.ui.clock
     Audit.askedUntil = state.ui.clock + ASK_GAP
-    queueCommand('/kmr stats')
-    queueCommand('/kmr money')
+    -- Player commands of the KMR are plain chat, without the bar (KMR readme, Player Chat Commands; finding of 30/09:
+    -- "/kmr is not recognized as a server command"); every client hides these lines of any driver (chat.lua)
+    queueCommand('kmr stats')
+    queueCommand('kmr money')
   end
 
   -- The KMR numbers of each driver for the race direction (decision 278): every client sends its own (points, safety
@@ -3018,6 +3021,13 @@ ac.onChatMessage(function(message, senderCarIndex)
       queueCommand('/ban ' .. car)
       ac.log('race-control: ban sent for car ' .. car .. ' (edited file)')
     end
+    return true
+  end
+  -- The KMR player commands the script sends for each driver (kmr stats / kmr money, decision 285): off the chat of
+  -- every client, and the server answer to a command it does not know
+  if message:lower():match('^%s*kmr%s+stats%s*$') or message:lower():match('^%s*kmr%s+money%s*$')
+      or (server and message:lower():find('is not recognized as a server command', 1, true)
+        and message:lower():find('kmr', 1, true)) then
     return true
   end
   -- Race Control command (RcCommand): only from the server (ACSM live timing, admin; KMR admin_say of the race
@@ -10560,14 +10570,18 @@ local drawDesktopUI = (function()
   end
   -- The KMR web line of a driver: money, km, infractions and crashes per 100 km, laps and best lap of this track (the car
   -- he drives now, else the one with most laps)
-  local function webLine(e, carId)
-    local laps, best, car = 0, 0, nil
-    if carId and e.cars[carId] then laps, best, car = e.cars[carId].laps, e.cars[carId].best, carId
+  local function webLaps(e, carId)
+    local laps, best = 0, 0
+    if carId and e.cars[carId] then laps, best = e.cars[carId].laps, e.cars[carId].best
     else
-      for c, t in pairs(e.cars) do if t.laps > laps then laps, best, car = t.laps, t.best, c end end
+      for _, t in pairs(e.cars) do if t.laps > laps then laps, best = t.laps, t.best end end
     end
+    return laps, lapTimeText(best)
+  end
+  local function webLine(e, carId)
+    local laps, best = webLaps(e, carId)
     return string.format(TEXTS.dirWebLine, e.money, e.km, e.infr and tostring(e.infr) or '-', e.infrRate,
-      e.crashes and tostring(e.crashes) or '-', e.crRate, laps, lapTimeText(best))
+      e.crashes and tostring(e.crashes) or '-', e.crRate, laps, best)
   end
   Direction.webLine = webLine
 
@@ -10576,12 +10590,12 @@ local drawDesktopUI = (function()
   -- the race direction window. Beside that window when there is room, else over it on the right of the screen
   local function driversList(w, h, s, dp1, dp2)
     webUpdate()
-    local names, on = {}, {}
+    local names, on, onCar = {}, {}, {}
     for i = 0, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
       if c and (i == 0 or c.isConnected) then
         local n = tostring(ac.getDriverName(i) or '')
-        if n ~= '' and not on[n] then on[n] = true; names[#names + 1] = n end
+        if n ~= '' and not on[n] then on[n] = true; onCar[n] = c; names[#names + 1] = n end
       end
     end
     local off = {}
@@ -10594,7 +10608,7 @@ local drawDesktopUI = (function()
     end
     table.sort(names)
     table.sort(off)
-    local LW, ROWL = 520 * s, (webList and 27 or 15) * s
+    local LW, ROWL = 600 * s, 27 * s
     local rows = #names + #off + (#off > 0 and 1 or 0)
     local lh = 30 * s + math.max(rows, 1) * ROWL + 10 * s + (Direction.web.err and 14 * s or 0)
     local x = dp2.x + 8 * s
@@ -10615,7 +10629,13 @@ local drawDesktopUI = (function()
       drawTextRight(Direction.guids[n] or '-', FONT_MONO, 9 * s, p2.x - 12 * s, y + 1 * s,
         Direction.guids[n] and COLOR_TITLE or COLOR_OFF)
       local we = Direction.web.byName[n]
-      if we then drawText(webLine(we), FONT_MONO, 8 * s, vec2(p1.x + 12 * s, y + 12 * s), COLOR_DIM) end
+      local car = onCar[n]
+      local extra = car and string.format(TEXTS.dirBalRes, CarRead.num(car.ballast), CarRead.num(car.restrictor)) or nil
+      if we then
+        drawText((extra and (extra .. '  -  ') or '') .. webLine(we), FONT_MONO, 8 * s, vec2(p1.x + 12 * s, y + 12 * s), COLOR_DIM)
+      elseif extra then
+        drawText(extra, FONT_MONO, 8 * s, vec2(p1.x + 12 * s, y + 12 * s), COLOR_DIM)
+      end
       Drag.clickable(a, b, function()
         Direction.target = n
         -- Not known yet: asked to the KMR (admin login)
@@ -10633,6 +10653,13 @@ local drawDesktopUI = (function()
       for _, n in ipairs(off) do row(n, COLOR_DIM) end
     end
     ui.popClipRect()
+    -- The KMR web stats not read (address, server): said at the bottom
+    if Direction.web.err then
+      drawText(string.format(TEXTS.dirWebErr, Direction.web.err), FONT_MONO, 8.5 * s, vec2(p1.x + 12 * s, p2.y - 16 * s),
+        PANEL_COLORS.red)
+    elseif config.kmrStatsUrl == '' then
+      drawText(TEXTS.dirWebOff, FONT_MONO, 8.5 * s, vec2(p1.x + 12 * s, p2.y - 16 * s), COLOR_DIM)
+    end
   end
 
   local function redWindow(w, h, s)
@@ -10811,21 +10838,38 @@ local drawDesktopUI = (function()
       end
       -- The KMR numbers of the driver (decision 278), sent by his client: points, safety rating, crashes and
       -- infractions with the rate per 100 km
-      local k = Audit.kmrOf(e.i)
+      -- Field by field (decision 286): what the client of the driver sent, else the KMR web stats (decision 284); the
+      -- points of the session only come from the client (each KMR penalty)
+      local k = Audit.kmrOf(e.i) or {}
       local we = Direction.web.byName[tostring(ac.getDriverName(e.i) or '')]
-      local function nv(x) return x and Audit.num(x) or '-' end
-      local crashes = k and k.noStats and TEXTS.dirKmrNoStats or (k and string.format(TEXTS.dirKmrCrashes, nv(k.crashes),
-        k.crashRate and string.format('%.2f', k.crashRate) or '-'))
-      local kline = k and string.format(TEXTS.dirKmrLine, nv(k.points), config.kmrPoints.limit, nv(k.rating), crashes,
-        nv(k.infractions), k.infractionRate and string.format('%.2f', k.infractionRate) or '-') or TEXTS.dirKmrNone
+      local function nv(x) return x and Audit.num(x) or nil end
+      local rate = function(x) return x and string.format('%.2f', x) or nil end
+      local safety = nv(k.rating) or (we and we.money)
+      local crashes, crRate = nv(k.crashes), rate(k.crashRate)
+      if not crashes and we then crashes, crRate = we.crashes and tostring(we.crashes), we.crRate end
+      local infr, infrRate = nv(k.infractions), rate(k.infractionRate)
+      if not infr and we then infr, infrRate = we.infr and tostring(we.infr), we.infrRate end
+      local crashText = (not crashes and k.noStats) and TEXTS.dirKmrNoStats
+        or string.format(TEXTS.dirKmrCrashes, crashes or '-', crRate or '-')
+      local kline = TEXTS.dirKmrNone
+      if k.points or safety or crashes or infr or k.noStats then
+        kline = string.format(TEXTS.dirKmrLine, nv(k.points) or '-', config.kmrPoints.limit, safety or '-', crashText,
+          infr or '-', infrRate or '-')
+        if we then
+          local laps, best = webLaps(we, ac.getCarID and ac.getCarID(e.i) or nil)
+          kline = kline .. string.format(TEXTS.dirKmrLaps, laps, best)
+        end
+      end
+      -- Ballast and restrictor of the car now (decision 287; the SDK gives them for every car)
+      kline = string.format(TEXTS.dirBalRes, CarRead.num(c.ballast), CarRead.num(c.restrictor)) .. '  -  ' .. kline
       -- Under the chips of the car (finding of 30/09: the line touched them), with room before the next car
-      -- The KMR web stats of the driver (decision 284), when the client sent none
-      if not k and we then kline = 'KMR  ' .. webLine(we, ac.getCarID and ac.getCarID(e.i) or nil) end
       drawText(kline, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 16 * s), COLOR_DIM)
       y = y + 32 * s
     end
     drawText(string.format(TEXTS.redCount, inPits, #cars, over), FONT_MONO, 9 * s, vec2(x0, y + 2 * s), COLOR_DIM)
     if cmd and Direction.listOpen then driversList(w, h, s, p1, p2) end
+    -- The KMR web stats also with the list closed: the lines under the cars use them (decision 286)
+    webUpdate()
   end
 
   -- Lobby (the pits menu with Drive, Setup, Laptimes, Info; decisions 227, 229): on the right of the screen, in the part
