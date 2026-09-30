@@ -197,6 +197,10 @@ local cfg = ac.configValues({
   --   KMR message with the balance, the welcome message at the entry included); at or under dsqAt = DSQ. Empty = the
   --   rating is only shown, no DSQ.
   kmrRating = '',
+  -- kmrStatsUrl = http://host:port (optional): the KMR web stats of the server; the race direction reads the drivers
+  --   registered in the KMR from its JSON (/?drivers=true&page=N): name, GUID, money, km, infractions and crashes per
+  --   100 km, laps and best lap of the track. Empty = the drivers seen on the server only.
+  kmrStatsUrl = '',
 
   -- ------------------------------------------------------------
   -- 3. Driver swap and pit stops (the ACSM keys must match the ACSM race settings)
@@ -673,12 +677,16 @@ local TEXTS = {
   msgTitle = 'MESSAGES', setMissing = 'missing', setChecking = 'checking', setAllGood = 'All good - closes in %d s', setNotGood = 'Not all good - close it yourself',
   redTitle = 'RED FLAG CONTROL', redNone = 'no red flag', redConfirm = 'CONFIRM RED FLAG', redVsc = 'RESUME VSC %d s',
   redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET MONEY', dirStats = 'RESET STATS', dirNoSg = 'NO S&G',
-  dirKmrLine = 'KMR  points %s / %d  -  safety %s  -  crashes %s (%s / 100 km)  -  infractions %s (%s / 100 km)',
+  dirKmrLine = 'KMR  points %s / %d  -  safety %s  -  %s  -  infractions %s (%s / 100 km)',
+  dirKmrCrashes = 'crashes %s (%s / 100 km)', dirKmrNoStats = 'stats: none yet (not driven enough)',
   dirKmrNone = 'KMR  no numbers from this driver yet',
-  dirDriver = 'Driver', dirList = 'DRIVERS', dirListBtn = 'LIST', dirSessionTime = '%s elapsed / %s left',
+  dirDriver = 'Driver',
+  dirWebLine = 'money %s - %s - infr %s (%s/100km) - crashes %s (%s/100km) - laps %d best %s',
+  dirWebOthers = 'Registered in the KMR', dirValue = 'Value', dirBallast = 'BALLAST', dirRestrictor = 'RESTRICTOR',
+  dirNeedCarValue = 'Ballast / restrictor: a driver on the server in the field and a value', dirList = 'DRIVERS', dirListBtn = 'LIST', dirSessionTime = '%s elapsed / %s left',
   dirSessionLaps = 'lap %d', dirSessionLapsOf = 'lap %d / %d - %d left',
   dirLeft = 'Left the server', dirGuidAsk = 'Asking the KMR the GUID of %s',
-  dirGuidNone = 'The KMR gave no GUID for %s (the name is case sensitive)',
+  dirGuidNone = 'The KMR gave no GUID for %s (the name is case sensitive)', dirGuidGot = 'GUID of %s: %s',
   dirNoRed = 'No red flag nor VSC on', redKmrOn = 'KMR admin: logged in', redKmrOff = 'KMR admin: type /kmr login <password> in the chat',
   redPlace = 'pit place', redLane = 'pit lane', redTrack = 'track', redCount = 'In the pits %d / %d - over the limit %d',
   lobbyTitle = 'RACE CONTROL', lobbyStops = 'Stops', lobbyKmr = 'KMR points / rating', lobbyWeather = 'Air / track',
@@ -862,6 +870,8 @@ local config = {
   driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
   kmrPoints = structKey('kmrPoints', { limit = 100 }),
   eventName = tostring(cfg.eventName or ''),
+  -- KMR web stats of the server (decision 284), without the ending bar
+  kmrStatsUrl = (tostring(cfg.kmrStatsUrl or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')),
   -- KMR safety rating (decision 215): dsqAt; on = the key is set (empty = the rating is only shown)
   kmrRating = (function()
     local r = structKey('kmrRating', { dsqAt = 0 })
@@ -1967,10 +1977,12 @@ do
       points = { en = { '^%s*penalty%s*%+%d+%s*%((%d+)/(%d+)%)' }, pt = { '^%s*penalidade%s*%+%d+%s*%((%d+)/(%d+)%)' } },
       -- 2.2a Driving stats of the driver (welcome_driving_stats, kmr_stats_output_1, welcome_winning_stats): crashes and
       -- driving infractions, each with its rate per 100 km (decision 278)
-      crashes = { en = { 'crashes: (%d+) %(per 100km: ([%d%.]+)', 'crashes: (%d+) %(crashes per 100km: ([%d%.]+)' },
-        pt = { 'acidentes: (%d+) %(per 100km: ([%d%.]+)', 'batidas: (%d+) %(batidas por 100km: ([%d%.]+)' } },
-      infractions = { en = { 'driving infractions: (%d+) %(per 100km: ([%d%.]+)' },
-        pt = { 'infrações de pilotagem: (%d+) %(per 100km: ([%d%.]+)', 'infracoes de pilotagem: (%d+) %(per 100km: ([%d%.]+)' } },
+      crashes = { en = { 'crashes: (%d+) %(per 100km: ([%d%.,]+)', 'crashes: (%d+) %(crashes per 100km: ([%d%.,]+)' },
+        pt = { 'acidentes: (%d+) %(per 100km: ([%d%.,]+)', 'batidas: (%d+) %(batidas por 100km: ([%d%.,]+)' } },
+      infractions = { en = { 'driving infractions: (%d+) %(per 100km: ([%d%.,]+)' },
+        pt = { 'infrações de pilotagem: (%d+) %(per 100km: ([%d%.,]+)', 'infracoes de pilotagem: (%d+) %(per 100km: ([%d%.,]+)' } },
+      -- you_have_no_stats: the answer of "kmr stats" before the driver has driven enough
+      noStats = { en = { 'no stats to show yet' }, pt = { 'sem status para mostrar ainda' } },
       -- 2.3 Safety rating (the KMR money; decision 215). The balance after the message (patterns): welcome_money,
       -- kmr_money_output, money_penalty, damage_*_notification, towing_cost, race_entry_fee, qualify_top_3_prize,
       -- all_times_fastest_lap_prize, session_balance_overview
@@ -2097,7 +2109,7 @@ end
 -- Kinds that start CODE-80
 -- Actions of the Race Control commands (penalties/commands.lua), for a command with a prefix of the server
 DICT.rcActions = { REDFLAG = true, RELAX = true, UNLOCK = true, DT = true, HOLD = true, TELEPORT = true, DSQ = true,
-  LOCK = true, FUEL = true }
+  LOCK = true, FUEL = true, KMR = true }
 DICT.code80Kinds = { VSC = true, SC = true, ['CODE-80'] = true }
 
 local function hasAny(text, words)
@@ -2633,9 +2645,16 @@ do
     local low = tostring(message):lower()
     local c, cr = DICT.match(low, DICT.kmr.crashes)
     local i, ir = DICT.match(low, DICT.kmr.infractions)
-    if c then Audit.crashes, Audit.crashRate = tonumber(c), tonumber(cr) end
-    if i then Audit.infractions, Audit.infractionRate = tonumber(i), tonumber(ir) end
+    local function n(x) return tonumber((tostring(x or ''):gsub(',', '.'))) end
+    if c then Audit.crashes, Audit.crashRate, Audit.noStats = tonumber(c), n(cr), false end
+    if i then Audit.infractions, Audit.infractionRate = tonumber(i), n(ir) end
     if c or i then ac.log('race-control: KMR driving stats: ' .. message) end
+    -- No stats yet (the driver has not driven enough): said as such (finding of 30/09: the line stayed empty)
+    if not c and DICT.match(low, DICT.kmr.noStats) then
+      Audit.noStats = true
+      ac.log('race-control: KMR driving stats: none yet')
+      return state.ui.clock < (Audit.askedUntil or 0)
+    end
     -- Only the answer of "kmr stats" (kmr_stats_output_1: "crashes per 100km"), not the welcome line
     local answer = low:find('crashes per 100km', 1, true) or low:find('batidas por 100km', 1, true)
     return (c ~= nil) and answer ~= nil and state.ui.clock < (Audit.askedUntil or 0)
@@ -2677,22 +2696,23 @@ do
     if not sender or sender.index == 0 then return end
     local function v(x) x = tonumber(x) or -1; return x >= 0 and x or nil end
     Audit.others[sender.index] = { points = v(msg.kPoints), rating = tonumber(msg.kRating) ~= -2147483647
-      and tonumber(msg.kRating) or nil, crashes = v(msg.kCrashes), crashRate = v(msg.kCrashRate) and v(msg.kCrashRate) / 100,
+      and tonumber(msg.kRating) or nil, crashes = v(msg.kCrashes), noStats = tonumber(msg.kCrashes) == -2, crashRate = v(msg.kCrashRate) and v(msg.kCrashRate) / 100,
       infractions = v(msg.kInfr), infractionRate = v(msg.kInfrRate) and v(msg.kInfrRate) / 100, t = state.ui.clock }
   end, nil, nil, { processPostponed = true })
   -- The numbers of a car: this one, or what its client sent
   function Audit.kmrOf(i)
     if i == 0 then
       return { points = Audit.points, rating = Audit.rating, crashes = Audit.crashes, crashRate = Audit.crashRate,
-        infractions = Audit.infractions, infractionRate = Audit.infractionRate }
+        infractions = Audit.infractions, infractionRate = Audit.infractionRate, noStats = Audit.noStats }
     end
     return Audit.others[i]
   end
   function Audit.kmrSend()
-    if Audit.points == nil and Audit.rating == nil and Audit.crashes == nil and Audit.infractions == nil then return end
+    if Audit.points == nil and Audit.rating == nil and Audit.crashes == nil and Audit.infractions == nil
+      and not Audit.noStats then return end
     local function n(x, k) return x and math.floor(x * (k or 1) + 0.5) or -1 end
     local data = { kPoints = n(Audit.points), kRating = Audit.rating and math.floor(Audit.rating) or -2147483647,
-      kCrashes = n(Audit.crashes), kCrashRate = n(Audit.crashRate, 100), kInfr = n(Audit.infractions),
+      kCrashes = Audit.noStats and -2 or n(Audit.crashes), kCrashRate = n(Audit.crashRate, 100), kInfr = n(Audit.infractions),
       kInfrRate = n(Audit.infractionRate, 100) }
     local text = table.concat({ data.kPoints, data.kRating, data.kCrashes, data.kCrashRate, data.kInfr, data.kInfrRate }, '|')
     if text == sentText and state.ui.clock - sentT < KMR_RESEND then return end
@@ -5452,6 +5472,7 @@ end
 --   Penalties: DT <ID> [laps]   HOLD <ID> <seconds>   TELEPORT <ID>   DSQ <ID>   LOCK <ID> <seconds>
 --   Red flag (decisions 174, 196, 203): REDFLAG ALL [- reason] gives it to every car; REDFLAG OFF ALL takes it off;
 --   FUEL <ID> unlocks the fuel of the car under the red flag (decision 270: a car already going to the pits)
+--   KMR <ID>: the client of the car asks its KMR numbers again (kmr stats, kmr money; decision 282: after a reset)
 -- Every command goes to the server log ([RC] line) and to the driver's message box; the car record is kept up to date.
 -- ============================================================
 
@@ -5529,6 +5550,9 @@ do
       carDsq(1, why)
       ac.log('race-control: DSQ by Race Control command')
       showNotice(TEXTS.rcTitle, 'Disqualified - ' .. why, nil, SERVER_NOTICE_SECONDS)
+    elseif what == 'KMR' then
+      Audit.askPending = true
+      return true
     elseif what == 'FUEL' then
       state.redFuelOk = true
       done(TEXTS.redFuelUnlocked, why)
@@ -7762,8 +7786,13 @@ do
       row[#row + 1] = { ui.Icons.Settings, (Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen)
         and ICON_ON or ICON_COLOR,
         function() Desktop.menu = not Desktop.menu end }
+      -- Quick access to every screen of the desktops (order of 30/09, decision 280): lit = shown on this desktop; a
+      -- click shows it here, or back to auto-hide
       for _, it in ipairs({ { ui.Icons.Sliders, 'setup' }, { ui.Icons.PitStop, 'pitbox' },
-          { ui.Icons.CarFront, 'status' } }) do
+          { ui.Icons.CarFront, 'status' }, { ui.Icons.Flag, 'race' }, { ui.Icons.List, 'laps' },
+          { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
+          { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.Weather, 'weather' },
+          { ui.Icons.Map, 'map' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
       end
     end
@@ -10337,11 +10366,22 @@ local drawDesktopUI = (function()
   end
   -- Release of a driver (decision 274): the KMR commands take the Steam GUID; the KMR gives it by the name, also of a
   -- driver no longer on the server (driver_get_guid, case sensitive), and the answer brings the command
+  -- After a reset, the client of that driver (if on the server) asks its KMR numbers again: RC KMR <slot> (decision 282)
+  local function refreshDriver(name)
+    for i = 0, (sim.carsCount or 1) - 1 do
+      local c = ac.getCar(i)
+      if c and (i == 0 or c.isConnected) and tostring(ac.getDriverName(i) or '') == name then
+        queueCommand('/kmr admin_say RC KMR ' .. tostring(c.sessionID or i))
+        return
+      end
+    end
+  end
   local function releaseDriver(action, name, label)
     if name == '' then return end
     local known = Direction.guids[name]
     if known then
       queueCommand('/kmr ' .. action .. ' ' .. known)
+      refreshDriver(name)
       Direction.status, Direction.statusT = string.format(TEXTS.dirSent, label .. ' ' .. name), state.ui.clock
       Direction.statusColor = PANEL_COLORS.yellow
       ac.log('race-control: race direction command sent: ' .. action .. ' for ' .. name)
@@ -10369,7 +10409,14 @@ local drawDesktopUI = (function()
     local guid = job and message:match('%f[%d](%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d)%f[%D]')
     if guid then
       Direction.guidJob = nil
+      Direction.guids[job.name] = guid
+      if not job.action then
+        Direction.status, Direction.statusT, Direction.statusColor = string.format(TEXTS.dirGuidGot, job.name, guid),
+          state.ui.clock, COLOR_TITLE
+        return
+      end
       queueCommand('/kmr ' .. job.action .. ' ' .. guid)
+      refreshDriver(job.name)
       Direction.status, Direction.statusT = string.format(TEXTS.dirSent, job.label .. ' ' .. job.name), state.ui.clock
       Direction.statusColor = PANEL_COLORS.yellow
       ac.log('race-control: race direction command sent: ' .. job.action .. ' for ' .. job.name)
@@ -10448,10 +10495,87 @@ local drawDesktopUI = (function()
     return table.concat(parts, '  -  ')
   end
 
-  -- List of the drivers (order of 30/09): on the server, the ones who left and the ones of the KMR player_list; a click
-  -- puts the name in the field of the race direction window. Beside that window when there is room, else over it on the
-  -- right of the screen
+  -- The drivers registered in the KMR (decision 284): read from the JSON of its web stats (key kmrStatsUrl) by the race
+  -- direction, when the list opens and every WEB_EVERY seconds while it is open, page after page. Only shown: no code of
+  -- it runs (JSON.parse). Each: name, GUID, money, km, infractions and crashes (total and per 100 km), and the laps and
+  -- best lap of this track (the KMR key of the track: id, "-" layout, "_"), by car
+  local WEB_EVERY = 60
+  Direction.web = { list = nil, byName = {}, t = -1e9, busy = false, err = nil }
+  local function trackKey()
+    local id, layout = tostring(ac.getTrackID() or ''), tostring(ac.getTrackLayout and ac.getTrackLayout() or '')
+    return id .. (layout ~= '' and ('-' .. layout) or '') .. '_', id
+  end
+  local function lapTimeText(ms)
+    ms = tonumber(ms) or 0
+    if ms <= 0 then return '-' end
+    return string.format('%d:%06.3f', math.floor(ms / 60000), (ms % 60000) / 1000)
+  end
+  local function webFetch(page, acc)
+    local url = config.kmrStatsUrl .. '/?drivers=true&page=' .. page
+    web.get(url, function(err, res)
+      local data = not err and res and res.body and JSON.parse(res.body)
+      if type(data) ~= 'table' or type(data.rank) ~= 'table' then
+        Direction.web.busy, Direction.web.err = false, tostring(err or 'no data')
+        ac.log('race-control: KMR web stats not read: ' .. Direction.web.err)
+        return
+      end
+      local full = {}
+      for _, r in ipairs(type(data.full_rank) == 'table' and data.full_rank or {}) do
+        if r.guid then full[tostring(r.guid)] = r end
+      end
+      local key, id = trackKey()
+      for _, r in ipairs(data.rank) do
+        local g = tostring(r.guid or '')
+        local e = { name = tostring(r.name or ''), guid = g, money = tostring(r.points or '-'), km = tostring(r.driven or '-'),
+          infr = tonumber(r.infr), infrRate = tostring(r['infr/100km'] or '-'), crashes = tonumber(r.crashes),
+          crRate = tostring(r['cr/100km'] or '-'), cars = {} }
+        local lb = full[g] and full[g].leaderboard
+        local track = type(lb) == 'table' and (lb[key] or lb[id .. '_']) or nil
+        if type(track) == 'table' then
+          for car, t in pairs(track) do
+            if type(t) == 'table' then e.cars[car] = { laps = tonumber(t.laps) or 0, best = tonumber(t.laptime) or 0 } end
+          end
+        end
+        acc[#acc + 1] = e
+      end
+      if page < (tonumber(data.pages) or 1) and page < 20 then
+        webFetch(page + 1, acc)
+      else
+        local w = Direction.web
+        w.list, w.byName, w.busy, w.err = acc, {}, false, nil
+        for _, e in ipairs(acc) do
+          w.byName[e.name] = e
+          if e.guid ~= '' then Direction.guids[e.name] = e.guid end
+        end
+        ac.log(string.format('race-control: KMR web stats read: %d drivers', #acc))
+      end
+    end)
+  end
+  local function webUpdate()
+    local w = Direction.web
+    if config.kmrStatsUrl == '' or not web or not web.get or not JSON or w.busy then return end
+    if state.ui.clock - w.t < WEB_EVERY then return end
+    w.t, w.busy = state.ui.clock, true
+    webFetch(1, {})
+  end
+  -- The KMR web line of a driver: money, km, infractions and crashes per 100 km, laps and best lap of this track (the car
+  -- he drives now, else the one with most laps)
+  local function webLine(e, carId)
+    local laps, best, car = 0, 0, nil
+    if carId and e.cars[carId] then laps, best, car = e.cars[carId].laps, e.cars[carId].best, carId
+    else
+      for c, t in pairs(e.cars) do if t.laps > laps then laps, best, car = t.laps, t.best, c end end
+    end
+    return string.format(TEXTS.dirWebLine, e.money, e.km, e.infr and tostring(e.infr) or '-', e.infrRate,
+      e.crashes and tostring(e.crashes) or '-', e.crRate, laps, lapTimeText(best))
+  end
+  Direction.webLine = webLine
+
+  -- List of the drivers (order of 30/09): the ones registered in the KMR (web stats, decision 284) or, without them,
+  -- the ones on the server, the ones who left and the ones of the KMR player_list; a click puts the name in the field of
+  -- the race direction window. Beside that window when there is room, else over it on the right of the screen
   local function driversList(w, h, s, dp1, dp2)
+    webUpdate()
     local names, on = {}, {}
     for i = 0, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
@@ -10461,12 +10585,18 @@ local drawDesktopUI = (function()
       end
     end
     local off = {}
-    for _, n in ipairs(seenList()) do if not on[n] then off[#off + 1] = n end end
+    local webList = Direction.web.list
+    if webList then
+      -- Every driver registered in the KMR that is not on the server
+      for _, e in ipairs(webList) do if not on[e.name] then off[#off + 1] = e.name end end
+    else
+      for _, n in ipairs(seenList()) do if not on[n] then off[#off + 1] = n end end
+    end
     table.sort(names)
     table.sort(off)
-    local LW, ROWL = 240 * s, 15 * s
+    local LW, ROWL = 520 * s, (webList and 27 or 15) * s
     local rows = #names + #off + (#off > 0 and 1 or 0)
-    local lh = 30 * s + math.max(rows, 1) * ROWL + 10 * s
+    local lh = 30 * s + math.max(rows, 1) * ROWL + 10 * s + (Direction.web.err and 14 * s or 0)
     local x = dp2.x + 8 * s
     if x + LW > w then x = w - LW - 8 * s end
     local p1 = vec2(math.floor(x), math.floor(dp1.y))
@@ -10481,13 +10611,24 @@ local drawDesktopUI = (function()
       local a, b = vec2(p1.x + 8 * s, y - 1 * s), vec2(p2.x - 8 * s, y + ROWL - 2 * s)
       if Direction.target == n then ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.12), 2 * s) end
       drawText(n, FONT_TEXT, 9.5 * s, vec2(p1.x + 12 * s, y), col)
-      if Direction.guids[n] then drawTextRight('GUID', FONT_MONO, 8 * s, p2.x - 12 * s, y + 1 * s, COLOR_DIM) end
-      Drag.clickable(a, b, function() Direction.target = n end)
+      -- The Steam GUID beside the name (order of 30/09): from the player_list or from driver_get_guid
+      drawTextRight(Direction.guids[n] or '-', FONT_MONO, 9 * s, p2.x - 12 * s, y + 1 * s,
+        Direction.guids[n] and COLOR_TITLE or COLOR_OFF)
+      local we = Direction.web.byName[n]
+      if we then drawText(webLine(we), FONT_MONO, 8 * s, vec2(p1.x + 12 * s, y + 12 * s), COLOR_DIM) end
+      Drag.clickable(a, b, function()
+        Direction.target = n
+        -- Not known yet: asked to the KMR (admin login)
+        if not Direction.guids[n] and state.kmrAdmin and not Direction.guidJob then
+          Direction.guidJob = { name = n, t = state.ui.clock }
+          queueCommand('/kmr driver_get_guid ' .. n)
+        end
+      end)
       y = y + ROWL
     end
     for _, n in ipairs(names) do row(n, COLOR_TITLE) end
     if #off > 0 then
-      drawText(TEXTS.dirLeft, FONT_TITLE, 8.5 * s, vec2(p1.x + 12 * s, y), COLOR_DIM)
+      drawText(webList and TEXTS.dirWebOthers or TEXTS.dirLeft, FONT_TITLE, 8.5 * s, vec2(p1.x + 12 * s, y), COLOR_DIM)
       y = y + ROWL
       for _, n in ipairs(off) do row(n, COLOR_DIM) end
     end
@@ -10505,8 +10646,9 @@ local drawDesktopUI = (function()
       Direction.status, Direction.statusColor = string.format(TEXTS.dirGuidNone, Direction.guidJob.name), PANEL_COLORS.red
       Direction.statusT, Direction.guidJob = state.ui.clock, nil
     end
-    local W5, H5 = cmd and 940 or 560, 30 + 16 + (cmd and (22 + 22 + 22 + 22) or 0) + 18 + 16 + #cars * 28 + 22
-    local p1, p2 = windowAt('redflag', W5, H5, w, h, s)
+    local W5, H5 = cmd and 940 or 560, 30 + 16 + (cmd and (22 + 22 + 22 + 22) or 0) + 18 + 16 + #cars * 32 + 22
+    -- Resizable by its corner (order of 30/09, decision 284): the size given is the smallest, what it needs
+    local p1, p2 = windowAt('redflag', W5, H5, w, h, s, true)
     Drag.group = nil
     Drag.modal = { p1, p2 }
     local m = ui.mousePos()
@@ -10557,10 +10699,33 @@ local drawDesktopUI = (function()
         releaseDriver('driver_reset_money', Direction.target, 'reset money') end)
       tx = confirmChip(TEXTS.dirStats, 'tstats', vec2(tx, y - 1 * s), s, nil, function()
         releaseDriver('driver_reset_driving_stats', Direction.target, 'reset stats') end)
-      chip(TEXTS.dirListBtn, vec2(tx, y - 1 * s), s, Direction.listOpen, nil, function()
+      tx = chip(TEXTS.dirListBtn, vec2(tx, y - 1 * s), s, Direction.listOpen, nil, function()
         Direction.listOpen = not Direction.listOpen
         if Direction.listOpen and state.kmrAdmin then queueCommand('/kmr player_list') end
       end)
+      -- Ballast (kg) and restrictor (%) of the driver in the field, on the server (decision 283): the AC server admin
+      -- commands /ballast <car> <kg> and /restrictor <car> <value>, sent by the KMR (admin_send_command)
+      local vx = tx + 10 * s
+      drawText(TEXTS.dirValue, FONT_TEXT, 10 * s, vec2(vx, y), COLOR_TITLE)
+      Direction.value = (ownField('value', vec2(vx + 40 * s, y - 2 * s), vec2(vx + 90 * s, y + 13 * s),
+        Direction.value or '', false, s):gsub('%D', ''))
+      local function acsm(cmd, label)
+        local slot
+        for i = 0, (sim.carsCount or 1) - 1 do
+          local c = ac.getCar(i)
+          if c and (i == 0 or c.isConnected) and tostring(ac.getDriverName(i) or '') == Direction.target then
+            slot = tostring(c.sessionID or i)
+          end
+        end
+        if not slot or Direction.value == '' then
+          Direction.status, Direction.statusT, Direction.statusColor = TEXTS.dirNeedCarValue, state.ui.clock, PANEL_COLORS.red
+          return
+        end
+        sendKmr('admin_send_command /' .. cmd .. ' ' .. slot .. ' ' .. Direction.value,
+          string.format('%s %s %s', label, Direction.value, Direction.target))
+      end
+      vx = confirmChip(TEXTS.dirBallast, 'ballast', vec2(vx + 96 * s, y - 1 * s), s, nil, function() acsm('ballast', 'ballast kg') end)
+      confirmChip(TEXTS.dirRestrictor, 'restrictor', vec2(vx, y - 1 * s), s, nil, function() acsm('restrictor', 'restrictor') end)
       y = y + 22 * s
       -- Flags and neutralizations
       local x = confirmChip(TEXTS.flagRed, 'red', vec2(x0, y), s, PANEL_COLORS.red, function()
@@ -10647,12 +10812,17 @@ local drawDesktopUI = (function()
       -- The KMR numbers of the driver (decision 278), sent by his client: points, safety rating, crashes and
       -- infractions with the rate per 100 km
       local k = Audit.kmrOf(e.i)
+      local we = Direction.web.byName[tostring(ac.getDriverName(e.i) or '')]
       local function nv(x) return x and Audit.num(x) or '-' end
-      local kline = k and string.format(TEXTS.dirKmrLine, nv(k.points), config.kmrPoints.limit, nv(k.rating),
-        nv(k.crashes), k.crashRate and string.format('%.2f', k.crashRate) or '-', nv(k.infractions),
-        k.infractionRate and string.format('%.2f', k.infractionRate) or '-') or TEXTS.dirKmrNone
-      drawText(kline, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 12 * s), COLOR_DIM)
-      y = y + 28 * s
+      local crashes = k and k.noStats and TEXTS.dirKmrNoStats or (k and string.format(TEXTS.dirKmrCrashes, nv(k.crashes),
+        k.crashRate and string.format('%.2f', k.crashRate) or '-'))
+      local kline = k and string.format(TEXTS.dirKmrLine, nv(k.points), config.kmrPoints.limit, nv(k.rating), crashes,
+        nv(k.infractions), k.infractionRate and string.format('%.2f', k.infractionRate) or '-') or TEXTS.dirKmrNone
+      -- Under the chips of the car (finding of 30/09: the line touched them), with room before the next car
+      -- The KMR web stats of the driver (decision 284), when the client sent none
+      if not k and we then kline = 'KMR  ' .. webLine(we, ac.getCarID and ac.getCarID(e.i) or nil) end
+      drawText(kline, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 16 * s), COLOR_DIM)
+      y = y + 32 * s
     end
     drawText(string.format(TEXTS.redCount, inPits, #cars, over), FONT_MONO, 9 * s, vec2(x0, y + 2 * s), COLOR_DIM)
     if cmd and Direction.listOpen then driversList(w, h, s, p1, p2) end
@@ -10661,7 +10831,8 @@ local drawDesktopUI = (function()
   -- Lobby (the pits menu with Drive, Setup, Laptimes, Info; decisions 227, 229): on the right of the screen, in the part
   -- the menu leaves free (order of 30/09), the event information on top (race_screens: Desktop.eventBox) and under it
   -- the column with the event, the car and the messages (the chat can stay empty)
-  local LOBBY_W, EVENT_W = 360, 380
+  -- The column as wide as the event information over it (order of 30/09, decision 279)
+  local LOBBY_W, EVENT_W = 380, 380
   local function lobbyAt(p1, s)
     local me = RaceTable.byIndex[0]
     local LW = LOBBY_W * s
@@ -11304,6 +11475,10 @@ function script.update(dt)
   AppLink.update()
   -- The KMR numbers of this driver to the race direction (decision 278): asked to the KMR, then sent
   if car.lapCount > (Audit.askLap or car.lapCount) then Audit.askPending = true end
+  -- Also once after the start of the script or of a session (finding of 30/09: the lobby and the event information
+  -- empty; the welcome of the KMR comes before the script): player commands, no admin login needed
+  if Audit.askAt == nil then Audit.askAt = state.ui.clock + 15 end
+  if state.ui.clock >= Audit.askAt and Audit.askAt > 0 then Audit.askPending, Audit.askAt = true, 0 end
   Audit.askLap = car.lapCount
   if sim.isOnlineRace ~= false then Audit.kmrAsk() end
   Audit.kmrSend()
@@ -11341,6 +11516,7 @@ function script.update(dt)
     state.code80Ended = false
     Start.reset()
     state.pitPaid = nil
+    Audit.askAt = nil
     state.dsqFlagPutBack = nil
     -- CODE-80 in force: kept on a script reload; otherwise it comes from the other drivers (RecordSync.askOwn below)
     TrackList.load()
