@@ -688,7 +688,7 @@ local TEXTS = {
   setServer = 'Server', setCsp = 'CSP', setScript = 'Script', setApp = 'App', setRunning = 'running',
   msgTitle = 'MESSAGES', setMissing = 'missing', setChecking = 'checking', setAllGood = 'All good - closes in %d s', setNotGood = 'Not all good - close it yourself',
   redTitle = 'RED FLAG CONTROL', redNone = 'no red flag', redConfirm = 'CONFIRM RED FLAG', redVsc = 'RESUME VSC %d s',
-  redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET MONEY', dirStats = 'RESET STATS', dirNoSg = 'NO S&G',
+  redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET MONEY', dirStats = 'RESET STATS', dirNoSg = 'NO S&G', dirNoDsq = 'NO DSQ',
   dirKmrLine = 'KMR  points %s / %d  -  safety %s  -  %s  -  infractions %s (%s / 100 km)',
   dirKmrCrashes = 'crashes %s (%s / 100 km)', dirBalRes = 'ballast %.0f kg  restrictor %.0f', dirKmrLaps = '  -  laps %d best %s', dirKmrNoStats = 'stats: none yet (not driven enough)',
   dirKmrNone = 'KMR  no numbers from this driver yet',
@@ -7984,7 +7984,7 @@ Desktop.commands = {
     { 'RC RELAX <ID> SD', 'cancels the slowdown in progress' },
     { 'RC RELAX <ID> HOLD', 'ends the hold (or tow / repair) and frees the controls' },
     { 'RC RELAX <ID> REPAIR', 'removes the repair required (black flag with orange disc)' },
-    { 'RC RELAX <ID> DSQ', 'cancels the disqualification and frees the controls' },
+    { 'RC RELAX <ID> DSQ', 'cancels the disqualification and frees the controls (NO DSQ button)' },
     { 'RC UNLOCK <ID>', 'frees the controls and ends the hold (list and DSQ kept)' },
     { 'RC DT <ID> [laps]', 'drive-through within the laps (0 = this lap)' },
     { 'RC HOLD <ID> <seconds>', 'hold: the car locked at its pit place' },
@@ -11372,6 +11372,9 @@ local drawDesktopUI = (function()
           sendKmr('admin_say RC TELEPORT ' .. slot, 'to the pits ' .. name) end)
         ax = confirmChip('DSQ', 'dsq' .. slot, vec2(ax, y - 1 * s), s, PANEL_COLORS.red, function()
           sendKmr('admin_say RC DSQ ' .. slot, 'DSQ ' .. name) end)
+        -- The disqualification relaxed (RC RELAX DSQ: game black flag off, controls free; order of 30/09), beside it
+        ax = confirmChip(TEXTS.dirNoDsq, 'nodsq' .. slot, vec2(ax, y - 1 * s), s, nil, function()
+          sendKmr('admin_say RC RELAX ' .. slot .. ' DSQ', 'relax DSQ ' .. name) end)
         -- Fuel under the red flag for a car already going to the pits (decision 270)
         ax = confirmChip(TEXTS.dirFuel, 'fuel' .. slot, vec2(ax, y - 1 * s), s, nil, function()
           sendKmr('admin_say RC FUEL ' .. slot, 'fuel unlocked ' .. name) end)
