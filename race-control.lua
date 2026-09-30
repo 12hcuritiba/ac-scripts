@@ -154,14 +154,15 @@ local cfg = ac.configValues({
   --   at edge % (overheating), then to red at the lowest grip of its hot end (cliff).
   tyreTemp = '',
   -- flags = slowMeters:300 | yellowMeters:500 | oilSeconds:300 | rainSlippery:0.2 | greenSeconds:5 | redSpeedKmh:65 |
-  --   redGraceSeconds:10 | passSlowKmh:40 | passFarM:75 | redSpeedSG:30 | redOverSeconds:10 | yellowPassSG:10 | yellowGiveBackSeconds:10
+  --   redGraceSeconds:10 | passSlowKmh:40 | passFarM:75 | redSpeedSG:30 | redOverSeconds:10 | redNoLineSG:120 | yellowPassSG:10 | yellowGiveBackSeconds:10
   --   Flag box (every flag is the Race Control's; the game ones are hidden by the app). A car ahead that is slow
   --   (repair required) within slowMeters = white flag; stopped on track, broken down or with a blown engine within
   --   yellowMeters = yellow; the oil of a blown engine stays as the slippery flag (yellow and red) for oilSeconds;
   --   rain intensity (0..1) from rainSlippery up = slippery (0 = off); green flag for greenSeconds after a yellow or a
   --   neutralization ends. With the red flag (RC REDFLAG ALL), CODE-65: over redSpeedKmh on track = warning in the
   --   flag box (no limiter) and, over it for more than redOverSeconds (as the KMR under the VSC), a stop & go of
-  --   redSpeedSG seconds, served after the restart and added to the pending penalties;
+  --   redSpeedSG seconds, served after the restart and added to the pending penalties; a pit entry without the red flag
+  --   received at the line on track (after redGraceSeconds) = a stop & go of redNoLineSG seconds after the restart;
   --   overtaking forbidden after redGraceSeconds from the red flag (a manoeuvre already under way: warning only); a car
   --   stopped, or slower than passSlowKmh and farther than passFarM from the car ahead of it, can be passed (the KMR
   --   regime; the KMR exception of the slow leader does not apply to the red flag). Under the yellow flag of an
@@ -466,6 +467,7 @@ local TEXTS = {
   pitRepairYes = 'Repair',
   pitRepairNo = 'No',
   pitRepairNone = 'None',
+  pitFuelLocked = 'Locked - red flag', pitRepairLocked = 'After the restart',
   -- setup status (approved screen 14) and car status (approved screen 12)
   setupTitle = 'SETUP STATUS',
   setupLap = 'Lap %d',
@@ -654,7 +656,7 @@ local TEXTS = {
   dirLogin = 'KMR admin login', dirLoginSent = 'Login sent - waiting for the KMR', dirLoginOk = 'KMR admin: logged in',
   dirNoAnswer = 'No answer from the KMR in 5 s - login or command failed',
   dirFailed = 'Failed: %s', dirSent = 'Sent: %s - waiting for the KMR', dirAnswer = 'KMR: %s',
-  dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT',
+  dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT', dirFuel = 'FUEL',
   setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', app = 'App' }, setPreset = 'Preset',
   setPresets = { verbose = 'Verbose', race = 'Race', minimal = 'Minimal', custom = 'Custom' }, setAlways = 'always - on the Race Control panel',
   setAreas = { rc = 'Race Control, flags, driver swap, race director', limits = 'Track limits and invalid laps',
@@ -677,7 +679,7 @@ local TEXTS = {
   menuDesktops = 'Desktops', menuAudit = 'Audit', auditTitle = 'AUDIT', auditPoints = 'KMR points %d / %d',
   auditRating = 'KMR rating %s',
   auditCount = '%d messages', auditEmpty = 'No messages in this session',
-  edStrip = 'CONTROLS - MESSAGES (on demand)', edPin = 'Pin to all', edPinned = 'On all desktops', edMode = 'Mode: %s', edRemove = 'Remove',
+  edStrip = 'CONTROLS - MESSAGES (on demand)', edFlagStrip = 'FLAGS (on demand)', edPin = 'Pin to all', edPinned = 'On all desktops', edMode = 'Mode: %s', edRemove = 'Remove',
   edChoose = 'Click a screen to choose it and drag it to its place',
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
@@ -729,6 +731,11 @@ local TEXTS = {
   startPlace = 'P%d - stay behind %s', startLeader = 'nobody: you lead', startBehindYou = ' - %s behind you',
   startPassedBy = ' - %s passed you', startGiveBack = 'GIVE THE PLACE BACK TO %s', startPassAllowed = 'P%d - %s can be passed (KMR)',
   flagRedLocked = 'Stay at your pit place - controls locked until the restart',
+  flagRestart = 'Restart P%d - behind %s', flagRestartFirst = 'Restart P%d - first car',
+  flagRestartSwap = 'Restart P%d - driver swap: back of the field, behind %s',
+  appMissing = 'Race Control app not running - install it from the event page - the game closes in %d s',
+  redTowDeferred = 'Tow under the red flag: the tow and repair time starts at the restart',
+  redNoLineSG = 'Pit entry with the red flag not received at the line', redFuelUnlocked = 'Fuel unlocked by Race Control',
   redFlagNoPitDsq = 'Not in the pits at the restart after the red flag',
   flagChequered = 'CHEQUERED FLAG', flagChequeredMine = 'Session over for you', flagChequeredPos = 'P%d - %d laps',
   flagTimeOver = 'SESSION TIME OVER', flagRaceOver = 'RACE OVER', flagFinishLap = 'Finish your lap - the chequered flag is at the line',
@@ -843,7 +850,7 @@ local config = {
   tyreTemp = TYRE_TEMP,
   wrongWay = WRONG_WAY,
   flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
-    greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30, redOverSeconds = 10,
+    greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30, redOverSeconds = 10, redNoLineSG = 120,
     yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
   driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
   kmrPoints = structKey('kmrPoints', { limit = 100 }),
@@ -1733,6 +1740,11 @@ end
 -- ac.setPitstopSpinnerValue (M7). Request: "<name>=<value>;..." on APP_REQUEST; answer: "<name>=<ok|fail>;..." on
 -- APP_ANSWER, only for the log. An empty request is the check of the app (settings, App tab): the app answers it with
 -- nothing written, so an answer means the app is running (no change in the app)
+-- Mutual check (decision 271): nobody drives on the server without the online script and the app both running. The
+-- script sends the empty request every PING_SECONDS (the app takes it as the sign that the script runs, and closes the
+-- game without it); without an answer of the app within CHECK_SECONDS the controls are locked, the driver is told and,
+-- after CLOSE_SECONDS more, the game is closed (ac.shutdownAssettoCorsa). Once the app answered, it is not checked
+-- again (a loss later is only logged: a race is not ended by it).
 -- ============================================================
 
 local AppLink = { alive = false }
@@ -1757,6 +1769,32 @@ do
   -- Waiting for the answer (3 s); after it with no answer the app is not running (the settings say missing)
   function AppLink.waiting() return not AppLink.alive and state.ui.clock - pingT < 3 end
 
+  local PING_SECONDS, CHECK_SECONDS, CLOSE_SECONDS = 2, 30, 10
+  local lastPing, lockT, missingLogged = -1e9, -1e9, false
+  function AppLink.update()
+    local clock = state.ui.clock
+    if clock - lastPing >= PING_SECONDS then
+      lastPing = clock
+      ac.broadcastSharedEvent(APP_REQUEST, '')
+    end
+    if AppLink.alive or clock < CHECK_SECONDS then return end
+    if not missingLogged then
+      missingLogged = true
+      ac.log('race-control: the Race Control app is not running: controls locked, the game closes')
+      rcLog('App missing', string.format(TEXTS.appMissing, CLOSE_SECONDS))
+    end
+    if clock - lockT >= 2 then
+      lockT = clock
+      physics.lockUserControlsFor(3)
+    end
+    local left = math.max(math.ceil(CHECK_SECONDS + CLOSE_SECONDS - clock), 0)
+    showNotice(TEXTS.rcTitle, string.format(TEXTS.appMissing, left), nil, 1)
+    if left <= 0 and not AppLink.closed then
+      AppLink.closed = true
+      ac.shutdownAssettoCorsa()
+    end
+  end
+
   ac.onSharedEvent(APP_ANSWER, function(data, senderName, senderType, senderID)
     AppLink.alive = true
     if tostring(data or '') == '' then return end
@@ -1769,7 +1807,8 @@ end
 -- car record (this process, this computer, the other drivers), so a hold keeps counting in server time while one
 -- driver leaves and another enters, or through a crash (the new connection gets the time left).
 -- Body: <stops with service>|<last stop: lap/fuel added/tyres/repair>|<hold end, server ms (0 = none)>|<hold text>|
---       <pit stop in progress: start ms/end ms/plan (PitBox), or ->|<service in the pit pass in progress: 1 / 0>
+--       <pit stop in progress: start ms/end ms/plan (PitBox), or ->|<service in the pit pass in progress: 1 / 0>|
+--       <tow under the red flag waiting for the restart: tow s/powertrain/suspension/body, or empty>
 -- ============================================================
 
 local PitRecord = { stops = 0, last = '-' }
@@ -1782,17 +1821,26 @@ function PitRecord.save()
   local text = h and tostring(h.text):gsub('|', '/') or ''
   PitRecord.seq = (PitRecord.seq or 0) + 1
   local sv = state.pitService
-  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d', PitRecord.stops, PitRecord.last,
+  local rt = state.redTow
+  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s', PitRecord.stops, PitRecord.last,
     h and math.floor(h.untilMs) or 0, text,
     sv and string.format('%d/%d/%s', math.floor(sv.startMs), math.floor(sv.untilMs), sv.plan) or '-',
-    state.pitPassServiced and 1 or 0))
+    state.pitPassServiced and 1 or 0, rt and string.format('%d/%.4f/%.4f/%.2f', rt.tow, rt.damage.powertrain,
+    rt.damage.suspension, rt.damage.body) or ''))
 end
 
 -- A record of this process (script reload: the game hold is still running) or of another connection (the hold is
 -- applied again for the time left)
 local function pitApply(body, seq, newConnection)
-  local stops, last, untilMs, text, service, serviced = tostring(body):match('^(%d+)|([^|]*)|(%d+)|([^|]*)|([^|]*)|?(%d?)$')
+  local stops, last, untilMs, text, service, serviced, redTow =
+    tostring(body):match('^(%d+)|([^|]*)|(%d+)|([^|]*)|([^|]*)|?(%d?)|?([^|]*)$')
   if not stops then return end
+  -- A tow under the red flag waiting for the restart (decision 270)
+  local rtTow, rtP, rtS, rtB = tostring(redTow or ''):match('^(%d+)/([%d%.]+)/([%d%.]+)/([%d%.]+)$')
+  if rtTow and not state.redTow then
+    state.redTow = { tow = tonumber(rtTow), damage = { powertrain = tonumber(rtP), suspension = tonumber(rtS),
+      body = tonumber(rtB) } }
+  end
   -- A new connection in the same pit pass (driver swap, crash): a service already done in it counts (decision 161)
   if newConnection and serviced == '1' then state.pitPassServiced = true end
   local svStart, svUntil, svPlan = service:match('^(%d+)/(%d+)/(.+)$')
@@ -4166,6 +4214,8 @@ do
       if PitStops.window() == nil then sw.valid = sw.valid + 1 end
     end
     DriverTable.done = true
+    -- A new driver in the car (not a rejoin): its server time, for the restart order after a red flag (decision 264)
+    if not rejoin and swapNo and swapNo > 0 then DriverTable.swapMs = serverTimeMs() end
     sw.swapNo, sw.driver = swapNo, me
     SwapRecord.save()
     rcLog(TEXTS.driverRow, string.format(TEXTS.driverRowText, swapNo, rejoin and TEXTS.driverRowRejoin or '',
@@ -4196,6 +4246,8 @@ end
 -- session changes. The controls are locked for the total time, counted in server time and kept in the pit record (a
 -- crash or a driver swap in the middle goes on with the time left); at the end the stop is applied to the car.
 -- Controls (controls.ini, configurable): keyboard arrows, gamepad D-pad.
+-- Red flag (decision 270): no fuel (unless the race direction unlocks it for the car: RC FUEL); a car that came to the
+-- pits by the tow under the red flag repairs after the restart (the tow hold, with the repair, starts then).
 -- ============================================================
 
 local PitBox = { row = 1, fuel = 0, compound = nil, tyres = 1, repair = {}, open = false, touched = false,
@@ -4350,17 +4402,20 @@ do
   end
 
   -- The stop chosen now: what is done and how long it takes
+  function PitBox.fuelLocked() return state.redFlag ~= nil and not state.redFuelOk end
+  function PitBox.repairLocked() return state.redFlag ~= nil and state.redTow ~= nil end
+
   function PitBox.plan(car)
     local r = carRates()
     local mounted = num(car.compoundIndex)
     local compound = PitBox.compound or mounted
     local tyres = compound ~= mounted and ALL_TYRES or PitBox.tyres
-    local fuel = math.min(PitBox.fuel, math.max(num(car.maxFuel) - num(car.fuel), 0))
+    local fuel = PitBox.fuelLocked() and 0 or math.min(PitBox.fuel, math.max(num(car.maxFuel) - num(car.fuel), 0))
     local p = { fuel = fuel, compound = compound, tyres = tyres, repair = {}, times = {} }
     p.times.fuel = fuel * r.fuel
     p.times.tyres = #TYRE_CHOICES[tyres][2] * r.tyre
     for _, g in ipairs({ 'suspension', 'powertrain', 'body' }) do
-      p.repair[g] = PitBox.repair[g] and damaged(car, g) or false
+      p.repair[g] = PitBox.repair[g] and damaged(car, g) and not PitBox.repairLocked() or false
       p.times[g] = p.repair[g] and repairTime(g) or 0
     end
     p.total = orderTotal({ F = p.times.fuel, T = p.times.tyres,
@@ -5268,7 +5323,8 @@ end
 --   digits; only while that driver is in the car). The number of the livery is not an ID (it can repeat).
 --   Relaxing:  RELAX <ID> ALL | DT | SD | HOLD | REPAIR | DSQ     UNLOCK <ID>
 --   Penalties: DT <ID> [laps]   HOLD <ID> <seconds>   TELEPORT <ID>   DSQ <ID>   LOCK <ID> <seconds>
---   Red flag (decisions 174, 196, 203): REDFLAG ALL [- reason] gives it to every car; REDFLAG OFF ALL takes it off
+--   Red flag (decisions 174, 196, 203): REDFLAG ALL [- reason] gives it to every car; REDFLAG OFF ALL takes it off;
+--   FUEL <ID> unlocks the fuel of the car under the red flag (decision 270: a car already going to the pits)
 -- Every command goes to the server log ([RC] line) and to the driver's message box; the car record is kept up to date.
 -- ============================================================
 
@@ -5340,6 +5396,9 @@ do
       carDsq(1, why)
       ac.log('race-control: DSQ by Race Control command')
       showNotice(TEXTS.rcTitle, 'Disqualified - ' .. why, nil, SERVER_NOTICE_SECONDS)
+    elseif what == 'FUEL' then
+      state.redFuelOk = true
+      done(TEXTS.redFuelUnlocked, why)
     elseif what == 'LOCK' then
       local seconds = tonumber(value)
       if not seconds or seconds <= 0 then return false end
@@ -5537,7 +5596,8 @@ end
 local Flags = { incidents = {}, own = 0, ownSince = nil, sentKind = 0, sentT = -1e9, greenUntil = 0, lastGroup = nil,
   sector = nil, lastLap = nil, lastLapSession = nil, ending = nil, endSession = nil, overLeader = nil,
   prevPitlane = nil, hudOff = false, redSent = 'off', redSentT = -1e9, redLocked = false, redLockT = 0, redWasUp = false,
-  redSince = nil, redReceived = false, redOver = false, redOverSince = nil, localYellow = false, giveBack = {} }
+  redSince = nil, redReceived = false, redPrevLane = nil, redSwaps = {}, mySwapMs = nil, restartUntil = nil,
+  swapSentT = -1e9, redOver = false, redOverSince = nil, localYellow = false, giveBack = {} }
 do
   local INC = { none = 0, slow = 1, stopped = 2, broken = 3, oil = 4 }
   local INC_RESEND = 20        -- seconds: an incident in progress is told again (for who connects later)
@@ -5606,6 +5666,71 @@ do
     return string.format('#%d', ac.getDriverNumber(i) or i)
   end
 
+  -- Restart order after a red flag (decision 264): the cars in their race position, then the cars whose driver was
+  -- swapped under the red flag, at the back of the field in the order of the swaps. Each car tells the others the
+  -- server time of its swap (again every SWAP_RESEND seconds, for who connects later) until the green of the restart
+  local SWAP_RESEND = 5
+  local sendRedSwap = ac.OnlineEvent({
+    ac.StructItem.key('12hcuritiba.race-control.redorder'),
+    swapS = ac.StructItem.uint32(),
+  }, function(sender, msg)
+    if sender and sender.index ~= 0 and Flags.restartUntil then Flags.redSwaps[sender.index] = tonumber(msg.swapS) end
+  end, nil, nil, { processPostponed = true })
+
+  -- Place of this car at the restart and the car ahead of it (index), or nil
+  local function restartPlace()
+    local list = {}
+    for i = 0, (sim.carsCount or 1) - 1 do
+      local c = ac.getCar(i)
+      if c and (i == 0 or c.isConnected) then
+        list[#list + 1] = { i = i, pos = CarRead.num(c.racePosition),
+          sw = i == 0 and Flags.mySwapMs and math.floor(Flags.mySwapMs / 1000) or Flags.redSwaps[i] }
+      end
+    end
+    table.sort(list, function(a, b)
+      if (a.sw ~= nil) ~= (b.sw ~= nil) then return a.sw == nil end
+      if a.sw and a.sw ~= b.sw then return a.sw < b.sw end
+      if a.pos ~= b.pos then return a.pos < b.pos end
+      return a.i < b.i
+    end)
+    for k, e in ipairs(list) do
+      if e.i == 0 then return k, list[k - 1] and list[k - 1].i end
+    end
+    return nil
+  end
+  local function restartText()
+    if not Flags.restartUntil or sim.raceSessionType ~= ac.SessionType.Race then return nil end
+    local k, ahead = restartPlace()
+    if not k then return nil end
+    if not ahead then return string.format(TEXTS.flagRestartFirst, k) end
+    return string.format(Flags.mySwapMs and TEXTS.flagRestartSwap or TEXTS.flagRestart, k, carTag(ahead))
+  end
+
+  -- The restart order is kept from the red flag until the green of the restart: the CODE-80 of the restart (VSC of the
+  -- KMR) ends, or RESTART_WAIT seconds after the red flag without a CODE-80 (restart with the green at once)
+  local RESTART_WAIT = 10
+  local function restartUpdate()
+    local clock = state.ui.clock
+    if state.redFlag then
+      Flags.restartUntil = math.huge
+      -- A driver swap under this red flag (its start: TrackList.since)
+      if DriverTable.swapMs and DriverTable.swapMs >= TrackList.since and not Flags.mySwapMs then
+        Flags.mySwapMs = DriverTable.swapMs
+        rcLog('Red flag', 'driver swap: restart at the back of the field')
+      end
+    elseif Flags.restartUntil then
+      if Flags.restartUntil == math.huge then Flags.restartUntil = clock + RESTART_WAIT end
+      if state.code80 then Flags.restartUntil = clock + 1 end
+      if clock > Flags.restartUntil then
+        Flags.restartUntil, Flags.redSwaps, Flags.mySwapMs = nil, {}, nil
+      end
+    end
+    if Flags.mySwapMs and Flags.restartUntil and clock - Flags.swapSentT >= SWAP_RESEND then
+      Flags.swapSentT = clock
+      OnlineQueue.push(sendRedSwap, { swapS = math.floor(Flags.mySwapMs / 1000) }, nil)
+    end
+  end
+
   -- The flag of this car now: { group, kind, title, line1, line2 } or nil (group 3 is drawn by screen.lua)
   local function pick(car)
     local cfg = config.flags
@@ -5616,8 +5741,10 @@ do
     if state.redFlag then
       local kmh = CarRead.num(car.speedKmh)
       local over = not car.isInPitlane and cfg.redSpeedKmh > 0 and kmh > cfg.redSpeedKmh
-      red = { 1, 'red', TEXTS.flagRed, TEXTS.flagRedLine, over and string.format(TEXTS.flagRedSpeed, cfg.redSpeedKmh, kmh)
-        or (car.isInPit and TEXTS.flagRedLocked)
+      -- At the pit place: the lock on the first line, the restart place on the second (decision 264)
+      local atPlace = car.isInPit and restartText()
+      red = { 1, 'red', TEXTS.flagRed, atPlace and TEXTS.flagRedLocked or TEXTS.flagRedLine, over and string.format(TEXTS.flagRedSpeed, cfg.redSpeedKmh, kmh)
+        or atPlace or (car.isInPit and TEXTS.flagRedLocked)
         or ((state.ui.clock - (Flags.redSince or clock)) < cfg.redGraceSeconds and string.format(TEXTS.flagRedGrace,
           math.ceil(cfg.redGraceSeconds - (state.ui.clock - (Flags.redSince or clock)))))
         or (not car.isInPitlane and not Flags.redReceived and TEXTS.flagRedToLine)
@@ -5626,7 +5753,8 @@ do
     end
     -- 2 neutralizations from the chat (KMR) or the Race Control
     if state.code80 then
-      yellow = { 2, 'yellow', TEXTS.flagCode80[state.code80] or state.code80, TEXTS.flagCode80Line, TEXTS.flagRaceControl }
+      yellow = { 2, 'yellow', TEXTS.flagCode80[state.code80] or state.code80, TEXTS.flagCode80Line,
+        restartText() or TEXTS.flagRaceControl }
     end
     -- Incidents of the other cars ahead
     local slow, slip
@@ -5787,7 +5915,7 @@ do
   local function redRules(car, lineFrame)
     if not state.redFlag or state.dtDsqActive or state.pitDsqActive then
       redSide = {}
-      Flags.redOver, Flags.redOverSince = false, nil
+      Flags.redOver, Flags.redOverSince, Flags.redPrevLane = false, nil, nil
       return
     end
     if lineFrame and car.isInPitlane then
@@ -5820,6 +5948,16 @@ do
           cfg.redSpeedKmh, cfg.redOverSeconds, cfg.redSpeedSG))
         Rules.sgAddSeconds(cfg.redSpeedSG, string.format(TEXTS.redFlagSpeedSG, cfg.redSpeedKmh, cfg.redOverSeconds))
       end
+    end
+    -- Pit entry driving in without the red flag received at the line on track (decision 270): the lap is not complete
+    -- and the game cannot take it back, so a stop & go of flags.redNoLineSG seconds, served after the restart. Not a
+    -- tow or a teleport of the race direction (they are not driven in), not in the grace time (a car already going in)
+    local entered = car.isInPitlane and Flags.redPrevLane == false
+    Flags.redPrevLane = car.isInPitlane
+    if entered and not Flags.redReceived and not grace and not car.isInPit and not state.list.jumped
+        and state.ui.clock > (state.tow.ownJumpUntil or 0) then
+      ac.log('race-control: pit entry with the red flag not received at the line: stop & go ' .. cfg.redNoLineSG .. ' s')
+      Rules.sgAddSeconds(cfg.redNoLineSG, TEXTS.redNoLineSG)
     end
     local me = CarRead.num(car.splinePosition)
     for i = 1, (sim.carsCount or 1) - 1 do
@@ -5943,6 +6081,7 @@ do
       ac.log('race-control: DSQ, not in the pits at the restart after the red flag')
       carDsq(1, TEXTS.redFlagNoPitDsq)
     end
+    if up ~= Flags.redWasUp then state.redFuelOk = false end
     if up and not Flags.redWasUp then Flags.redSince, Flags.redReceived = state.ui.clock, false end
     Flags.redWasUp = up
     local ev = up and 'on' or 'off'
@@ -5961,6 +6100,13 @@ do
       if not ownLock then physics.lockUserControlsFor(0) end
       rcLog('Red flag', 'controls released at the pit place')
     end
+    -- A tow under the red flag (decision 270): its hold, tow and repair, starts at the restart
+    if state.redTow and not up then
+      local rt = state.redTow
+      state.redTow = nil
+      applyTowHold(rt.tow, rt.damage, TEXTS.towReason)
+      PitRecord.save()
+    end
   end
 
   function Flags.update(car, lineFrame)
@@ -5975,6 +6121,7 @@ do
     lastLapCheck(car)
     publish(car)
     redRules(car, lineFrame)
+    restartUpdate()
     yellowRules(car)
     Flags.current = pick(car)
   end
@@ -7832,7 +7979,9 @@ do
     for _, wIdx in ipairs(PitBox.TYRE_CHOICES[p.tyres][2]) do chips[wIdx] = true end
     local wh = car.wheels or {}
     local rows = {
-      { 'fuel', TEXTS.pitFuel, string.format(TEXTS.pitFuelValue, p.fuel, num(car.fuel) + p.fuel, num(car.maxFuel)), p.times.fuel },
+      { 'fuel', TEXTS.pitFuel, PitBox.fuelLocked() and TEXTS.pitFuelLocked
+        or string.format(TEXTS.pitFuelValue, p.fuel, num(car.fuel) + p.fuel, num(car.maxFuel)), p.times.fuel,
+        off = PitBox.fuelLocked() },
       { 'compound', TEXTS.pitCompound, '< ' .. tostring((ac.getTyresLongName(0, p.compound) or '') ~= ''
         and ac.getTyresLongName(0, p.compound) or names[p.compound] or '-') .. ' >', nil },
       { 'tyres', TEXTS.pitTyres, nil, p.times.tyres },
@@ -7923,7 +8072,8 @@ do
         end
       elseif r[1] == 'suspension' or r[1] == 'powertrain' or r[1] == 'body' then
         local value = p.repair[r[1]] and TEXTS.pitRepairYes
-          or (PitBox.damaged(car, r[1]) and TEXTS.pitRepairNo or TEXTS.pitRepairNone)
+          or (PitBox.damaged(car, r[1]) and (PitBox.repairLocked() and TEXTS.pitRepairLocked or TEXTS.pitRepairNo)
+          or TEXTS.pitRepairNone)
         drawText(value, FONT_MONO, fs, vec2(vx, y), sel and COLOR_SEL or COLOR_TITLE)
       else
         drawText(r[3], FONT_MONO, fs, vec2(vx, y), sel and COLOR_SEL or ((r[1] and not r.off) and COLOR_TITLE or COLOR_OFF))
@@ -9293,8 +9443,9 @@ local drawDesktopUI = (function()
   end
 
   -- Guard of the Race Control (order of 30/09): the panel and, over it (under its boxes when there is no room), the
-  -- strip shown on demand with the car controls and the MESSAGES window (Drag.panelExtra px). Screen px:
-  -- { x1, x2, panelTop, panelBottom, stripTop, stripBottom }
+  -- strip shown on demand with the car controls and the MESSAGES window (Drag.panelExtra px); under the panel, the
+  -- flag box shown on demand (the red and yellow flags come first under the panel: screen.lua). Screen px:
+  -- { x1, x2, panel top / bottom, strip sTop / sBottom, flag box fTop / fBottom, whole guard gTop / gBottom }
   local function panelGuard(w, h)
     local k = h / 1080
     local pr = Drag.lastRects.panel
@@ -9306,8 +9457,12 @@ local drawDesktopUI = (function()
     local sTop = top - extra
     local sBottom = top
     if sTop < 0 then sTop, sBottom = bottom, bottom + extra end
-    return { x1 = x1, x2 = x2, top = top, bottom = bottom, sTop = sTop, sBottom = sBottom,
-      gTop = math.min(top, sTop), gBottom = math.max(bottom, sBottom) }
+    -- The flag box: the size and gap of the boxes under the panel (screen.lua: 56 and 6 at the screen scale)
+    local s = math.min(math.max((h / 1080) ^ 0.3, 1), 1.3)
+    local fTop = math.max(bottom, sBottom) + math.floor(6 * s)
+    local fBottom = fTop + math.floor(56 * s)
+    return { x1 = x1, x2 = x2, top = top, bottom = bottom, sTop = sTop, sBottom = sBottom, fTop = fTop,
+      fBottom = fBottom, gTop = math.min(top, sTop), gBottom = math.max(bottom, sBottom, fBottom) }
   end
   -- A rectangle with a dashed border (the part shown on demand)
   local function dashedRect(a, b, col, s)
@@ -9404,6 +9559,10 @@ local drawDesktopUI = (function()
     local sa, sb = toCanvas(guard.x1, guard.sTop), toCanvas(guard.x2, guard.sBottom)
     dashedRect(sa, sb, rgbm(1, 1, 1, 0.45), s)
     drawText(TEXTS.edStrip, FONT_TEXT, 6.5 * s, vec2(sa.x + 3 * s, sa.y + 0.5 * s), COLOR_DIM)
+    -- The flag box under the panel, shown on demand: dashed too
+    local fa, fb = toCanvas(guard.x1, guard.fTop), toCanvas(guard.x2, guard.fBottom)
+    dashedRect(fa, fb, rgbm(1, 1, 1, 0.45), s)
+    drawText(TEXTS.edFlagStrip, FONT_TEXT, 6.5 * s, vec2(fa.x + 3 * s, fa.y + 0.5 * s), COLOR_DIM)
     local lists = { { Desktop.place.all, true } }
     if Desktop.place[desk] then lists[#lists + 1] = { Desktop.place[desk], false } end
     for _, L in ipairs(lists) do
@@ -9600,7 +9759,27 @@ local drawDesktopUI = (function()
     { 'nextDesktop', TEXTS.navNextDesktop }, { 'prevDesktop', TEXTS.navPrevDesktop },
     { 'up', TEXTS.navUp }, { 'down', TEXTS.navDown }, { 'left', TEXTS.navLeft }, { 'right', TEXTS.navRight } }
   local function buttonsScreen(w, h, s)
-    local W3, H3 = 560, 44 + #NAV_ROWS * 22 + 22
+    -- Columns measured from their texts (finding of 30/09: a long button name ran over SET and CLEAR): the recorded
+    -- button (and its conflict), then SET / CLEAR, then the CSP binding; the window as wide as they need
+    local rows, ownW, cspW = {}, textWidth(TEXTS.navOwn, FONT_TITLE, 9 * s), textWidth(TEXTS.navCsp, FONT_TITLE, 9 * s)
+    for _, r in ipairs(NAV_ROWS) do
+      local name = r[1]
+      local cap = Desktop.capture and Desktop.capture.name == name
+      local own = cap and string.format(TEXTS.navPress, math.max(math.ceil(Desktop.capture.untilT - state.ui.clock), 0))
+        or Desktop.bindText(name) or '-'
+      -- A button in use by the AC or by another command: not recorded (while recording), or marked (kept from before)
+      local conflict = cap and Desktop.capture.conflict or (not cap and Desktop.bindConflict(name))
+      local b = Desktop.NAV[name] or PitBox.PAD[name]
+      local csp = b and b.boundTo and b:boundTo() or '-'
+      rows[#rows + 1] = { name = name, label = r[2], cap = cap, own = own, conflict = conflict, csp = csp }
+      ownW = math.max(ownW, textWidth(own, FONT_MONO, 9.5 * s), conflict and textWidth(conflict, FONT_MONO, 8.5 * s) or 0)
+      cspW = math.max(cspW, textWidth(csp, FONT_MONO, 9.5 * s))
+    end
+    local chipsW = textWidth(TEXTS.navSet, FONT_MONO, 9 * s) + textWidth(TEXTS.navClear, FONT_MONO, 9 * s) + 28 * s
+    local ownX = 150 * s
+    local setX = ownX + ownW + 14 * s
+    local cspX = setX + chipsW + 14 * s
+    local W3, H3 = math.max(560, (cspX + cspW + 16 * s) / s), 44 + #NAV_ROWS * 22 + 22
     local p1, p2 = windowAt('buttons', W3, H3, w, h, s)
     Drag.group = nil
     Drag.modal = { p1, p2 }
@@ -9611,27 +9790,20 @@ local drawDesktopUI = (function()
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.buttons = false; Desktop.capture = nil end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 30 * s
-    drawText(TEXTS.navOwn, FONT_TITLE, 9 * s, vec2(p1.x + 150 * s, y), COLOR_DIM)
-    drawText(TEXTS.navCsp, FONT_TITLE, 9 * s, vec2(p1.x + 420 * s, y), COLOR_DIM)
+    drawText(TEXTS.navOwn, FONT_TITLE, 9 * s, vec2(p1.x + ownX, y), COLOR_DIM)
+    drawText(TEXTS.navCsp, FONT_TITLE, 9 * s, vec2(p1.x + cspX, y), COLOR_DIM)
     y = y + 16 * s
-    for _, r in ipairs(NAV_ROWS) do
-      local name = r[1]
-      drawText(r[2], FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y + 1 * s), COLOR_TITLE)
-      local cap = Desktop.capture and Desktop.capture.name == name
-      local own = cap and string.format(TEXTS.navPress, math.max(math.ceil(Desktop.capture.untilT - state.ui.clock), 0))
-        or Desktop.bindText(name) or '-'
-      -- A button in use by the AC or by another command: not recorded (while recording), or marked (kept from before)
-      local conflict = cap and Desktop.capture.conflict or (not cap and Desktop.bindConflict(name))
-      drawText(own, FONT_MONO, 9.5 * s, vec2(p1.x + 150 * s, y + 1.5 * s), conflict and PANEL_COLORS.red
+    for _, r in ipairs(rows) do
+      local name, cap, own, conflict = r.name, r.cap, r.own, r.conflict
+      drawText(r.label, FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y + 1 * s), COLOR_TITLE)
+      drawText(own, FONT_MONO, 9.5 * s, vec2(p1.x + ownX, y + 1.5 * s), conflict and PANEL_COLORS.red
         or (cap and PANEL_COLORS.yellow or (own == '-' and COLOR_OFF or COLOR_TITLE)))
       if conflict then
-        drawText(conflict, FONT_MONO, 8.5 * s, vec2(p1.x + 150 * s, y + 12 * s), PANEL_COLORS.red)
+        drawText(conflict, FONT_MONO, 8.5 * s, vec2(p1.x + ownX, y + 12 * s), PANEL_COLORS.red)
       end
-      local x = chip(TEXTS.navSet, vec2(p1.x + 330 * s, y), s, cap, nil, function() Desktop.startCapture(name) end)
+      local x = chip(TEXTS.navSet, vec2(p1.x + setX, y), s, cap, nil, function() Desktop.startCapture(name) end)
       chip(TEXTS.navClear, vec2(x, y), s, false, PANEL_COLORS.red, function() Desktop.clearBind(name) end)
-      local b = Desktop.NAV[name] or PitBox.PAD[name]
-      local csp = b and b.boundTo and b:boundTo() or '-'
-      drawText(csp, FONT_MONO, 9.5 * s, vec2(p1.x + 420 * s, y + 1.5 * s), csp == '-' and COLOR_OFF or COLOR_TITLE)
+      drawText(r.csp, FONT_MONO, 9.5 * s, vec2(p1.x + cspX, y + 1.5 * s), r.csp == '-' and COLOR_OFF or COLOR_TITLE)
       y = y + 22 * s
     end
   end
@@ -9956,7 +10128,7 @@ local drawDesktopUI = (function()
       if c and c.isConnected then cars[#cars + 1] = { i = i, c = c } end
     end
     local cmd = config.canCommand
-    local W5, H5 = cmd and 680 or 560, 30 + (cmd and (22 + 22 + 22) or 0) + 18 + 16 + #cars * 16 + 22
+    local W5, H5 = cmd and 740 or 560, 30 + (cmd and (22 + 22 + 22) or 0) + 18 + 16 + #cars * 16 + 22
     local p1, p2 = windowAt('redflag', W5, H5, w, h, s)
     Drag.group = nil
     Drag.modal = { p1, p2 }
@@ -9977,12 +10149,29 @@ local drawDesktopUI = (function()
         drawText(TEXTS.redKmrOn, FONT_MONO, 9.5 * s, vec2(x0, y + 1 * s), PANEL_COLORS.green)
       else
         drawText(TEXTS.dirLogin, FONT_TEXT, 10 * s, vec2(x0, y), COLOR_TITLE)
-        if ui.inputText then
-          ui.setCursor(vec2(x0 + 110 * s, y - 2 * s))
-          ui.setNextItemWidth(160 * s)
-          local text, _, enter = ui.inputText('##kmrpwd', Direction.pwd, ui.InputTextFlags.Password)
-          Direction.pwd = text or ''
-          if ui.itemActive and ui.itemActive() and ui.captureKeyboard then ui.captureKeyboard(true, true) end
+        -- Own field (finding of 30/09: the ImGui text field of the full screen drawing took no keys): a click on it
+        -- takes the keyboard from the game (ui.captureKeyboard); the characters typed, Backspace, Enter sends, Esc
+        -- leaves; shown as dots
+        local fa, fb = vec2(x0 + 110 * s, y - 2 * s), vec2(x0 + 270 * s, y + 13 * s)
+        ui.drawRectFilled(fa, fb, rgbm(0, 0, 0, 0.5), 2 * s)
+        ui.drawRect(fa, fb, Direction.pwdOn and PANEL_COLORS.yellow or rgbm(1, 1, 1, 0.35), 2 * s)
+        local caret = Direction.pwdOn and math.floor(state.ui.clock * 2) % 2 == 0 and '|' or ''
+        drawText(string.rep('*', #Direction.pwd) .. caret, FONT_MONO, 10 * s, vec2(fa.x + 4 * s, fa.y + 1 * s), COLOR_TITLE)
+        Drag.clickable(fa, fb, function() Direction.pwdOn = true end)
+        local enter = false
+        if Direction.pwdOn and ui.captureKeyboard then
+          local kb = ui.captureKeyboard(true, true, true)
+          local typed = kb and kb:queue() or ''
+          for ch in typed:gmatch('[%g ]') do Direction.pwd = Direction.pwd .. ch end
+          for k = 0, (kb and kb.pressedCount or 0) - 1 do
+            local key = kb.pressed[k]
+            if key == ui.KeyIndex.Back then Direction.pwd = Direction.pwd:sub(1, -2)
+            elseif key == ui.KeyIndex.Return then enter = true
+            elseif key == ui.KeyIndex.Escape then Direction.pwdOn = false end
+          end
+        end
+        do
+          if enter then Direction.pwdOn = false end
           if enter and Direction.pwd ~= '' then
             queueCommand('/kmr login ' .. Direction.pwd)
             Direction.pwd = ''
@@ -10046,8 +10235,11 @@ local drawDesktopUI = (function()
         -- The car to the pits or disqualified by the race direction (RC commands of the platform, decision 262)
         ax = confirmChip(TEXTS.dirToPit, 'pit' .. slot, vec2(ax, y - 1 * s), s, nil, function()
           sendKmr('admin_say RC TELEPORT ' .. slot, 'to the pits ' .. name) end)
-        confirmChip('DSQ', 'dsq' .. slot, vec2(ax, y - 1 * s), s, PANEL_COLORS.red, function()
+        ax = confirmChip('DSQ', 'dsq' .. slot, vec2(ax, y - 1 * s), s, PANEL_COLORS.red, function()
           sendKmr('admin_say RC DSQ ' .. slot, 'DSQ ' .. name) end)
+        -- Fuel under the red flag for a car already going to the pits (decision 270)
+        confirmChip(TEXTS.dirFuel, 'fuel' .. slot, vec2(ax, y - 1 * s), s, nil, function()
+          sendKmr('admin_say RC FUEL ' .. slot, 'fuel unlocked ' .. name) end)
       end
       y = y + 16 * s
     end
@@ -10109,8 +10301,19 @@ local drawDesktopUI = (function()
   end
   -- The same in a window of the CSP (finding 18 of 29-30/09: the drawing of the script does not show over the pits
   -- menu): opened when the pits menu opens, closed when it closes. Read every frame by the desktops (Desktop.update)
-  local lobbyWin, lobbyOpen = nil, false
+  -- Also drawn by the exclusive HUD callback of the CSP in the 'menu' mode (finding of 30/09: the window did not show
+  -- over the pits menu): the event and the column on the right of the menu, under the AC menu itself
+  local lobbyWin, lobbyOpen, lobbyHud = nil, false, false
   Desktop.lobbyUpdate = function()
+    if not lobbyHud and ui.onExclusiveHUD then
+      lobbyHud = true
+      ui.onExclusiveHUD(function(mode)
+        if mode ~= 'menu' then return end
+        local size = ac.getUI().windowSize
+        lobby(size.x, size.y, math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3))
+      end)
+      ac.log('race-control: lobby drawn in the pits menu (exclusive HUD, menu mode)')
+    end
     if not ui.addSettings then return end
     if not lobbyWin then
       local ok, win = pcall(ui.addSettings, { icon = ui.Icons.Settings, name = TEXTS.lobbyWindow, id = 'rc.lobby',
@@ -10674,6 +10877,8 @@ function script.update(dt)
   local inPit = car.isInPitlane
   local lapCount = car.lapCount
   state.ui.clock = state.ui.clock + dt
+  -- The app must run with the script (decision 271)
+  AppLink.update()
   -- A reset of the car seen since the last frame (ac.onCarJumped): read by the session start below, then cleared
   local jumpedNow = state.jumpSinceUpdate
   state.jumpSinceUpdate = false
@@ -10900,7 +11105,16 @@ function script.update(dt)
     end
     local repairing = CarRead.flagOn(car.isRepairing)
     if towOn and not dsqActive and not state.hold then
-      if tw.jumpPending and inPit then
+      if tw.jumpPending and inPit and state.redFlag then
+        -- Red flag (decision 270): the car waits at its pit place; the tow and repair time starts at the restart
+        local d = tw.damage or { powertrain = 0, suspension = 0, body = 0 }
+        state.redTow = { tow = towRule.towSeconds, damage = { powertrain = d.powertrain, suspension = d.suspension,
+          body = d.body } }
+        PitRecord.save()
+        ac.log('race-control: tow under the red flag: tow and repair time at the restart')
+        rcLog('Tow', TEXTS.redTowDeferred)
+        showNotice(TEXTS.rcTitle, TEXTS.redTowDeferred)
+      elseif tw.jumpPending and inPit then
         applyTowHold(towRule.towSeconds, tw.damage, TEXTS.towReason)
       elseif repairing and not tw.prevRepairing and inPit and not tw.repairDone then
         applyTowHold(0, tw.damage, TEXTS.repairReason)
