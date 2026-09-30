@@ -6278,9 +6278,10 @@ do
 
   function Flags.update(car, lineFrame)
     redPit(car)
-    -- The game's session time and start lights are not shown (ours only), once
-    if not Flags.hudOff then
-      Flags.hudOff = true
+    -- The game's session time and start lights are not shown (ours only); again at each session and every
+    -- HUD_AGAIN seconds (finding of 30/09: the clock of the game came back at the top of the screen)
+    if Flags.hudOff ~= sim.currentSessionIndex or state.ui.clock >= (Flags.hudT or 0) then
+      Flags.hudOff, Flags.hudT = sim.currentSessionIndex, state.ui.clock + 5
       ac.disableExtraHUDElements('sessionTime', true)
       ac.disableExtraHUDElements('startingLights', true)
     end
@@ -10115,9 +10116,11 @@ local drawDesktopUI = (function()
   local blockOff, blockKey = nil, ''
   -- The game's message of the pit place that sends to the ESC menu (the AC pit menu is off, decision 30; order of
   -- 30/09: "NADA DISSO DEVERIA ESTAR APARECENDO"): blocked all the time (decision 277)
-  local escBlock = nil
+  local escBlock, serverBlock = nil, nil
   local function blockUpdate()
     if not escBlock and ac.blockSystemMessages then escBlock = ac.blockSystemMessages('ESC|Esc') end
+    -- The system message "SERVER:" with nothing else, after the ESC (decision 291; of the game or the ACSM, not the chat)
+    if not serverBlock and ac.blockSystemMessages then serverBlock = ac.blockSystemMessages('^ *SERVER:? *$') end
     local parts = {}
     if Settings.ctl.on then
       for _, g in ipairs({ 'elec', 'engine', 'pit' }) do if Settings.ctl[g] then parts[#parts + 1] = BLOCK[g] end end
