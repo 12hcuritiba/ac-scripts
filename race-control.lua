@@ -54,6 +54,7 @@ local cfg = ac.configValues({
   kmrStatsUrl = '',
   baseUrl = '',
   gameHud = 'hide',
+  lobbyPos = '',
   practiceDriverSwap = 0,
   qualifyDriverSwap = 0,
   raceDriverSwap = 0,
@@ -591,6 +592,7 @@ local config = {
     randomMin = 0.2, randomMax = 3, jumpMeters = 0.5, jumpLaps = 2, screenLightsFrom = 22 }),
   driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
   kmrPoints = structKey('kmrPoints', { limit = 100 }),
+  lobbyPos = structKey('lobbyPos', { x = -1, y = -1 }),
   eventName = tostring(cfg.eventName or ''),
   kmrStatsUrl = (tostring(cfg.kmrStatsUrl or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')),
   baseUrl = (tostring(cfg.baseUrl or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')),
@@ -9750,12 +9752,41 @@ local drawDesktopUI = (function()
     end
     return chatRight
   end
-  local LOBBY_GAP = 12
+  local LOBBY_POS_KEY = 'rc.lobbyPos'
+  local lobbyFrac, lobbyGrab = nil, nil
+  do
+    local fx, fy = tostring(ac.storage[LOBBY_POS_KEY] or ''):match('^([%d%.]+),([%d%.]+)$')
+    if fx then lobbyFrac = vec2(tonumber(fx), tonumber(fy)) end
+  end
   local function lobby(w, h, s)
-    local edge = chatEdge()
-    local right = math.floor(w - 24 * s)
-    if edge and edge + (LOBBY_GAP + LOBBY_W) * s <= w then right = math.floor(edge + (LOBBY_GAP + LOBBY_W) * s) end
-    lobbyStack(right, math.floor(h * 0.12), s)
+    chatEdge()
+    local frac = lobbyFrac or (config.lobbyPos.x >= 0 and config.lobbyPos.y >= 0 and vec2(config.lobbyPos.x, config.lobbyPos.y))
+    local right, top = math.floor(w - 24 * s), math.floor(h * 0.12)
+    if frac then right, top = math.floor(frac.x * w + LOBBY_W * s), math.floor(frac.y * h) end
+    local bottom = Desktop.eventBox and Desktop.eventBox(vec2(right, top), s, true) or top
+    lobbyAt(vec2(math.floor(right - LOBBY_W * s), math.floor((bottom or top) + 8 * s)), s)
+    local m = ui.mousePos()
+    local a, b = vec2(right - LOBBY_W * s, top), vec2(right, bottom or top)
+    if lobbyGrab then
+      ui.setMouseCursor(ui.MouseCursor.ResizeAll)
+      local nx = math.min(math.max(m.x - lobbyGrab.x, 0), w - LOBBY_W * s)
+      local ny = math.min(math.max(m.y - lobbyGrab.y, 0), h - 40 * s)
+      lobbyFrac = vec2(nx / w, ny / h)
+      if not ui.mouseDown() then
+        lobbyGrab = nil
+        ac.storage[LOBBY_POS_KEY] = string.format('%.4f,%.4f', lobbyFrac.x, lobbyFrac.y)
+        ac.log(string.format('race-control: lobby moved, server key: lobbyPos = x:%.4f|y:%.4f', lobbyFrac.x, lobbyFrac.y))
+      end
+    elseif m.x >= a.x and m.x <= b.x and m.y >= a.y and m.y <= b.y then
+      ui.setMouseCursor(ui.MouseCursor.ResizeAll)
+      if ui.mouseDoubleClicked() then
+        lobbyFrac = nil
+        ac.storage[LOBBY_POS_KEY] = ''
+        ac.log('race-control: lobby back to the default place')
+      elseif ui.mouseClicked() then
+        lobbyGrab = vec2(m.x - a.x, m.y - a.y)
+      end
+    end
   end
   local lobbyWin, lobbyOpen, lobbyHud = nil, false, false
   Desktop.lobbyUpdate = function()
