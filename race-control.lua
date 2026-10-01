@@ -10499,7 +10499,8 @@ local drawRaceScreens = (function()
     local n = #eventLines()
     local p2 = vec2(pr.x, pr.y + (26 + n * ROW + 10) * s)
     local p1 = vec2(pr.x - 380 * s, pr.y)
-    drawPanel(p1, p2, BORDER_BASE, s)
+    -- More attention (organizer 01/10): the frame of the flag box, in yellow
+    drawPanel(p1, p2, BORDER_YELLOW, s)
     drawText(eventTitle(), FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     drawTextRight(TEXTS.scrEventInfo, FONT_MONO, 11 * s, p2.x - 14 * s, p1.y + 5 * s, COLOR_TITLE)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
@@ -12217,7 +12218,8 @@ local drawDesktopUI = (function()
     end
     local p2 = vec2(p1.x + LW, p1.y + (30 + 5 * 13 + 22 + math.max(#msgs, 1) * 24 + 8) * s)
     Drag.group = nil
-    drawPanel(p1, p2, BORDER_BASE, s)
+    -- More attention (organizer 01/10): the frame of the flag box, in blue
+    drawPanel(p1, p2, BORDER_BLUE, s)
     drawText(config.eventName ~= '' and config.eventName:upper() or TEXTS.lobbyTitle, FONT_TITLE, 12 * s,
       vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     drawTextRight(TEXTS.sessionName[sim.raceSessionType] or '', FONT_MONO, 10 * s, p2.x - 14 * s, p1.y + 5 * s, COLOR_TITLE)
@@ -12256,8 +12258,39 @@ local drawDesktopUI = (function()
     local bottom = Desktop.eventBox and Desktop.eventBox(vec2(right, top), s, true) or top
     lobbyAt(vec2(math.floor(right - LOBBY_W * s), math.floor((bottom or top) + 8 * s)), s)
   end
+  -- Right edge of the chat window of the pits menu (organizer 01/10: "ALINHAR IMEDIATAMENTE À DIREITA DO FIM DO CHAT";
+  -- on the right edge of the screen the lobby was lost on a wide screen and in VR). The visible app window with "chat"
+  -- in its name or title (ac.getAppWindows, ac.accessAppWindow: position and size; the online script reads and moves app
+  -- windows, measured in M8b), read once a second; nil = no chat seen
+  local chatRight, chatT, chatLogged = nil, -1e9, nil
+  local function chatEdge()
+    if state.ui.clock - chatT < 1 then return chatRight end
+    chatT, chatRight = state.ui.clock, nil
+    if not ac.getAppWindows or not ac.accessAppWindow then return nil end
+    for _, w in ipairs(ac.getAppWindows() or {}) do
+      local tag = (tostring(w.name) .. ' ' .. tostring(w.title)):lower()
+      if tag:find('chat', 1, true) then
+        local ok, acc = pcall(ac.accessAppWindow, w.name)
+        if ok and acc and acc:valid() and acc:visible() then
+          local pos, size = acc:position(), acc:size()
+          local right = pos.x + size.x
+          if not chatRight or right > chatRight then chatRight = right end
+          if chatLogged ~= w.name then
+            chatLogged = w.name
+            ac.log(string.format('race-control: lobby next to the chat window %s (right edge %.0f px)', tostring(w.name), right))
+          end
+        end
+      end
+    end
+    return chatRight
+  end
+  local LOBBY_GAP = 12
   local function lobby(w, h, s)
-    lobbyStack(math.floor(w - 24 * s), math.floor(h * 0.12), s)
+    local edge = chatEdge()
+    local right = math.floor(w - 24 * s)
+    -- Just right of the chat, when it fits on the screen; otherwise on the right edge as before
+    if edge and edge + (LOBBY_GAP + LOBBY_W) * s <= w then right = math.floor(edge + (LOBBY_GAP + LOBBY_W) * s) end
+    lobbyStack(right, math.floor(h * 0.12), s)
   end
   -- The same in a window of the CSP (finding 18 of 29-30/09: the drawing of the script does not show over the pits
   -- menu): opened when the pits menu opens, closed when it closes. Read every frame by the desktops (Desktop.update)
