@@ -9633,7 +9633,7 @@ local drawDesktopUI = (function()
       if it.area == nil or it.area == 'rc' or Audit.allow(it.area) then msgs[#msgs + 1] = it end
       if #msgs >= 8 then break end
     end
-    local p2 = vec2(p1.x + LW, p1.y + (30 + 5 * 13 + 22 + math.max(#msgs, 1) * 24 + 8) * s)
+    local p2 = vec2(p1.x + LW, p1.y + (30 + 7 * 13 + 22 + math.max(#msgs, 1) * 24 + 8) * s)
     Drag.group = nil
     drawPanel(p1, p2, BORDER_BLUE, s)
     drawText(config.eventName ~= '' and config.eventName:upper() or TEXTS.lobbyTitle, FONT_TITLE, 12 * s,
@@ -9648,6 +9648,10 @@ local drawDesktopUI = (function()
       { TEXTS.scrPending, pen and pen.value or '-' },
       { TEXTS.lobbyKmr, string.format('%s / %d - %s', Audit.points and tostring(Audit.points) or '-', config.kmrPoints.limit,
         Audit.rating and Audit.num(Audit.rating) or '-') },
+      { TEXTS.scrKmrCrashes, Audit.noStats and TEXTS.scrKmrNone or (Audit.crashes and (Audit.crashRate
+        and string.format('%d - %.2f / 100 km', Audit.crashes, Audit.crashRate) or tostring(Audit.crashes)) or '-') },
+      { TEXTS.scrKmrInfr, Audit.noStats and TEXTS.scrKmrNone or (Audit.infractions and (Audit.infractionRate
+        and string.format('%d - %.2f / 100 km', Audit.infractions, Audit.infractionRate) or tostring(Audit.infractions)) or '-') },
       { TEXTS.lobbyWeather, string.format('%.0f / %.0f C', CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature)) },
     }
     for _, r in ipairs(rows) do
