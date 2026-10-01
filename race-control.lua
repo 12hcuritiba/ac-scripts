@@ -593,6 +593,10 @@ local config = {
   eventName = tostring(cfg.eventName or ''),
   kmrStatsUrl = (tostring(cfg.kmrStatsUrl or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')),
   baseUrl = (tostring(cfg.baseUrl or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')),
+  gameHud = (function()
+    local v = tostring(cfg.gameHud or ''):lower():gsub('%s', '')
+    return (v == 'show' or v == 'hideall') and v or 'hide'
+  end)(),
   kmrRating = (function()
     local r = structKey('kmrRating', { dsqAt = 0 })
     r.on = tostring(cfg.kmrRating or ''):match('%S') ~= nil
@@ -5831,12 +5835,12 @@ local function updateCutChecks()
         state.cutChecks[zi] = nil
         cancelSlowdown(zone, cc.rule)
         ac.log(string.format('race-control: cut %s discarded: spin, slowdown cancelled', zone.category))
-      elseif car.isInPitlane or back or not inZone then
+      elseif car.isInPitlane or back then
         state.cutChecks[zi] = nil
       end
     elseif car.isInPitlane then
       state.cutChecks[zi] = nil
-    elseif back or not inZone then
+    elseif back then
       state.cutChecks[zi] = nil
       if cc.spun then
         ac.log(string.format('race-control: cut %s discarded: spin', zone.category))
@@ -9717,11 +9721,17 @@ local drawDesktopUI = (function()
     if not lobbyHud and ui.onExclusiveHUD then
       lobbyHud = true
       ui.onExclusiveHUD(function(mode)
-        if mode ~= 'menu' then return end
-        local size = ac.getUI().windowSize
-        lobby(size.x, size.y, math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3))
+        if mode == 'menu' then
+          local size = ac.getUI().windowSize
+          lobby(size.x, size.y, math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3))
+          return
+        end
+        if mode ~= 'game' or config.gameHud == 'show' then return end
+        script.drawUI(true)
+        Desktop.hudDrawn = true
+        return config.gameHud == 'hideall' and true or 'apps'
       end)
-      ac.log('race-control: lobby drawn in the pits menu (exclusive HUD, menu mode)')
+      ac.log('race-control: lobby drawn in the pits menu (exclusive HUD, menu mode); game UI ' .. config.gameHud)
     end
     if not ui.addSettings then return end
     if not lobbyWin then
@@ -9781,7 +9791,15 @@ local drawDesktopUI = (function()
     if state.ui.clock < Desktop.indicatorUntil then indicator(w, h, s) end
   end
 end)()
-function script.drawUI()
+function script.drawUI(exclusive)
+  if not exclusive and Desktop.hudDrawn then
+    Desktop.hudDrawn = false
+    if not Desktop.hudBoth then
+      Desktop.hudBoth = true
+      ac.log('race-control: game UI cut, the script drawing called too (drawn once)')
+    end
+    return
+  end
   local size = ac.getUI().windowSize
   local w = size.x
   local h = size.y
@@ -9944,80 +9962,110 @@ function script.drawUI()
   end
   local cc
   for _, check in pairs(state.cutChecks) do if check.ref then cc = check end end
-  if cc and stackOn then
-    local p1 = vec2(x, ySd)
-    local p2 = vec2(x + boxW, ySd + sdH)
-    drawPanel(p1, p2, BORDER_YELLOW, s)
-    drawText(TEXTS.liftTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
-    drawSeparator(p1, p2, p1.y + 24 * s, s)
-    local bx1, bx2 = p1.x + 16 * s, p2.x - 16 * s
-    local by1, by2 = p1.y + 30 * s, p1.y + 38 * s
-    local lim = bx1 + (bx2 - bx1) * LIFT_LIMIT_POS
-    ui.drawRectFilled(vec2(px(bx1), px(by1)), vec2(px(lim), px(by2)), COLOR_LIFT_SLOW, px(4 * s))
-    ui.drawRectFilled(vec2(px(lim), px(by1)), vec2(px(bx2), px(by2)), COLOR_LIFT_FAST, px(4 * s))
-    ui.drawSimpleLine(vec2(px(lim), px(by1 - 2 * s)), vec2(px(lim), px(by2 + 2 * s)), rgbm(1, 1, 1, 0.8), 1)
-    local f = math.min(math.max(LIFT_LIMIT_POS - (cc.shown or cc.margin) * LIFT_SCALE, 0), 1)
-    local mx = bx1 + (bx2 - bx1) * f
-    local pulse = 0.5 + 0.5 * math.sin(2 * math.pi * LIFT_CARET_HZ * state.ui.clock)
-    ui.drawRectFilled(vec2(px(mx - 4 * s), px(by1 - 5 * s)), vec2(px(mx + 4 * s), px(by2 + 5 * s)),
-      rgbm(1, 1, 1, 0.15 + 0.35 * pulse), px(3 * s))
-    ui.drawRectFilled(vec2(px(mx - 1.5 * s), px(by1 - 3 * s)), vec2(px(mx + 1.5 * s), px(by2 + 3 * s)),
-      rgbm(1, 1, 1, 0.75 + 0.25 * pulse), px(1 * s))
-    local ly = p1.y + 41 * s
-    drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, vec2(bx1, ly), COLOR_DIM)
-    local mid = string.format(TEXTS.liftLimit, cc.zone.gainTolerance)
-    ui.pushDWriteFont(FONT_MONO)
-    local mw = ui.measureDWriteText(mid, 10 * s).x
-    ui.dwriteDrawText(mid, 10 * s, vec2(px(lim - mw / 2), px(ly)), COLOR_DIM)
-    ui.popDWriteFont()
-    drawTextRight(TEXTS.liftFaster, FONT_MONO, 10 * s, bx2, ly, COLOR_DIM)
-  end
   local sdHidden = ac.getCar(0).isInPit
   local anySd = false
   if not sdHidden then
     for _, sd in pairs(state.slowdowns) do if sd.active then anySd = true end end
   end
-  if intro and intro.box and not cc and not anySd then
-    local k = intro.boxK or 0
-    local pulse = 0.5 + 0.5 * math.cos(2 * math.pi * 3 * state.ui.clock)
-    if intro.box == 'swap' then
-      local p1 = vec2(x, ySd + sdH + gap)
-      local p2 = vec2(x + boxW, ySd + sdH + gap + msgH)
-      drawPanel(p1, p2, BORDER_GREEN, s)
-      drawText(TEXTS.swapTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
-      drawSeparator(p1, p2, p1.y + 24 * s, s)
-      local total = config.swapMinSeconds
-      local left = total * (1 - k)
-      drawText(string.format(TEXTS.swapWait, mmss(left)), FONT_TEXT, 12 * s, vec2(p1.x + 16 * s, p1.y + 29 * s), COLOR_SWAP)
-      drawText(string.format(TEXTS.swapTimes, mmss(total - left), mmss(total)), FONT_MONO, 12 * s,
-        vec2(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE)
-    else
+  local function drawCutBoxes(ySd)
+    if cc and stackOn then
       local p1 = vec2(x, ySd)
       local p2 = vec2(x + boxW, ySd + sdH)
       drawPanel(p1, p2, BORDER_YELLOW, s)
-      drawText(intro.box == 'lift' and TEXTS.liftTitle or TEXTS.sdTitle, FONT_TITLE, 14 * s,
-        vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+      drawText(TEXTS.liftTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
       drawSeparator(p1, p2, p1.y + 24 * s, s)
-      if intro.box == 'lift' then
-        local bx1, bx2 = p1.x + 16 * s, p2.x - 16 * s
-        local by1, by2 = p1.y + 30 * s, p1.y + 38 * s
-        local lim = bx1 + (bx2 - bx1) * LIFT_LIMIT_POS
-        ui.drawRectFilled(vec2(px(bx1), px(by1)), vec2(px(lim), px(by2)), COLOR_LIFT_SLOW, px(4 * s))
-        ui.drawRectFilled(vec2(px(lim), px(by1)), vec2(px(bx2), px(by2)), COLOR_LIFT_FAST, px(4 * s))
-        ui.drawSimpleLine(vec2(px(lim), px(by1 - 2 * s)), vec2(px(lim), px(by2 + 2 * s)), rgbm(1, 1, 1, 0.8), 1)
-        local mx = bx1 + (bx2 - bx1) * k
-        ui.drawRectFilled(vec2(px(mx - 1.5 * s), px(by1 - 3 * s)), vec2(px(mx + 1.5 * s), px(by2 + 3 * s)),
-          rgbm(1, 1, 1, 0.75 + 0.25 * pulse), px(1 * s))
-        local ly = p1.y + 41 * s
-        drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, vec2(bx1, ly), COLOR_DIM)
-        drawTextRight(TEXTS.liftFaster, FONT_MONO, 10 * s, bx2, ly, COLOR_DIM)
+      local bx1, bx2 = p1.x + 16 * s, p2.x - 16 * s
+      local by1, by2 = p1.y + 30 * s, p1.y + 38 * s
+      local lim = bx1 + (bx2 - bx1) * LIFT_LIMIT_POS
+      ui.drawRectFilled(vec2(px(bx1), px(by1)), vec2(px(lim), px(by2)), COLOR_LIFT_SLOW, px(4 * s))
+      ui.drawRectFilled(vec2(px(lim), px(by1)), vec2(px(bx2), px(by2)), COLOR_LIFT_FAST, px(4 * s))
+      ui.drawSimpleLine(vec2(px(lim), px(by1 - 2 * s)), vec2(px(lim), px(by2 + 2 * s)), rgbm(1, 1, 1, 0.8), 1)
+      local f = math.min(math.max(LIFT_LIMIT_POS - (cc.shown or cc.margin) * LIFT_SCALE, 0), 1)
+      local mx = bx1 + (bx2 - bx1) * f
+      local pulse = 0.5 + 0.5 * math.sin(2 * math.pi * LIFT_CARET_HZ * state.ui.clock)
+      ui.drawRectFilled(vec2(px(mx - 4 * s), px(by1 - 5 * s)), vec2(px(mx + 4 * s), px(by2 + 5 * s)),
+        rgbm(1, 1, 1, 0.15 + 0.35 * pulse), px(3 * s))
+      ui.drawRectFilled(vec2(px(mx - 1.5 * s), px(by1 - 3 * s)), vec2(px(mx + 1.5 * s), px(by2 + 3 * s)),
+        rgbm(1, 1, 1, 0.75 + 0.25 * pulse), px(1 * s))
+      local ly = p1.y + 41 * s
+      drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, vec2(bx1, ly), COLOR_DIM)
+      local mid = string.format(TEXTS.liftLimit, cc.zone.gainTolerance)
+      ui.pushDWriteFont(FONT_MONO)
+      local mw = ui.measureDWriteText(mid, 10 * s).x
+      ui.dwriteDrawText(mid, 10 * s, vec2(px(lim - mw / 2), px(ly)), COLOR_DIM)
+      ui.popDWriteFont()
+      drawTextRight(TEXTS.liftFaster, FONT_MONO, 10 * s, bx2, ly, COLOR_DIM)
+    end
+    if intro and intro.box and not cc and not anySd then
+      local k = intro.boxK or 0
+      local pulse = 0.5 + 0.5 * math.cos(2 * math.pi * 3 * state.ui.clock)
+      if intro.box == 'swap' then
+        local p1 = vec2(x, ySd + sdH + gap)
+        local p2 = vec2(x + boxW, ySd + sdH + gap + msgH)
+        drawPanel(p1, p2, BORDER_GREEN, s)
+        drawText(TEXTS.swapTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+        drawSeparator(p1, p2, p1.y + 24 * s, s)
+        local total = config.swapMinSeconds
+        local left = total * (1 - k)
+        drawText(string.format(TEXTS.swapWait, mmss(left)), FONT_TEXT, 12 * s, vec2(p1.x + 16 * s, p1.y + 29 * s), COLOR_SWAP)
+        drawText(string.format(TEXTS.swapTimes, mmss(total - left), mmss(total)), FONT_MONO, 12 * s,
+          vec2(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE)
       else
-        local num = rgbm(COLOR_TEXT.r, COLOR_TEXT.g, COLOR_TEXT.b, 0.3 + 0.7 * pulse)
+        local p1 = vec2(x, ySd)
+        local p2 = vec2(x + boxW, ySd + sdH)
+        drawPanel(p1, p2, BORDER_YELLOW, s)
+        drawText(intro.box == 'lift' and TEXTS.liftTitle or TEXTS.sdTitle, FONT_TITLE, 14 * s,
+          vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+        drawSeparator(p1, p2, p1.y + 24 * s, s)
+        if intro.box == 'lift' then
+          local bx1, bx2 = p1.x + 16 * s, p2.x - 16 * s
+          local by1, by2 = p1.y + 30 * s, p1.y + 38 * s
+          local lim = bx1 + (bx2 - bx1) * LIFT_LIMIT_POS
+          ui.drawRectFilled(vec2(px(bx1), px(by1)), vec2(px(lim), px(by2)), COLOR_LIFT_SLOW, px(4 * s))
+          ui.drawRectFilled(vec2(px(lim), px(by1)), vec2(px(bx2), px(by2)), COLOR_LIFT_FAST, px(4 * s))
+          ui.drawSimpleLine(vec2(px(lim), px(by1 - 2 * s)), vec2(px(lim), px(by2 + 2 * s)), rgbm(1, 1, 1, 0.8), 1)
+          local mx = bx1 + (bx2 - bx1) * k
+          ui.drawRectFilled(vec2(px(mx - 1.5 * s), px(by1 - 3 * s)), vec2(px(mx + 1.5 * s), px(by2 + 3 * s)),
+            rgbm(1, 1, 1, 0.75 + 0.25 * pulse), px(1 * s))
+          local ly = p1.y + 41 * s
+          drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, vec2(bx1, ly), COLOR_DIM)
+          drawTextRight(TEXTS.liftFaster, FONT_MONO, 10 * s, bx2, ly, COLOR_DIM)
+        else
+          local num = rgbm(COLOR_TEXT.r, COLOR_TEXT.g, COLOR_TEXT.b, 0.3 + 0.7 * pulse)
+          local pieces = {
+            { TEXTS.timerPay, COLOR_TEXT },
+            { string.format(TEXTS.timerSeconds, 8 * (1 - k)), num },
+            { TEXTS.timerDeadline, COLOR_TEXT },
+            { string.format(TEXTS.timerDeadlineSeconds, 16 * (1 - k)), num },
+            { TEXTS.timerEnd, COLOR_TEXT },
+          }
+          local tx = p1.x + 16 * s
+          ui.pushDWriteFont(FONT_MONO)
+          for _, piece in ipairs(pieces) do
+            ui.dwriteDrawText(piece[1], 12 * s, vec2(px(tx), px(p1.y + 29 * s)), piece[2])
+            tx = tx + ui.measureDWriteText(piece[1], 12 * s).x
+          end
+          ui.popDWriteFont()
+        end
+      end
+    end
+    for _, zone in ipairs(config.cutZones) do
+      local sd = state.slowdowns[zone.category]
+      if stackOn and not cc and not sdHidden and sd and sd.active then
+        local p1 = vec2(x, ySd)
+        local p2 = vec2(x + boxW, ySd + sdH)
+        drawPanel(p1, p2, BORDER_YELLOW, s)
+        drawText(sd.title, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+        drawSeparator(p1, p2, p1.y + 24 * s, s)
+        local numColor = COLOR_TEXT
+        if (sd.pulseHz or 0) > 0 then
+          numColor = rgbm(COLOR_TEXT.r, COLOR_TEXT.g, COLOR_TEXT.b, 0.3 + 0.7 * (0.5 + 0.5 * math.cos(sd.phase or 0)))
+        end
         local pieces = {
           { TEXTS.timerPay, COLOR_TEXT },
-          { string.format(TEXTS.timerSeconds, 8 * (1 - k)), num },
+          { string.format(TEXTS.timerSeconds, math.max(sd.toPay, 0)), numColor },
           { TEXTS.timerDeadline, COLOR_TEXT },
-          { string.format(TEXTS.timerDeadlineSeconds, 16 * (1 - k)), num },
+          { string.format(TEXTS.timerDeadlineSeconds, math.max(sd.deadlineLeft, 0)), numColor },
           { TEXTS.timerEnd, COLOR_TEXT },
         }
         local tx = p1.x + 16 * s
@@ -10027,43 +10075,15 @@ function script.drawUI()
           tx = tx + ui.measureDWriteText(piece[1], 12 * s).x
         end
         ui.popDWriteFont()
+        break
       end
     end
   end
-  for _, zone in ipairs(config.cutZones) do
-    local sd = state.slowdowns[zone.category]
-    if stackOn and not cc and not sdHidden and sd and sd.active then
-      local p1 = vec2(x, ySd)
-      local p2 = vec2(x + boxW, ySd + sdH)
-      drawPanel(p1, p2, BORDER_YELLOW, s)
-      drawText(sd.title, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
-      drawSeparator(p1, p2, p1.y + 24 * s, s)
-      local numColor = COLOR_TEXT
-      if (sd.pulseHz or 0) > 0 then
-        numColor = rgbm(COLOR_TEXT.r, COLOR_TEXT.g, COLOR_TEXT.b, 0.3 + 0.7 * (0.5 + 0.5 * math.cos(sd.phase or 0)))
-      end
-      local pieces = {
-        { TEXTS.timerPay, COLOR_TEXT },
-        { string.format(TEXTS.timerSeconds, math.max(sd.toPay, 0)), numColor },
-        { TEXTS.timerDeadline, COLOR_TEXT },
-        { string.format(TEXTS.timerDeadlineSeconds, math.max(sd.deadlineLeft, 0)), numColor },
-        { TEXTS.timerEnd, COLOR_TEXT },
-      }
-      local tx = p1.x + 16 * s
-      ui.pushDWriteFont(FONT_MONO)
-      for _, piece in ipairs(pieces) do
-        ui.dwriteDrawText(piece[1], 12 * s, vec2(px(tx), px(p1.y + 29 * s)), piece[2])
-        tx = tx + ui.measureDWriteText(piece[1], 12 * s).x
-      end
-      ui.popDWriteFont()
-      break
-    end
-  end
-  local yNext = ySd + (anySd and not cc and (sdH + gap) or 0)
+  local yNext = ySd
   local rp = state.repair
   local dl = state.list
   local sgIt = config.sg and sgItem()
-  if stackOn and not cc and sgIt and (StopAndGo.stopping or StopAndGo.resume) then
+  if stackOn and sgIt and (StopAndGo.stopping or StopAndGo.resume) then
     local total = sgSeconds(sgIt)
     local left = StopAndGo.remainingMs(sgIt) / 1000
     local h = msgH + math.floor(10 * s)
@@ -10095,7 +10115,7 @@ function script.drawUI()
     yNext = p2.y + gap
   end
   local dtHead = dl.items[1]
-  if stackOn and not cc and dl.dsq == 0 and dtHead and dtHead.kind:sub(1, 2) ~= 'SG' then
+  if stackOn and dl.dsq == 0 and dtHead and dtHead.kind:sub(1, 2) ~= 'SG' then
     local p2 = vec2(x + boxW, yNext + sdH)
     local more = #dl.items > 1 and string.format(TEXTS.dtMore, #dl.items - 1) or ''
     local deadline = dtHead.laps < 0 and TEXTS.dtOverdue or dtHead.laps == 0 and TEXTS.dtThisLap
@@ -10105,17 +10125,17 @@ function script.drawUI()
     yNext = p2.y + gap
   end
   if not stackOn then
-  elseif not cc and dl.dsq > 0 and dl.dsqStage ~= 1 then
+  elseif dl.dsq > 0 and dl.dsqStage ~= 1 then
     local p2 = vec2(x + boxW, yNext + sdH)
     drawFlagBox(vec2(x, yNext), p2, s, BORDER_RED, nil, TEXTS.dsqTitle, BORDER_RED, dl.dsqReason,
       dl.dsqStage == 2 and TEXTS.dsqTow or TEXTS.dsqStop, nil, BORDER_RED)
     yNext = p2.y + gap
-  elseif not cc and rp.lapsLeft and rp.class == 'repair' then
+  elseif rp.lapsLeft and rp.class == 'repair' then
     local p2 = vec2(x + boxW, yNext + sdH)
     local title = rp.lapsLeft <= 1 and TEXTS.damageRepairLast or string.format(TEXTS.damageRepairLaps, rp.lapsLeft)
     drawFlagBox(vec2(x, yNext), p2, s, COLOR_ORANGE, COLOR_ORANGE, title, COLOR_ORANGE, rp.text, rp.detail)
     yNext = p2.y + gap
-  elseif not cc and rp.class == 'beyond' then
+  elseif rp.class == 'beyond' then
     local p1 = vec2(x, yNext)
     local p2 = vec2(x + boxW, yNext + msgH)
     drawPanel(p1, p2, BORDER_RED, s)
@@ -10127,12 +10147,16 @@ function script.drawUI()
     yNext = p2.y + gap
   end
   local ww = WrongWay.back or 0
-  if stackOn and not cc and dl.dsq == 0 and ww >= config.wrongWay.showMeters and ww > 0 then
+  if stackOn and dl.dsq == 0 and ww >= config.wrongWay.showMeters and ww > 0 then
     local p2 = vec2(x + boxW, yNext + sdH)
     local lim = config.wrongWay.maxMeters
     drawFlagBox(vec2(x, yNext), p2, s, BORDER_RED, nil, TEXTS.wrongWayTitle, BORDER_RED,
       string.format(TEXTS.wrongWayTurn, ww, lim), string.format(TEXTS.wrongWayLimit, lim), 'noentry')
     yNext = p2.y + gap
+  end
+  if (cc or anySd or (intro and intro.box)) and stackOn then
+    drawCutBoxes(yNext)
+    if cc or anySd then yNext = yNext + sdH + gap end
   end
   if config.swapOn() or state.list.wrong then
     local sw = state.swap
