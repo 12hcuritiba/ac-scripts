@@ -5532,7 +5532,7 @@ do
   end
   RecordSync.restorers.pass = function(body, seq) apply(body, seq, 'other drivers') end
 end
-local RaceTable = { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, stops = {}, passes = {},
+local RaceTable = { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, stops = {}, passes = {}, seen = {},
   stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0 }, stintDone = false, maxDsq = false, prevParked = nil }
 do
   local REFRESH = 0.25
@@ -5559,6 +5559,18 @@ do
     if not key or not Record.sameSession(key, Record.key()) then return end
     for i, n in body:gmatch('(%d+):(%d+)') do RaceTable.stops[tonumber(i)] = tonumber(n) end
   end
+  local SEEN_KEY = 'rc.seen'
+  local function seenSave()
+    local parts = {}
+    for i in pairs(RaceTable.seen) do parts[#parts + 1] = tostring(i) end
+    ac.storage[SEEN_KEY] = Record.key() .. '\n' .. table.concat(parts, ';')
+  end
+  local function seenLoad()
+    RaceTable.seen = {}
+    local key, body = tostring(ac.storage[SEEN_KEY] or ''):match('^([^\n]*)\n(.*)$')
+    if not key or not Record.sameSession(key, Record.key()) then return end
+    for i in body:gmatch('%d+') do RaceTable.seen[tonumber(i)] = true end
+  end
   local function stopsWatch(c)
     local ps = RaceTable.passes[c.index] or {}
     RaceTable.passes[c.index] = ps
@@ -5576,7 +5588,7 @@ do
   function RaceTable.refresh()
     local session = ac.getSession(sim.currentSessionIndex)
     local board = session and session.leaderboard
-    local rows, byIndex, classPos = {}, {}, {}
+    local rows, byIndex, classPos, absent, added = {}, {}, {}, {}, false
     if board then
       for k = 0, #board do
         local e = board[k]
@@ -5584,17 +5596,30 @@ do
         if c then
           stopsWatch(c)
           local cls = RaceTable.classOf(c.index)
-          if cls then classPos[cls] = (classPos[cls] or 0) + 1 end
-          local r = { index = c.index, pos = #rows + 1, classPos = cls and classPos[cls] or nil, class = cls,
+          local laps, best = e.laps or 0, e.bestLapTimeMs or 0
+          if (c.index == 0 or c.isConnected) and not RaceTable.seen[c.index] then
+            RaceTable.seen[c.index], added = true, true
+          end
+          local r = { index = c.index, class = cls,
             number = ac.getDriverNumber(c.index) or c.index, name = tostring(ac.getDriverName(c.index) or ''),
-            team = tostring(ac.getDriverTeam(c.index) or ''), laps = e.laps or 0, best = e.bestLapTimeMs or 0,
+            team = tostring(ac.getDriverTeam(c.index) or ''), laps = laps, best = best,
             spline = CarRead.num(c.splinePosition), inPit = c.isInPitlane, connected = c.isConnected,
             stops = RaceTable.stops[c.index] or 0 }
-          rows[#rows + 1] = r
+          if RaceTable.seen[c.index] or laps > 0 or best > 0 then
+            if cls then classPos[cls] = (classPos[cls] or 0) + 1 end
+            r.pos, r.classPos = #rows + 1, cls and classPos[cls] or nil
+            rows[#rows + 1] = r
+          else
+            r.absent, r.laps, r.best, r.stops = true, 0, 0, 0
+            absent[#absent + 1] = r
+          end
           byIndex[c.index] = r
         end
       end
     end
+    if added then seenSave() end
+    RaceTable.present = #rows
+    for _, r in ipairs(absent) do rows[#rows + 1] = r end
     RaceTable.rows, RaceTable.byIndex = rows, byIndex
   end
   function RaceTable.progress(r) return r.laps + r.spline end
@@ -5631,6 +5656,7 @@ do
   function RaceTable.load()
     lapsApply(Record.load('laps'))
     stopsLoad()
+    seenLoad()
     local body, seq = Record.load('stint')
     RaceTable.stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0 }
     if body then stintApply(body, seq) end
@@ -6385,7 +6411,7 @@ do
     elseif g == 'relative' or g == 'standings' or g == 'map' then
       local list, seen = { 'ALL' }, {}
       for _, r in ipairs(RaceTable.rows) do
-        if r.class and not seen[r.class] then seen[r.class] = true; list[#list + 1] = r.class end
+        if r.class and not r.absent and not seen[r.class] then seen[r.class] = true; list[#list + 1] = r.class end
       end
       local at = 1
       for i, c in ipairs(list) do if c == Desktop.filter[g] then at = i end end
@@ -7772,7 +7798,7 @@ local drawRaceScreens = (function()
     local list = { 'ALL' }
     local seen = {}
     for _, r in ipairs(RaceTable.rows) do
-      if r.class and not seen[r.class] then seen[r.class] = true; list[#list + 1] = r.class end
+      if r.class and not r.absent and not seen[r.class] then seen[r.class] = true; list[#list + 1] = r.class end
     end
     if #list > 4 then
       local t = string.format(TEXTS.scrClassSel, filter[g] or 'ALL')
@@ -7873,6 +7899,10 @@ local drawRaceScreens = (function()
       local r = list[i]
       local me = r.index == 0
       local col = me and YELLOW or COLOR_TITLE
+      if r.absent then
+        row(p1, y, s, { { '#' .. r.number, 58, COLOR_OFF }, { r.name, 88, COLOR_OFF, false, FONT_TEXT },
+          { r.class or '', 214, COLOR_OFF } })
+      else
       row(p1, y, s, {
         { tostring(r.pos), 32, col, true }, { tostring(r.classPos or '-'), 52, COLOR_DIM, true },
         { '#' .. r.number, 58, col }, { r.name, 88, col, false, me and FONT_TITLE or FONT_TEXT },
@@ -7881,6 +7911,7 @@ local drawRaceScreens = (function()
         { lapTime(r.best), 398, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
         { tostring(r.stops or 0), 416, col, true },
       })
+      end
       y = y + ROW * s
     end
     Drag.icons('standings', p1, p2, s)
@@ -8374,8 +8405,8 @@ local drawRaceScreens = (function()
       y = y + ROW * s
     end
     gapRow(TEXTS.scrLeader, rows[1])
-    gapRow(TEXTS.scrAhead, me and rows[me.pos - 1])
-    gapRow(TEXTS.scrBehind, me and rows[me.pos + 1])
+    gapRow(TEXTS.scrAhead, me and me.pos and rows[me.pos - 1])
+    gapRow(TEXTS.scrBehind, me and me.pos and me.pos < (RaceTable.present or 0) and rows[me.pos + 1] or nil)
     sep()
     drawText(TEXTS.scrObligations, FONT_TITLE, 9 * s, vec2(x0, y), COLOR_DIM)
     y = y + ROW * s
