@@ -384,7 +384,8 @@ local TEXTS = {
   dirNoAnswer = 'No answer from the KMR in 5 s - login or command failed',
   dirFailed = 'Failed: %s', dirSent = 'Sent: %s - waiting for the KMR', dirAnswer = 'KMR: %s',
   dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT', dirFuel = 'FUEL',
-  setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', app = 'App' }, setPreset = 'Preset',
+  setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', text = 'Text', app = 'App' },
+  setFontSample = 'RACE CONTROL  P3  Slow down', setTextMin = 'Small text at least', setTextMinOff = 'Off', setPreset = 'Preset',
   setPresets = { verbose = 'Verbose', race = 'Race', minimal = 'Minimal', custom = 'Custom' }, setAlways = 'always - on the Race Control panel',
   setAreas = { rc = 'Race Control, flags, driver swap, race director', limits = 'Track limits and invalid laps',
     damage = 'Collisions and damage', points = 'Points and rating (KMR)', warnings = 'Behaviour warnings',
@@ -7046,6 +7047,33 @@ end
 local FONT_TITLE = 'Segoe UI;Weight=Bold'
 local FONT_TEXT = 'Segoe UI;Weight=SemiBold'
 local FONT_MONO = 'Consolas'
+Desktop.text = { id = 'segoe', min = 0, minPx = 0, sets = {
+  { id = 'segoe', name = 'Segoe UI', title = 'Segoe UI;Weight=Bold', text = 'Segoe UI;Weight=SemiBold', mono = 'Consolas' },
+  { id = 'segoe-system', name = 'Segoe UI (system)', title = 'Segoe UI:@System;Weight=Bold',
+    text = 'Segoe UI:@System;Weight=SemiBold', mono = 'Consolas:@System' },
+  { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
+    text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
+  { id = 'segoe-variable', name = 'Segoe UI Variable', title = 'Segoe UI Variable Display:@System;Weight=Bold',
+    text = 'Segoe UI Variable Text:@System;Weight=SemiBold', mono = 'Cascadia Mono:@System' },
+  { id = 'arial', name = 'Arial', title = 'Arial:@System;Weight=Bold', text = 'Arial:@System',
+    mono = 'Courier New:@System;Weight=Bold' },
+} }
+function Desktop.textApply(id, min)
+  for _, f in ipairs(Desktop.text.sets) do
+    if f.id == id then
+      FONT_TITLE, FONT_TEXT, FONT_MONO = f.title, f.text, f.mono
+      Desktop.text.id = id
+    end
+  end
+  if min then Desktop.text.min = min end
+  ac.storage['rc.font'] = Desktop.text.id
+  ac.storage['rc.textMin'] = tostring(Desktop.text.min)
+end
+do
+  local id = tostring(ac.storage['rc.font'] or '')
+  local min = tonumber(ac.storage['rc.textMin'] or '') or 0
+  if id ~= '' and id ~= 'segoe' then Desktop.textApply(id, min) else Desktop.text.min = min end
+end
 local COLOR_TITLE = rgbm(0.96, 0.96, 0.96, 1)
 local COLOR_TEXT = rgbm(1, 0.85, 0.25, 1)
 local COLOR_SWAP = rgbm(0.45, 1, 0.55, 1)
@@ -7063,11 +7091,13 @@ local LIFT_SCALE = 1.8
 local LIFT_CARET_HZ = 2
 local function px(v) return math.floor(v + 0.5) end
 local function drawText(text, font, size, pos, color)
+  size = math.max(size, Desktop.text.minPx)
   ui.pushDWriteFont(font)
   ui.dwriteDrawText(text, size, vec2(px(pos.x), px(pos.y)), color)
   ui.popDWriteFont()
 end
 local function textWidth(text, font, size)
+  size = math.max(size, Desktop.text.minPx)
   ui.pushDWriteFont(font)
   local tw = ui.measureDWriteText(text, size).x
   ui.popDWriteFont()
@@ -7171,6 +7201,7 @@ local function drawSeparator(p1, p2, y, s)
   ui.drawSimpleLine(vec2(p1.x + px(16 * s), px(y)), vec2(p2.x - px(16 * s), px(y)), rgbm(1, 1, 1, 0.12), 1)
 end
 local function drawTextRight(text, font, size, xRight, y, color)
+  size = math.max(size, Desktop.text.minPx)
   ui.pushDWriteFont(font)
   local tw = ui.measureDWriteText(text, size).x
   ui.dwriteDrawText(text, size, vec2(px(xRight - tw), px(y)), color)
@@ -9006,7 +9037,7 @@ local drawDesktopUI = (function()
     if not Settings.shown then Settings.appT = nil end
     Settings.shown = true
     local W4 = 520
-    local H4 = 30 + math.max(#AREAS + 3, #CTL, 6) * 18 + 10
+    local H4 = 30 + math.max(#AREAS + 3, #CTL, 6, #Desktop.text.sets + 3) * 18 + 10
     local p1, p2 = windowAt('settings', W4, H4, w, h, s)
     Drag.group = nil
     Drag.modal = { p1, p2 }
@@ -9015,7 +9046,7 @@ local drawDesktopUI = (function()
     drawPanel(p1, p2, BORDER_BASE, s)
     drawText(TEXTS.setTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     local x = p1.x + 150 * s
-    for _, t in ipairs({ 'messages', 'controls', 'app' }) do
+    for _, t in ipairs({ 'messages', 'controls', 'text', 'app' }) do
       x = chip(TEXTS.setTabs[t], vec2(x, p1.y + 4 * s), s, Settings.tab == t, nil, function()
         Settings.tab = t
         Settings.appT = nil
@@ -9050,6 +9081,27 @@ local drawDesktopUI = (function()
           settingsSave()
         end)
         y = y + 18 * s
+      end
+    elseif Settings.tab == 'text' then
+      for _, f in ipairs(Desktop.text.sets) do
+        local on = Desktop.text.id == f.id
+        tick(vec2(x0, y), on, s)
+        drawText(f.name, FONT_TEXT, 10 * s, vec2(x0 + 16 * s, y), on and COLOR_TITLE or COLOR_DIM)
+        ui.pushDWriteFont(f.title)
+        ui.dwriteDrawText(TEXTS.setFontSample, 12 * s, vec2(math.floor(x0 + 150 * s), math.floor(y - 1 * s)), COLOR_TITLE)
+        ui.popDWriteFont()
+        ui.pushDWriteFont(f.mono)
+        ui.dwriteDrawText('1:40.123', 12 * s, vec2(math.floor(p2.x - 80 * s), math.floor(y - 1 * s)), PANEL_COLORS.yellow)
+        ui.popDWriteFont()
+        Drag.clickable(vec2(x0, y), vec2(p2.x - 14 * s, y + 14 * s), function() Desktop.textApply(f.id) end)
+        y = y + 18 * s
+      end
+      y = y + 6 * s
+      drawText(TEXTS.setTextMin, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      local cx = x0 + 110 * s
+      for _, v in ipairs({ 0, 10, 11, 12 }) do
+        cx = chip(v == 0 and TEXTS.setTextMinOff or (v .. ' px'), vec2(cx, y), s, Desktop.text.min == v, nil,
+          function() Desktop.textApply(Desktop.text.id, v) end)
       end
     elseif Settings.tab == 'controls' then
       for _, c in ipairs(CTL) do
@@ -9801,7 +9853,9 @@ local drawDesktopUI = (function()
       ui.onExclusiveHUD(function(mode)
         if mode == 'menu' then
           local size = ac.getUI().windowSize
-          lobby(size.x, size.y, math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3))
+          local sm = math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3)
+          Desktop.text.minPx = Desktop.text.min * sm
+          lobby(size.x, size.y, sm)
           return
         end
         if mode ~= 'game' or config.gameHud == 'show' then return end
@@ -9906,6 +9960,7 @@ function script.drawUI(exclusive)
     ui.popDWriteFont()
   end
   local s = math.min(math.max((h / 1080) ^ 0.3, 1), 1.3)
+  Desktop.text.minPx = Desktop.text.min * s
   local cellW, fixedW = {}, 0
   for i, c in ipairs(PANEL_CELLS) do
     if c.widest then
@@ -9966,6 +10021,7 @@ function script.drawUI(exclusive)
       if intro and c.title then cell = bulb and Intro.lampCell(c.title, intro.t) or nil end
       if not c.title and not showTitle then cell = nil end
       local function put(t, font, size, y, col)
+        size = math.max(size, Desktop.text.minPx)
         ui.pushDWriteFont(font)
         local tw = ui.measureDWriteText(t, size).x
         local tx = c.center and (cx + (cw - tw) / 2) or (cx + 6 * s)
@@ -10068,9 +10124,10 @@ function script.drawUI(exclusive)
       local ly = p1.y + 41 * s
       drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, vec2(bx1, ly), COLOR_DIM)
       local mid = string.format(TEXTS.liftLimit, cc.zone.gainTolerance)
+      local ms = math.max(10 * s, Desktop.text.minPx)
       ui.pushDWriteFont(FONT_MONO)
-      local mw = ui.measureDWriteText(mid, 10 * s).x
-      ui.dwriteDrawText(mid, 10 * s, vec2(px(lim - mw / 2), px(ly)), COLOR_DIM)
+      local mw = ui.measureDWriteText(mid, ms).x
+      ui.dwriteDrawText(mid, ms, vec2(px(lim - mw / 2), px(ly)), COLOR_DIM)
       ui.popDWriteFont()
       drawTextRight(TEXTS.liftFaster, FONT_MONO, 10 * s, bx2, ly, COLOR_DIM)
     end
