@@ -179,6 +179,9 @@ local cfg = ac.configValues({
   --   more than jumpMeters (from where the car stood when the controls were freed) before the lights go out = jump
   --   start, a drive-through within jumpLaps laps. The lights on screen from the grid place screenLightsFrom back (the front ones see the gantry of the track). A car in a driver swap leaves
   --   the pit lane at the green. RC RESTART OFF ALL before the green cancels it: red flag again, controls locked.
+  --   The same procedure at the start of the race (finding 33 of 30/09): on the grid the controls are locked, free at
+  --   releaseLight of the last lights of the game countdown, jumpMeters and jumpLaps as here; any drive-through of the
+  --   game (start rule of the server) is taken out: the Race Control decides.
   restart = '',
 
   -- ------------------------------------------------------------
@@ -453,6 +456,7 @@ local TEXTS = {
   sgLastLap = 'LAST LAP - Stop & go %d s - stop at your pit now',
   sgOverdue = 'OVERDUE - Stop & go %d s - stop at your pit',
   sgServiced = 'Service at the pit - stop & go not served in this pit pass',
+  sgAnnulled = 'Service started - stop & go payment annulled',
   practiceCleared = 'Practice - penalties cleared at the pit place',
   pitSpeedNotPaid = 'Pit lane speeding - the drive-through of this pass does not count', practiceTowCleared = 'Practice - penalties cleared by the tow',
   practiceDsqCleared = 'Practice - disqualification cleared at the pit place',
@@ -597,6 +601,7 @@ local TEXTS = {
     PSE = 'Pit lane speeding',
     RC = 'Race Control decision',
     JS = 'Jump start at the standing restart',
+    JSS = 'Jump start at the race start',
   },
   -- KMR drive-through reasons (category K<n>); on screen with " (KMR)", in the log with " (issued by KMR)"
   kmrReasons = {
@@ -613,6 +618,12 @@ local TEXTS = {
   dsqDtReason = 'Drive-through not served',
   wrongWayDsq = 'Driving the wrong way',
   swapVoidService = 'Driver swap not valid - service in the same pit stop',
+  -- Invalid driver swap: another driver in the stop where the stop & go was served (approved tables of 01/10, item 1)
+  swapVoidSg = 'Driver swap not valid - stop & go served in the same pit stop',
+  swapInvalidTitle = 'INVALID DRIVER SWAP',
+  swapInvalidLeave = 'Stop & go served in this stop - leave the car, do not leave the pits',
+  swapInvalidDsq = 'Driver swap in the stop where the stop & go was served',
+  swapInvalidLeftDsq = 'Left the pits after an invalid driver swap',
   wrongWayTitle = 'WRONG WAY',
   wrongWayTurn = 'Turn around - %.0f / %d m',
   wrongWayLimit = 'Over %d m: disqualified',
@@ -759,6 +770,8 @@ local TEXTS = {
   startNoOvertake = 'No overtaking before the green flag', startRelease = 'Speed limit off - start when the leader crosses the line',
   startWaiting = 'Formation lap about to start', startNoPlace = 'Keep your place',
   startPlace = 'P%d - stay behind %s', startLeader = 'nobody: you lead', startBehindYou = ' - %s behind you',
+  osTitle = 'RACE START', osLocked = 'Controls locked until %s', osLockedLight = 'light %d',
+  gameDtTaken = 'Drive-through of the game taken out - the Race Control decides the penalty',
   startPassedBy = ' - %s passed you', startGiveBack = 'GIVE THE PLACE BACK TO %s', startPassAllowed = 'P%d - %s can be passed (KMR)',
   flagRedLocked = 'Stay at your pit place - controls locked until the restart',
   srTitle = 'STANDING RESTART', srGrid = 'Grid P%d - controls locked', srGridFree = 'Grid P%d', srGridSoon = 'Grid in %d s - stay at your pit place',
@@ -1003,6 +1016,10 @@ local state = {
   tyreKm = { [0] = 0, 0, 0, 0 },     -- km driven by each tyre since it was fitted (car record)
   tyreLineKm = { [0] = 0, 0, 0, 0 }, -- virtual km of each tyre at its last line crossing, never down (car record)
   pitPassServiced = false,   -- a service in the pit pass in progress (kept in the pit record: the next driver sees it)
+  pitPassSgPaid = nil,       -- name code of the driver who served a stop & go in the pit pass in progress (pit record)
+  swapInvalid = nil,         -- invalid driver swap (another driver in the stop where the stop & go was served):
+                             -- { driver = name code, since = server ms, parked = seen at the pit place } (pit record)
+  postRed = nil,             -- red flag off, the green flag of the restart still to come (track record, decision 343)
   rcCommands = {},       -- Race Control commands from the server (ACSM live timing), read in script.update
   pitService = nil,       -- own pit stop in progress: { startMs, untilMs, plan } (PitBox)       -- KMR drive-through messages to this driver, read in script.update (KmrDT)
   -- Car damage class (DamageClass): 'normal', 'repair' (orange disc) or 'beyond'; lapsLeft = line crossings left to
@@ -1475,12 +1492,14 @@ Record.onTampered = nil
 Record.floor = 0
 function Record.fresh() Record.floor = math.floor(serverTimeMs() / 1000) end
 
+-- Returns the version saved (raised over Record.floor when under it)
 function Record.save(list, seq, body)
   if seq < Record.floor then seq = Record.floor + seq end
   local text = Record.encode(list, seq, body)
   ac.store(RECORD_PREFIX .. list, text)
   ac.storage[STORAGE_PREFIX .. list] = text
   if Record.onSave then Record.onSave(list, seq, text) end
+  return seq
 end
 
 local function valid(rec, list)
@@ -1663,8 +1682,8 @@ do
   local SYNC_PART = 120         -- characters of record text per message
   local SYNC_ANSWER_WINDOW = 30 -- seconds after asking in which the answers of the others are applied
   local SYNC_REQUEST = 255
-  local SYNC_LISTS = { 'penalties', 'window', 'swap', 'track', 'car', 'gain', 'pit', 'stint' }
-  local SYNC_CODES = { penalties = 1, window = 2, swap = 3, track = 4, car = 5, gain = 6, pit = 7, stint = 8 }
+  local SYNC_LISTS = { 'penalties', 'window', 'swap', 'track', 'car', 'gain', 'pit', 'stint', 'pass' }
+  local SYNC_CODES = { penalties = 1, window = 2, swap = 3, track = 4, car = 5, gain = 6, pit = 7, stint = 8, pass = 9 }
 
   local sendRecordEvent = ac.OnlineEvent({
     ac.StructItem.key('12hcuritiba.race-control.rec'),
@@ -1850,6 +1869,10 @@ do
     if tostring(data or '') == '' then return end
     ac.log(string.format('race-control: pit stop preset written by the app (%s, %s, %s): %s', tostring(senderName),
       tostring(senderType), tostring(senderID), tostring(data)))
+    -- The pit stop box waits for the preset written (PitBox: the game's own stop applies it)
+    local cb = AppLink.onWritten
+    AppLink.onWritten = nil
+    if cb then cb(tostring(data)) end
   end)
 end
 -- ============================================================
@@ -1858,7 +1881,9 @@ end
 -- driver leaves and another enters, or through a crash (the new connection gets the time left).
 -- Body: <stops with service>|<last stop: lap/fuel added/tyres/repair>|<hold end, server ms (0 = none)>|<hold text>|
 --       <pit stop in progress: start ms/end ms/plan (PitBox), or ->|<service in the pit pass in progress: 1 / 0>|
---       <tow under the red flag waiting for the restart: tow s/powertrain/suspension/body, or empty>
+--       <tow under the red flag waiting for the restart: tow s/powertrain/suspension/body, or empty>|
+--       <name code of the driver who served a stop & go in the pit pass in progress, 0 = none>|
+--       <invalid driver swap in progress: driver name code/since server ms, or empty>
 -- ============================================================
 
 local PitRecord = { stops = 0, last = '-' }
@@ -1872,27 +1897,37 @@ function PitRecord.save()
   PitRecord.seq = (PitRecord.seq or 0) + 1
   local sv = state.pitService
   local rt = state.redTow
-  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s', PitRecord.stops, PitRecord.last,
+  local inv = state.swapInvalid
+  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s', PitRecord.stops, PitRecord.last,
     h and math.floor(h.untilMs) or 0, text,
     sv and string.format('%d/%d/%s', math.floor(sv.startMs), math.floor(sv.untilMs), sv.plan) or '-',
     state.pitPassServiced and 1 or 0, rt and string.format('%d/%.4f/%.4f/%.2f', rt.tow, rt.damage.powertrain,
-    rt.damage.suspension, rt.damage.body) or ''))
+    rt.damage.suspension, rt.damage.body) or '', state.pitPassSgPaid or 0,
+    inv and string.format('%d/%d', inv.driver, math.floor(inv.since)) or ''))
 end
 
 -- A record of this process (script reload: the game hold is still running) or of another connection (the hold is
 -- applied again for the time left)
-local function pitApply(body, seq, newConnection)
-  local stops, last, untilMs, text, service, serviced, redTow =
-    tostring(body):match('^(%d+)|([^|]*)|(%d+)|([^|]*)|([^|]*)|?(%d?)|?([^|]*)$')
+function PitRecord.apply(body, seq, newConnection)
+  local stops, last, untilMs, text, service, serviced, redTow, sgPaid, invalid =
+    tostring(body):match('^(%d+)|([^|]*)|(%d+)|([^|]*)|([^|]*)|?(%d?)|?([^|]*)|?(%d*)|?([^|]*)$')
   if not stops then return end
+  -- The marks of the pit pass in progress, on every start (a script reload too: nothing of the rules only in memory):
+  -- a stop & go served in it, and by whom; an invalid driver swap (its countdown goes on from the time it started).
+  -- Out of the pit lane they belong to a pass already over: PitStops clears them
+  if tonumber(sgPaid or '') and tonumber(sgPaid) ~= 0 then state.pitPassSgPaid = tonumber(sgPaid) end
+  local invDriver, invSince = tostring(invalid or ''):match('^(%d+)/(%d+)$')
+  if invDriver and not state.swapInvalid then
+    state.swapInvalid = { driver = tonumber(invDriver), since = tonumber(invSince) }
+  end
   -- A tow under the red flag waiting for the restart (decision 270)
   local rtTow, rtP, rtS, rtB = tostring(redTow or ''):match('^(%d+)/([%d%.]+)/([%d%.]+)/([%d%.]+)$')
   if rtTow and not state.redTow then
     state.redTow = { tow = tonumber(rtTow), damage = { powertrain = tonumber(rtP), suspension = tonumber(rtS),
       body = tonumber(rtB) } }
   end
-  -- A new connection in the same pit pass (driver swap, crash): a service already done in it counts (decision 161)
-  if newConnection and serviced == '1' then state.pitPassServiced = true end
+  -- A service already done in the pit pass in progress counts (decision 161), after any new start
+  if serviced == '1' then state.pitPassServiced = true end
   local svStart, svUntil, svPlan = service:match('^(%d+)/(%d+)/(.+)$')
   if svStart and not state.pitService and PitRecord.onService then
     PitRecord.onService(tonumber(svStart), tonumber(svUntil), svPlan)
@@ -1922,7 +1957,7 @@ function PitRecord.load(fresh)
     return
   end
   local body, seq, source = Record.load('pit')
-  if body then pitApply(body, seq, source ~= 'store') end
+  if body then PitRecord.apply(body, seq, source ~= 'store') end
 end
 
 -- Locks the car in the pits (TeleportToPits) and shows the countdown in the message box. The teleport it causes is
@@ -1941,7 +1976,7 @@ end
 
 RecordSync.restorers.pit = function(body, seq)
   if seq < (PitRecord.seq or 0) then return end
-  pitApply(body, seq, true)
+  PitRecord.apply(body, seq, true)
 end
 -- ============================================================
 -- Dictionary (decision 214): the one place of the texts that come from outside the script (KMR, ACSM, the race
@@ -2018,6 +2053,10 @@ do
         pt = { 'voce foi pago ' .. N, 'pagaram um adicional de ' .. N, 'voce ganhou ' .. N } },
       -- The race director's points or money penalty (race_control_*_money_penalty, *_points_penalty): sent to everyone
       -- with the driver's name and no balance (decision 221)
+      -- The KMR race director (or its own review) took a drive-through off (language/en.json and pt.json v1.6f,
+      -- race_control_cancelled_drive_through: "Race Control: race director cancelled %s's drive-through penalty for event
+      -- %d (%s)." / "Direcao de Prova: O diretor de prova cancelou %s drive-through pelo evento %d (%s).")
+      dtCancelled = { en = { "drive-through penalty for event" }, pt = { 'drive-through pelo evento' } },
       directorPenalty = { en = { 'money penalty', 'points penalty', 'point penalty' },
         pt = { 'penalidade em dinheiro', 'penalidade de pontos', 'pontos de penalidade', 'dinheiro de penalidade' } },
     },
@@ -2201,33 +2240,62 @@ end
 -- Body: <VSC|SC|CODE-80|GREEN>|<server time of the change, ms>|<RED or ->|<reason of the red flag>|<time of the
 -- standing restart command in progress, ms, or empty> (older records without it are still read)
 -- The red flag (decision 196) goes in the same record: who enters during it gets it from the other drivers
+-- The clock of the pit window (decision 343, organizer 01/10): it freezes when the red flag is given and goes on at the
+-- restart, the green flag at the line on track (the end of the VSC after the red flag, or the lights out of a standing
+-- restart), counting down from where it stopped. Kept in the same record: <frozen ms in total>|<frozen since, server
+-- ms, or empty>|<after the red flag, waiting for the green of the restart: 1 / 0>
 -- ============================================================
 
 local TrackList = {
-  since = -1,   -- server time (ms) of the change in force; -1 = nothing known
+  since = -1,        -- server time (ms) of the change in force; -1 = nothing known
+  frozenMs = 0,      -- time the window clock stood still, ms (closed periods)
+  frozenSince = nil, -- server time (ms) the window clock stopped, while it stands still
 }
 
 -- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
 do
   local function trackBody()
     local red = state.redFlag
-    return string.format('%s|%d|%s|%s|%s', state.code80 or 'GREEN', math.floor(TrackList.since), red and 'RED' or '-',
-      red and red.reason and (red.reason:gsub('[|\r\n]', ' ')) or '', state.restart and math.floor(state.restart.t0) or '')
+    return string.format('%s|%d|%s|%s|%s|%d|%s|%d', state.code80 or 'GREEN', math.floor(TrackList.since),
+      red and 'RED' or '-', red and red.reason and (red.reason:gsub('[|\r\n]', ' ')) or '',
+      state.restart and math.floor(state.restart.t0) or '', math.floor(TrackList.frozenMs),
+      TrackList.frozenSince and math.floor(TrackList.frozenSince) or '', state.postRed and 1 or 0)
   end
 
   local function trackSave()
     Record.save('track', math.floor(TrackList.since / 1000), trackBody())
   end
 
-  -- CODE-80 started or ended in the chat of this client
+  -- The window clock stands still from the red flag to the green flag of the restart
+  local function windowStill() return state.redFlag ~= nil or state.restart ~= nil or state.postRed == true end
+  local function freezeUpdate(now)
+    if windowStill() and not TrackList.frozenSince then
+      TrackList.frozenSince = now
+      ac.log('race-control: pit window clock stopped (red flag)')
+    elseif not windowStill() and TrackList.frozenSince then
+      TrackList.frozenMs = TrackList.frozenMs + math.max(now - TrackList.frozenSince, 0)
+      TrackList.frozenSince = nil
+      ac.log(string.format('race-control: pit window clock goes on (restart, green flag); stood still %.0f s in total',
+        TrackList.frozenMs / 1000))
+    end
+  end
+
+  -- Time the window clock stood still up to now, ms
+  function TrackList.frozenNowMs()
+    return TrackList.frozenMs + (TrackList.frozenSince and math.max(serverTimeMs() - TrackList.frozenSince, 0) or 0)
+  end
+
+  -- CODE-80 started or ended in the chat of this client, the red flag, the standing restart
   function TrackList.changed()
     TrackList.since = serverTimeMs()
+    freezeUpdate(TrackList.since)
     trackSave()
   end
 
   -- A track record (from this process or from the other drivers): applied when its change is newer than the one in force
   local function trackApply(body, source)
-    local kind, since, red, reason, rt = tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)$')
+    local kind, since, red, reason, rt, frozen, frozenSince, postRed =
+      tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)|?(%d*)|?(%d*)|?(%d?)$')
     since = tonumber(since)
     if not since or since <= TrackList.since then return false end
     local code80 = kind ~= 'GREEN' and kind or nil
@@ -2241,6 +2309,9 @@ do
     end
     state.redFlag = red == 'RED' and { reason = reason ~= '' and reason or nil } or nil
     state.restart = (rt or '') ~= '' and { t0 = tonumber(rt) } or nil
+    state.postRed = postRed == '1' or nil
+    TrackList.frozenMs = tonumber(frozen) or 0
+    TrackList.frozenSince = (frozenSince or '') ~= '' and tonumber(frozenSince) or nil
     TrackList.since = since
     return true
   end
@@ -2248,6 +2319,7 @@ do
   -- Session start or script reload: only the record of this process (ac.store)
   function TrackList.load()
     TrackList.since = -1
+    TrackList.frozenMs, TrackList.frozenSince = 0, nil
     local body, _, source = Record.load('track')
     if not body then return end
     if source == 'store' then
@@ -2370,7 +2442,12 @@ local function onSwapInfo(msg)
   local left = config.swapMinSeconds - msg.pcElapsed / 10
   ac.log(string.format('race-control: swap relay: previous driver left %.1f s ago, wait %.1f s',
     msg.pcElapsed / 10, math.max(left, 0)))
-  if left <= 0 then return end
+  -- The minimum time already over (finding 7 of 30/09: no box at all): the standard box, clear to leave, with the time
+  if left <= 0 then
+    sw.clearUntil = state.ui.clock + SERVER_NOTICE_SECONDS
+    sw.clearElapsed = msg.pcElapsed / 10
+    return
+  end
   sw.remaining = left
   sw.remainingT = state.ui.clock
   sw.fromPeers = true
@@ -2402,8 +2479,7 @@ ac.onClientConnected(function(carIndex, sessionID)
   local rec = sw.left[carIndex]
   if not rec or carIndex == 0 then return end
   sw.left[carIndex] = nil
-  -- Only while the swap can still be running
-  if state.ui.clock - rec.t > config.swapMinSeconds then return end
+  -- Also after the minimum swap time (finding 7 of 30/09): the new driver still gets the swap told and the standard box
   -- A different driver in the car: one more swap for it. Same driver (reconnection): no swap, nothing carried
   if nameCode(ac.getDriverName(carIndex)) == rec.driver then
     sw.carLists[carIndex] = nil
@@ -2762,6 +2838,10 @@ local Diag = { inputs = {}, acts = {}, last = nil }
 do
   local WINDOW = 1.0              -- seconds: inputs and actions counted before a change
   local held = {}                 -- input held in the frame before: name = true
+  -- Engine (finding of 30/09 night: a car stalling in gear made ON / OFF flood the message window): running over
+  -- ENGINE_ON rpm, off under ENGINE_OFF, the same state kept in between; a change counts only after STABLE seconds
+  local ENGINE_ON, ENGINE_OFF, STABLE = 300, 50, 2.0
+  local engineState, enginePending, engineSince = nil, nil, 0
 
   -- The script's own actions on the car
   local function act(text)
@@ -2835,7 +2915,7 @@ do
       lowBeams = car.lowBeams and 'on' or 'off',
       hazard = car.hazardLights and 'on' or 'off',
       limiter = car.manualPitsSpeedLimiterEnabled and 'on' or 'off',
-      engine = CarRead.num(car.rpm) > 100 and 'running' or 'off',
+      engine = engineState or 'off',
       reverse = CarRead.num(car.gear) == -1 and 'R' or 'not R',
       camera = tostring(sim.cameraMode) .. ((ac.CameraMode and sim.cameraMode == ac.CameraMode.Car) and ('/' .. tostring(sim.carCameraIndex)) or ''),
     }
@@ -2853,6 +2933,12 @@ do
     end
     held = now
     while Diag.inputs[1] and clock - Diag.inputs[1].t > WINDOW do table.remove(Diag.inputs, 1) end
+    -- The engine as read now (with the band), and the state shown only when the new one held STABLE seconds
+    local rpm = CarRead.num(car.rpm)
+    local raw = rpm > ENGINE_ON and 'running' or (rpm < ENGINE_OFF and 'off' or (enginePending or engineState or 'off'))
+    if engineState == nil then engineState = raw end
+    if raw ~= enginePending then enginePending, engineSince = raw, clock end
+    if raw ~= engineState and clock - engineSince >= STABLE then engineState = raw end
     local cur = read(car)
     local before = Diag.last
     Diag.last = cur
@@ -3026,6 +3112,28 @@ local function fromServer(sender)
   return not c or not c.isConnected
 end
 
+-- The game's own messages (every one blocked on screen: desktop_editor, ac.blockSystemMessages('.')) are captured here
+-- (ac.onMessage, as the test T1 of 29/09 read them in the app) and treated (organizer, 01/10: "NÃO PODE PERDER AS
+-- MENSAGENS TEM QUE CAPTURAR E TRATAR"): the chat lines the game repeats as "SERVER" and the car controls our box shows
+-- go only to the log; every other one goes to the message window of the platform and to the log
+do
+  local LOG_ONLY = { 'SERVER', 'ABS', 'TC', 'TC2', 'Engine Map', 'Pit limiter' }
+  if ac.onMessage then
+    ac.onMessage(function(title, description)
+      local t, d = tostring(title or ''), tostring(description or '')
+      local text = d ~= '' and (t ~= '' and (t .. ' - ' .. d) or d) or t
+      if text:match('^%s*$') then return end
+      for _, k in ipairs(LOG_ONLY) do
+        if t == k then
+          ac.log('race-control: game message (log only): ' .. text)
+          return
+        end
+      end
+      Audit.add('GAME', text, true, DICT.area(text:lower()) or 'server')
+    end)
+  end
+end
+
 ac.onChatMessage(function(message, senderCarIndex)
   if type(message) ~= 'string' then return false end
   local server = fromServer(senderCarIndex)
@@ -3069,6 +3177,15 @@ ac.onChatMessage(function(message, senderCarIndex)
     ac.log(string.format('race-control: command received (sender %s): %s [raw: %s]', tostring(senderCarIndex), command,
       message))
     state.rcCommands[#state.rcCommands + 1] = command
+    return true
+  end
+  -- A drive-through of this driver taken off by the KMR (finding 4 of 30/09: the KMR took the formation lap DT off and
+  -- the Race Control kept it in the list): it leaves the list too (KmrDT.update). Before the DT check: the message also
+  -- says "drive-through"
+  local myName = tostring(ac.getDriverName(0) or '')
+  if server and myName ~= '' and message:find(myName, 1, true) and hasAny(low, DICT.kmr.dtCancelled) then
+    state.kmrMessages[#state.kmrMessages + 1] = { text = message, sender = senderCarIndex, cancel = true }
+    Audit.add('KMR', message, true, 'rc')
     return true
   end
   -- KMR drive-through to this driver: from the server, or with this car as the sender (the SDK documents only -1 for
@@ -3121,6 +3238,8 @@ ac.onChatMessage(function(message, senderCarIndex)
       elseif kind == 'GREEN FLAG' and state.code80 then
         state.code80 = nil
         state.code80Ended = true
+        -- The green flag of the rolling restart after the red flag: the window clock goes on (decision 343)
+        state.postRed = nil
         TrackList.changed()
         ac.log('race-control: CODE-80 end')
       end
@@ -3205,15 +3324,33 @@ end
 
 local Rules = {}
 
+-- One item of the list as text, and back (the penalty list and the pass mirror): cat,kind,laps,given lap,expire lap,
+-- seq,DT0 on track. shift = laps to move the given and expire laps by (a new connection: Rules.lapShift)
+function Rules.itemEncode(it)
+  return string.format('%s,%s,%d,%d,%d,%d,%d', it.cat, it.kind, it.laps, it.givenLap, it.expireLap, it.seq,
+    it.dt0OnTrack and 1 or 0)
+end
+function Rules.itemDecode(text, shift)
+  local cat, kind, laps, givenLap, expireLap, seq, onTrack =
+    tostring(text or ''):match('^(%w+),(%w+),(%-?%d+),(%-?%d+),(%-?%d+),(%d+),(%d)$')
+  if not cat then return nil end
+  shift = shift or 0
+  return { cat = cat, kind = kind, laps = tonumber(laps), givenLap = tonumber(givenLap) + shift,
+    expireLap = tonumber(expireLap) + shift, seq = tonumber(seq), dt0OnTrack = onTrack == '1' }
+end
+-- car.lapCount starts again with a new connection: laps to move a record's laps by (record saved at lap 'lap')
+function Rules.lapShift(lap)
+  local lapNow = ac.getCar(0).lapCount
+  lap = tonumber(lap) or lapNow
+  return lapNow < lap and lapNow - lap or 0
+end
+
 -- Body: seq|0 (was the item in the game; kept for the record format)|lap|owner|dsq|dsq stage|dsq until (server ms)|
 -- wrong driver|wrong since (server ms)|items
 local function listSave()
   local l = state.list
   local parts = {}
-  for _, it in ipairs(l.items) do
-    parts[#parts + 1] = string.format('%s,%s,%d,%d,%d,%d,%d', it.cat, it.kind, it.laps, it.givenLap, it.expireLap,
-      it.seq, it.dt0OnTrack and 1 or 0)
-  end
+  for _, it in ipairs(l.items) do parts[#parts + 1] = Rules.itemEncode(it) end
   local w = l.wrong
   Record.save('penalties', l.seq, string.format('%d|0|%d|%d|%d|%d|%d|%d|%d|%s', l.seq, l.curLap,
     l.owner or 0, l.dsq, l.dsqStage, math.floor(l.dsqUntil), w and w.driver or 0, w and math.floor(w.since) or 0,
@@ -3242,12 +3379,10 @@ local function listApply(data, source)
   l.dsqUntil = tonumber(untilPart)
   l.dsqLap = ac.getCar(0).lapCount
   if tonumber(wrongPart) ~= 0 then l.wrong = { driver = tonumber(wrongPart), since = tonumber(sincePart) } end
-  local lapNow = ac.getCar(0).lapCount
-  local shift = lapNow < tonumber(lapPart) and lapNow - tonumber(lapPart) or 0
-  for cat, kind, laps, givenLap, expireLap, seq, onTrack in
-      itemsPart:gmatch('(%w+),(%w+),(%-?%d+),(%-?%d+),(%-?%d+),(%d+),(%d)') do
-    l.items[#l.items + 1] = { cat = cat, kind = kind, laps = tonumber(laps), givenLap = tonumber(givenLap) + shift,
-      expireLap = tonumber(expireLap) + shift, seq = tonumber(seq), dt0OnTrack = onTrack == '1' }
+  local shift = Rules.lapShift(lapPart)
+  for text in itemsPart:gmatch('[^;]+') do
+    local it = Rules.itemDecode(text, shift)
+    if it then l.items[#l.items + 1] = it end
   end
   if shift ~= 0 then
     ac.log(string.format('race-control: penalty list moved %d laps (new connection)', shift))
@@ -4142,11 +4277,17 @@ do
     return s, e
   end
 
+  -- Clock of the pit window, ms after the race start: the session time less the time it stood still from each red flag
+  -- to the green flag of its restart (decision 343: frozen at the red flag, it counts down from there at the restart)
+  function PitStops.windowTime()
+    return sessionElapsedMs() - TrackList.frozenNowMs()
+  end
+
   -- Pit window open now
   function PitStops.windowOpen()
     local s, e = PitStops.window()
     if not s or not sim.isSessionStarted then return false end
-    local t = sessionElapsedMs()
+    local t = PitStops.windowTime()
     return t >= s and t <= e
   end
 
@@ -4215,7 +4356,8 @@ do
   -- A service in a pit stop does not allow the driver swap nor the penalty in the same stop (decision 161): the valid
   -- swap of this pit pass is taken back at once (the window goes back to open if it fulfilled it); only after leaving
   -- the pit lane can it be done again
-  function PitStops.voidSwap()
+  -- sgPaid: the swap is taken back because a stop & go was served in this pit pass (invalid driver swap)
+  function PitStops.voidSwap(sgPaid)
     local sw = state.swap
     if not sw.passSwap or not sw.passSwapValid or sw.passVoided then return end
     sw.passVoided = true
@@ -4225,8 +4367,9 @@ do
       Record.save('window', math.floor(serverTimeMs() / 1000), 'open')
     end
     SwapRecord.save()
-    ac.log('race-control: driver swap not valid: service in the same pit stop')
-    rcLog(TEXTS.swapTitle, TEXTS.swapVoidService)
+    ac.log('race-control: driver swap not valid: ' .. (sgPaid and 'stop & go served in the same pit stop'
+      or 'service in the same pit stop'))
+    rcLog(TEXTS.swapTitle, sgPaid and TEXTS.swapVoidSg or TEXTS.swapVoidService)
   end
 
   -- A service started or seen in the pit pass in progress: marked (pit record), and the swap of this pass taken back
@@ -4236,6 +4379,36 @@ do
       PitRecord.save()
     end
     PitStops.voidSwap()
+    -- Decision 161 and the approved tables of 01/10, item 11 ("TEM QUE AVISAR QUANDO ACIONAR O SERVIÇO QUE O PAGAMENTO
+    -- DA PENALIDADE FOI ANULADO E AO SAIR APLICA A PENALIDADE"): a service after the stop & go served in this stop tells
+    -- at once that the payment is annulled; the stop & go goes back to the list when the car leaves the pit place
+    local p = PitStops.pass
+    if p and p.sgPaid and not p.sgServiced then
+      p.sgServiced = true
+      ac.log(string.format('race-control: service in the same stop: the payment of the stop & go served in it (%s) is annulled; it applies again when the car leaves the pit place',
+        p.sgPaid.cat))
+      showNotice(TEXTS.rcTitle, TEXTS.sgAnnulled)
+    end
+  end
+
+  -- The car leaves the pit place (or the pit lane) with a service after the stop & go served in this stop: the stop &
+  -- go goes back to the list, with its own deadline (approved tables of 01/10, item 11)
+  local function sgBack(why)
+    local p = PitStops.pass
+    if not (p and p.sgPaid and p.sgServiced) then return end
+    local sg = p.sgPaid
+    p.sgPaid, p.sgServiced, p.sgParked = nil, nil, nil
+    local l = state.list
+    l.seq = l.seq + 1
+    sg.seq = l.seq
+    table.insert(l.items, 1, sg)
+    if #l.items > 0 and not l.owner then l.owner = nameCode(ac.getDriverName(0)) end
+    listSave()
+    ac.log(string.format('race-control: %s with a service after the stop & go served (%s): the stop & go applies again', why, sg.cat))
+    rcLog(TEXTS.sgServiced, sg.cat)
+    Rules.finalize()
+    state.ui.lastSeq = state.list.seq
+    showNotice(TEXTS.rcTitle, TEXTS.sgServiced, sg)
   end
 
   -- End of the race of this car: valid swaps and stops against the required
@@ -4293,6 +4466,7 @@ do
       openPass(state.list.jumped, sessionElapsedMs())
     end
     if not inPit and PitStops.wasInPitlane then
+      sgBack('left the pit lane')
       closePass()
       PitStops.passInWindow = false
       -- Leaving the pit lane ends the pit stop: the next one may swap drivers and serve penalties again
@@ -4302,10 +4476,35 @@ do
         state.pitPassServiced = false
         PitRecord.save()
       end
+      -- The mark of the stop & go served in this pass is cleared at the pit lane exit (approved tables, item 1)
+      if state.pitPassSgPaid or state.swapInvalid then
+        state.pitPassSgPaid, state.swapInvalid = nil, nil
+        PitRecord.save()
+      end
     end
     PitStops.wasInPitlane = inPit
-    -- A real change in the car at its pit place (the AC pit screen, for example) is a stop with service
+    -- Marks of a pit pass already over (taken back from a record with the car out of the pit lane): cleared
+    if not inPit and (state.pitPassServiced or state.pitPassSgPaid or state.swapInvalid) then
+      state.pitPassServiced, state.pitPassSgPaid, state.swapInvalid = false, nil, nil
+      PitRecord.save()
+      ac.log('race-control: marks of a pit pass already over cleared')
+    end
+    -- A stop at the own pit place in a pass driven in from the track: it does not serve a drive-through (Rules.line).
+    -- A car that starts the pass at its place (connection, swap) keeps the payment as before (test WD2)
+    if PitStops.pass and PitStops.pass.entryMs and CarRead.parked(car) and state.ui.clock >= PitStops.settleUntil then
+      PitStops.pass.stopped = true
+    end
+    -- A service after the stop & go served: the stop & go applies again when the car leaves the pit place (car.isInPit
+    -- from true to false), once the stop of the box is over
     local p = PitStops.pass
+    if p and p.sgServiced then
+      if car.isInPit then
+        p.sgParked = true
+      elseif p.sgParked and state.pitService == nil then
+        sgBack('left the pit place')
+      end
+    end
+    -- A real change in the car at its pit place (the AC pit screen, for example) is a stop with service
     if p and state.ui.clock < PitStops.settleUntil then
       p.snap = nil
     elseif p and car.isInPit and not CarState.restoring then
@@ -4321,7 +4520,7 @@ do
     raceEnd(car)
     local s, e = PitStops.window()
     if not s or not config.swapOn() or not sim.isSessionStarted or state.pit.done or state.pit.missed
-      or sessionElapsedMs() <= e then
+      or PitStops.windowTime() <= e then
       return
     end
     -- Neutral zone: the pass that started inside the window goes on
@@ -4379,6 +4578,7 @@ do
       -- The swap of this pit pass: a service in it (before, by the driver who left; or later, by this one) takes it back
       sw.passSwap, sw.passSwapValid, sw.passVoided = true, sw.swapInfo.inWindow, false
       if state.pitPassServiced then PitStops.voidSwap() end
+      if state.pitPassSgPaid then PitStops.voidSwap(true) end
     elseif state.ui.clock - DriverTable.startT < DECIDE_SECONDS then
       return
     elseif sw.driver == me then
@@ -4391,6 +4591,10 @@ do
       sw.count = sw.count + 1
       swapNo = sw.count
       if PitStops.window() == nil then sw.valid = sw.valid + 1 end
+      -- The swap of this pit pass: in the pass where the stop & go was served it does not count (approved tables of
+      -- 01/10, item 1); a service in it takes it back too (decision 161)
+      sw.passSwap, sw.passSwapValid, sw.passVoided = true, PitStops.window() == nil, false
+      if state.pitPassSgPaid then PitStops.voidSwap(true) end
     end
     DriverTable.done = true
     -- A new driver in the car (not a rejoin): its server time, for the restart order after a red flag (decision 264)
@@ -4651,17 +4855,46 @@ do
       if p.repair.body then d.body = 0 end
     end
     ac.log(string.format('race-control: pit stop done (%s)', planText(p)))
+    PitBox.gameStop(false, 'end of the box stop')
     local repaired = p.repair.suspension or p.repair.powertrain or p.repair.body
     PitStops.record(car.lapCount, fuel - fuelBefore, #wheels, p.compound ~= mounted, repaired)
   end
 
+  -- Pressure and wing (finding 9 of 30/09: the preset was written and never reached the car). The game applies the
+  -- quick pit preset with its own stop when the car is at its pit place and that stop is on; the script keeps it off
+  -- (decision 30) and turns it on only for the stop the box commands (organizer, 01/10: "VC DESATIVA E REATIVA O MENU
+  -- ESCONDIDO QUANDO COMANDAR A TROCA"), AUTO at the place or MANUAL with the car already stopped: the app writes the
+  -- preset (pressure and wing chosen; fuel 0, the box does the fuel), then the game's stop is turned on (its menu stays
+  -- hidden), and off again at the end of the box stop. Simple stop, stop & go and driver swap: never on
+  PitBox.gameStopOn = false
+  local function gameStop(on, why)
+    if PitBox.gameStopOn == on then return end
+    PitBox.gameStopOn = on
+    ac.disableQuickMenuPitstop(not on)
+    local wh, parts = ac.getCar(0).wheels, {}
+    for i = 0, 3 do parts[#parts + 1] = string.format('%.1f', num(wh[i] and wh[i].tyrePressure)) end
+    ac.log(string.format('race-control: game pit stop %s (%s); tyre pressure %s psi', on and 'on' or 'off', why,
+      table.concat(parts, ' / ')))
+  end
+  PitBox.gameStop = gameStop
+
   -- Start of the stop: controls locked for the total, end in server time in the pit record
   local function startStop(p)
-    -- Pressure and wing: written in the preset by the app now (decision 201)
-    if #p.preset > 0 then AppLink.setPreset(p.preset) end
     state.pitService = { startMs = serverTimeMs(), untilMs = serverTimeMs() + p.total * 1000, plan = planText(p) }
     -- A service: no driver swap nor penalty in this stop (decision 161)
     PitStops.markService()
+    -- Pressure and wing: written in the preset by the app now (decision 201); the game's own stop applies them
+    if #p.preset > 0 then
+      local req = {}
+      for _, c in ipairs(p.preset) do req[#req + 1] = c end
+      for _, sp in ipairs(ac.getPitstopSpinners() or {}) do
+        if sp.type == 'fuel' and not sp.readOnly then req[#req + 1] = { name = sp.name, value = 0, type = 'fuel' } end
+      end
+      AppLink.onWritten = function()
+        if state.pitService then gameStop(true, 'preset written by the app') end
+      end
+      AppLink.setPreset(req)
+    end
     physics.lockUserControlsFor(p.total + SERVICE_LOCK_EXTRA)
     PitRecord.save()
     ac.log(string.format('race-control: pit stop started, %.1f s (%s)', p.total, planText(p)))
@@ -4727,6 +4960,8 @@ do
   -- Menu of the AC off, once (decision 30)
   local menuOff = false
   function PitBox.update(car)
+    -- Out of the pit lane the game's own stop is never on
+    if PitBox.gameStopOn and not car.isInPitlane then gameStop(false, 'left the pit lane') end
     if not menuOff then
       ac.disableQuickMenuPitstop(true)
       ac.disableExtraHUDElements('quickPitsMenu', true)
@@ -4976,9 +5211,16 @@ function Rules.line(viaPit, g, lapCount)
     -- After a teleport there is no pit pass: nothing is paid. During CODE-80 nothing is paid either.
     if state.code80 and l.items[1] then
       ac.log('race-control: pit pass during CODE-80, nothing paid')
+    elseif state.redFlag and not state.redCommitted and l.items[1] then
+      -- Red flag: no drive-through is paid; only the one already being served when it came concludes (decision 333)
+      ac.log('race-control: pit pass with the red flag, nothing paid')
     elseif l.wrong and l.items[1] then
       -- Only the driver who caused the penalty pays it
       ac.log('race-control: pit pass by another driver, nothing paid')
+    elseif PitStops.pass and PitStops.pass.stopped and l.items[1] and l.items[1].kind:sub(1, 2) ~= 'SG' then
+      -- A drive-through is driven through: a pass that stopped at the pit place does not serve it (organizer, 01/10:
+      -- "DT É DRIVE THROUGH NÃO PODE PARAR NO BOX")
+      ac.log('race-control: pit pass with a stop at the pit place: the drive-through is not served')
     elseif not l.jumped then
       local head = l.items[1]
       if head and head.kind:sub(1, 2) == 'SG' then
@@ -5216,6 +5458,15 @@ do
         StopAndGo.stopping = false
         StopAndGo.resume = false
         listRemove(sg)
+        -- Kept with the pit pass: a service started in the same stop takes this payment back (decision 161)
+        if PitStops.pass then
+          PitStops.pass.sgPaid = sg
+          sg.kind = 'SG' .. sgTail(sg)   -- put back as not served: the time served does not count
+        end
+        -- Stop & go served in this pit pass, and by whom: another driver entering the car in it makes an invalid
+        -- driver swap (organizer 01/10, item 1 of the approved tables: the wrong driver rule)
+        state.pitPassSgPaid = nameCode(ac.getDriverName(0))
+        PitRecord.save()
         ac.log(string.format('race-control: stop & go served (%d s)', sgSeconds(sg)))
         PitStops.notePaid(string.format('stop & go %d s', sgSeconds(sg)))
         PitStops.countStop()
@@ -5302,6 +5553,53 @@ do
     if WrongDriver.remaining() <= 0 then
       carDsq(1, 'Driver swap with pending penalties')
       ac.log('race-control: DSQ, wrong driver did not leave the car')
+    end
+  end
+
+  -- Seconds left for the driver of an invalid swap to leave (nil = no invalid swap, or no time defined)
+  function WrongDriver.invalidLeft()
+    local inv = state.swapInvalid
+    if not inv or not config.wrongDriver then return nil end
+    return math.max(config.wrongDriver - (serverTimeMs() - inv.since) / 1000, 0)
+  end
+
+  -- Invalid driver swap (organizer 01/10, approved tables, item 1: the wrong driver rule). Another driver enters the car
+  -- in the pit pass where the stop & go was served (pit record): he is told, with the countdown of wrongDriverSeconds
+  -- in server time; the swap does not count (swaps and window). Not gone by the end of it: DSQ. The car leaving the pit
+  -- place (car.isInPit from true to false): DSQ. wrongDriverSeconds = 0: DSQ as he enters. The driver who served it
+  -- coming back: nothing happens. The mark is cleared at the pit lane exit (PitStops)
+  function WrongDriver.invalidSwap(car)
+    if not config.swapOn() then return end
+    local payer = state.pitPassSgPaid
+    local me = nameCode(ac.getDriverName(0))
+    local inv = state.swapInvalid
+    if inv and inv.driver ~= me then
+      state.swapInvalid, inv = nil, nil
+      PitRecord.save()
+      ac.log('race-control: invalid driver swap over: another driver in the car')
+    end
+    -- No driver swap counts in the pass where the stop & go was served (also the driver who served it coming back)
+    if payer and state.swap.passSwap then PitStops.voidSwap(true) end
+    if not payer or payer == me then return end
+    if not inv then
+      inv = { driver = me, since = serverTimeMs() }
+      state.swapInvalid = inv
+      PitRecord.save()
+      ac.log(string.format('race-control: invalid driver swap: stop & go served in this stop by another driver, %s s to leave',
+        tostring(config.wrongDriver or '-')))
+      rcLog(TEXTS.swapInvalidTitle, TEXTS.swapInvalidLeave)
+    end
+    if car.isInPit then
+      inv.parked = true
+    elseif inv.parked then
+      ac.log('race-control: DSQ, the car left the pits after an invalid driver swap')
+      carDsq(1, TEXTS.swapInvalidLeftDsq)
+      return
+    end
+    local left = WrongDriver.invalidLeft()
+    if left and left <= 0 then
+      ac.log('race-control: DSQ, invalid driver swap: the driver did not leave the car')
+      carDsq(1, TEXTS.swapInvalidDsq)
     end
   end
 end
@@ -5462,6 +5760,39 @@ do
     carDsq(1, string.format(TEXTS.kmrRatingDsq, Audit.num(Audit.rating), Audit.num(r.dsqAt)))
   end
 
+  -- The KMR took a drive-through of this driver off: the newest one of the same reason leaves the list. Inside a stop &
+  -- go it is one DT less (30 s); a stop & go of two DTs is left to the race direction (it would be a single DT again)
+  local function cancelled(text, via)
+    local low = text:lower()
+    local cat = category(low)
+    local base = TEXTS.kmrReasons[cat]
+    local l = state.list
+    for i = #l.items, 1, -1 do
+      local it = l.items[i]
+      if it.cat == cat then
+        listRemove(it)
+        ac.log(string.format('race-control: KMR drive-through cancelled by the KMR (%s): %s', cat, text))
+        rcLog('Drive-through cancelled', base .. ' - cancelled by the KMR race director' .. via)
+        Rules.finalize()
+        return
+      end
+    end
+    local sg = sgItem()
+    local n = cat:match('^K(%d+)$')
+    if sg and n and sg.kind:find('x' .. n, 1, true) and sgCount(sg) > 2 then
+      sg.kind = sg.kind:gsub('x' .. n, '', 1)
+      sg.cat = 'SG' .. (sgCount(sg) - 1)
+      l.seq = l.seq + 1
+      sg.seq = l.seq
+      listSave()
+      ac.log(string.format('race-control: KMR drive-through cancelled by the KMR (%s): one DT less in the stop & go', cat))
+      rcLog('Drive-through cancelled', base .. ' - cancelled by the KMR race director, one DT less in the stop & go' .. via)
+      return
+    end
+    ac.log(string.format('race-control: KMR drive-through cancelled by the KMR (%s), not in the list as a DT: %s', cat, text))
+    rcLog('Drive-through cancelled by KMR', base .. ' - not a DT of the list (stop & go of two DTs or paid): race direction' .. via)
+  end
+
   function KmrDT.update()
     ratingCheck()
     local msgs = state.kmrMessages
@@ -5471,8 +5802,10 @@ do
       local text = m.text
       local via = ' - chat sender ' .. tostring(m.sender)
       local low = text:lower()
-      local laps = hasAny(low, DICT.kmr.penalty) and deadline(low)
-      if laps then
+      local laps = not m.cancel and hasAny(low, DICT.kmr.penalty) and deadline(low)
+      if m.cancel then
+        cancelled(text, via)
+      elseif laps then
         local cat = category(low)
         local base = TEXTS.kmrReasons[cat]
         -- The infraction limit: the drive-through below, and the points start again from zero (decision 247)
@@ -5617,6 +5950,8 @@ do
         local on = red == 'ALL'
         if on ~= (state.redFlag ~= nil) then
           state.redFlag = on and { reason = reason ~= '' and reason or nil } or nil
+          -- Red flag off (rolling restart under the VSC): the window clock still stands until the green flag (decision 343)
+          state.postRed = (not on) or nil
           TrackList.changed()
           rcLog(on and 'Red flag' or 'Red flag off', reason ~= '' and reason or '-')
           ac.log('race-control: red flag ' .. (on and 'on' or 'off') .. (reason ~= '' and (' - ' .. reason) or ''))
@@ -5628,6 +5963,7 @@ do
       if rs == 'ALL' and state.redFlag and not state.restart then
         state.restart = { t0 = tonumber(rsT) or math.ceil(serverTimeMs() / 5000) * 5000 }
         state.redFlag = nil
+        state.postRed = nil
         TrackList.changed()
         rcLog('Standing restart', reason ~= '' and reason or '-')
         ac.log('race-control: standing restart command, time ' .. math.floor(state.restart.t0))
@@ -6039,6 +6375,8 @@ do
     end
     -- The start control: the formation of the rolling start with the neutralizations, its green over the others
     local st = Start.flag()
+    local osl = Flags.officialStartLine and Flags.officialStartLine()
+    if osl and not st then st = { 2, 'start', TEXTS.osTitle, osl, '' } end
     if st and st[1] == 2 and not yellow then yellow = st end
     if st and st[1] == 5 then normal = st end
     local f = red or yellow or info or normal
@@ -6136,7 +6474,15 @@ do
       Flags.redOver, Flags.redOverSince, Flags.redPrevLane = false, nil, nil
       return
     end
-    if lineFrame and car.isInPitlane then
+    if lineFrame and car.isInPitlane and state.redCommitted then
+      -- The drive-through already being served when the red flag came concludes here, and here the car receives the
+      -- red flag: then as every car that received it at the line (round on track under CODE-65 into its box; the line
+      -- again is DSQ, decision 265) (decision 333)
+      state.redCommitted = nil
+      Flags.redReceived = true
+      ac.log('race-control: drive-through concluded at the line in the pit lane; red flag received at this line')
+      rcLog('Red flag', 'received at the line in the pit lane, drive-through concluded')
+    elseif lineFrame and car.isInPitlane then
       ac.log('race-control: DSQ, line crossed in the pit lane with the red flag (leaving the pits)')
       carDsq(1, TEXTS.redFlagLineDsq)
       return
@@ -6302,7 +6648,19 @@ do
       carDsq(1, TEXTS.redFlagNoPitDsq)
     end
     if up ~= Flags.redWasUp then state.redFuelOk = false end
-    if up and not Flags.redWasUp then Flags.redSince, Flags.redReceived = state.ui.clock, false end
+    if up and not Flags.redWasUp then
+      Flags.redSince, Flags.redReceived = state.ui.clock, false
+      -- Already committed to a drive-through when the red flag comes (decision 333): driven into the pit lane with a
+      -- drive-through to serve, before the line. It concludes at the line in the pit lane, which is the line where
+      -- this car receives the red flag (the line is mandatory to receive it)
+      local head = state.list.items[1]
+      state.redCommitted = (car.isInPitlane and PitStops.pass ~= nil and PitStops.pass.entryMs ~= nil
+        and not PitStops.pass.stopped and head ~= nil and head.kind:sub(1, 2) ~= 'SG') or nil
+      if state.redCommitted then
+        ac.log('race-control: red flag with the car in the pit lane serving a drive-through: it concludes at the line')
+      end
+    end
+    if not up then state.redCommitted = nil end
     Flags.redWasUp = up
     local ev = up and 'on' or 'off'
     if ev ~= Flags.redSent or (up and state.ui.clock - Flags.redSentT >= 2) then
@@ -6568,6 +6926,192 @@ do
     end
     return raceStartLights(car)
   end
+
+  -- ------------------------------------------------------------
+  -- Official start of the race (finding 33 of 30/09: the game gave its own drive-through at the start and the Race
+  -- Control did not). Start and standing restart are one procedure at two moments (organizer, 01/10: "A TRAVA DE
+  -- LARGADA E RELARGADA SÃO UMA COISA SÓ"; regulation 13.3.8): on the grid the controls are locked, free at the light
+  -- releaseLight of the last lights before the start (the countdown of the game), and moving forward more than
+  -- jumpMeters before the start is a jump start, a drive-through within jumpLaps laps (decisions 298, 314)
+  --   - any drive-through of the game (currentPenaltyType 2 with laps left) is taken out at once (decision 78: nothing
+  --     goes to the game), with a line in the log and the Race Control log; the penalty is the Race Control's
+  -- ------------------------------------------------------------
+  local os_ = { session = nil }
+  local function osReset(idx)
+    os_ = { session = idx, lockT = -1e9, held = false, released = false, relPos = nil, relLook = nil, jumped = false,
+      creep = 0, startLogged = false }
+  end
+  local lastGame = nil
+  function Flags.officialStart(car, g)
+    -- Every change of the game penalty goes to the log (the evidence of what the game does)
+    local gameNow = tostring(g.t) .. '/' .. tostring(g.p)
+    if gameNow ~= lastGame then
+      if lastGame then ac.log('race-control: game penalty ' .. lastGame .. ' -> ' .. gameNow) end
+      lastGame = gameNow
+    end
+    if g.t == GAME_DT and (tonumber(g.p) or 0) > 0 then
+      physics.setCarPenalty(MANDATORY_PITS, 0)
+      ac.log(string.format('race-control: drive-through of the game taken out (%s, session %s)', gameNow,
+        sim.isSessionStarted and 'started' or 'not started'))
+      rcLog('Start', TEXTS.gameDtTaken)
+    end
+    local idx = sim.currentSessionIndex
+    if os_.session ~= idx then osReset(idx) end
+    local c = config.restart
+    local race = sim.raceSessionType == ac.SessionType.Race
+    local t = CarRead.num(sim.timeToSessionStart)
+    local before = race and not sim.isSessionStarted and t > 0
+    -- Not on the grid before the start (another session, the race running, a car in the pit lane, a restart)
+    if not before or car.isInPitlane or state.restart or Flags.onGrid then
+      if os_.held and not os_.startLogged then
+        os_.startLogged = true
+        if not ownLock() then physics.lockUserControlsFor(0) end
+        ac.log(string.format('race-control: race start: green (largest forward movement %.2f m, tolerance %.2f m)',
+          os_.creep, c.jumpMeters))
+      end
+      return
+    end
+    local releaseMs = (c.lights - c.releaseLight + 1) * c.stepSeconds * 1000
+    if t > releaseMs then
+      if not ownLock() and state.ui.clock >= os_.lockT then
+        physics.lockUserControlsFor(3)
+        os_.lockT = state.ui.clock + 2
+        if not os_.held then
+          os_.held = true
+          ac.log(string.format('race-control: race start: controls locked on the grid (%.1f s to the start)', t / 1000))
+        end
+      end
+      return
+    end
+    if not os_.released then
+      os_.released = true
+      if not ownLock() then physics.lockUserControlsFor(0) end
+      if car.position and car.look then
+        os_.relPos = { x = car.position.x, z = car.position.z }
+        os_.relLook = { x = car.look.x, z = car.look.z }
+      end
+      ac.log(string.format('race-control: race start: controls free at light %d', c.releaseLight))
+    end
+    local moved = os_.relPos and car.position and forward(car.position, os_.relPos, os_.relLook) or 0
+    os_.creep = math.max(os_.creep, moved)
+    if os_.relPos and not os_.jumped and moved > c.jumpMeters then
+      os_.jumped = true
+      ac.log(string.format('race-control: race start: jump start (%.2f m forward before the start)', moved))
+      if listAdd('JSS', c.jumpLaps) then
+        Rules.finalize()
+        rcLog('Drive-through', TEXTS.reason.JSS)
+        showNotice(TEXTS.rcTitle, TEXTS.reason.JSS)
+      end
+    end
+  end
+  -- Flag box line of the start on the grid: controls locked until ...
+  function Flags.officialStartLine()
+    if not os_.held or os_.startLogged or os_.released then return nil end
+    local c = config.restart
+    return string.format(TEXTS.osLocked, string.format(TEXTS.osLockedLight, c.releaseLight))
+  end
+end
+-- ============================================================
+-- Pass mirror (Arquitetura — persistência, 5.2, 5.3 and 11.11.2 item 5; organizer 01/10: nothing of the rules stays
+-- only in the volatile memory). The state of the rules in the pit pass in progress, and of this car at the line under
+-- the red flag, is a record of the car ('pass') kept in its layers (this process, this computer, the other drivers):
+-- every change is saved as a new version, nothing is erased. After any failure (script reload, crash, driver swap,
+-- restarted game) the newest valid version is taken (Record, RecordSync) and compared with what the game says now:
+-- the car in the pit lane, the same pass goes on; out of it, the pass ended during the failure and its exit runs on the
+-- next frame (PitStops, PitSpeed). The line: lines crossed in the pass and the lap annulled after a tow or teleport.
+-- Body (fields by number, '|'):
+--  1 line id of the pass | 2 pass open 1/0 | 3 entry, session ms (-1 = in the pits at the start) | 4 tow 1/0 |
+--  5 stopped at the place 1/0 | 6 stop number | 7 race flag | 8 driver flag | 9 service | 10 paid (;) |
+-- 11 stop & go served (list item) | 12 service after it 1/0 | 13 parked after it 1/0 |
+-- 14 swap of the pass: swap, valid, taken back (3 digits) | 15 DT paid in the pass (list item) | 16 speeding 1/0 |
+-- 17 highest km/h | 18 lines crossed in the pass (-1 = not in it) | 19 lap annulled 1/0 |
+-- 20 red flag received at the line 1/0 | 21 drive-through concluding at the red flag 1/0 |
+-- 22 start of that red flag, server ms | 23 lap count of the record
+-- ============================================================
+
+local PassMirror = { seq = 0, loaded = 0, last = nil, red = nil }
+-- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
+do
+  local FIELDS = 23
+  local SPEED_FIELD = 17   -- written with the others, but its own change alone is no new version
+
+  local function flag(v) return v and '1' or '0' end
+  local function text(v) return (tostring(v or ''):gsub('|', '/')) end
+
+  local function fields(car)
+    local p, sw = PitStops.pass, state.swap
+    local lapNow = CarRead.num(car.lapCount)
+    return {
+      p and p.id or PitStops.line, flag(p), p and p.entryMs and math.floor(p.entryMs) or -1, flag(p and p.jumped),
+      flag(p and p.stopped), p and p.stop or 0, text(p and p.raceFlag), text(p and p.driverFlag), text(p and p.service),
+      text(p and table.concat(p.paid, ';')), p and p.sgPaid and Rules.itemEncode(p.sgPaid) or '',
+      flag(p and p.sgServiced), flag(p and p.sgParked), flag(sw.passSwap) .. flag(sw.passSwapValid) .. flag(sw.passVoided),
+      state.pitPaid and Rules.itemEncode(state.pitPaid) or '', flag(PitSpeed.over), math.floor(PitSpeed.maxKmh),
+      PitSpeed.entryLap and math.max(lapNow - PitSpeed.entryLap, 0) or -1, flag(state.list.jumped),
+      flag(Flags.redReceived), flag(state.redCommitted), math.floor(TrackList.frozenSince or 0), lapNow }
+  end
+
+  -- Every frame, at its end: a change is saved as a new version
+  function PassMirror.update(car)
+    -- The red flag of the record, once the same red flag is known (it may come from the other drivers after it)
+    local red = PassMirror.red
+    if red and state.redFlag and TrackList.frozenSince and math.floor(TrackList.frozenSince) == red.since then
+      PassMirror.red = nil
+      Flags.redReceived = Flags.redReceived or red.received
+      state.redCommitted = state.redCommitted or red.committed or nil
+      ac.log('race-control: pass mirror: red flag at the line taken back (received ' .. tostring(Flags.redReceived) .. ')')
+    elseif red and not state.redFlag then
+      PassMirror.red = nil
+    end
+    local f = fields(car)
+    local key = table.concat(f, '|', 1, SPEED_FIELD - 1) .. '|' .. table.concat(f, '|', SPEED_FIELD + 1)
+    if key == PassMirror.last then return end
+    PassMirror.last = key
+    PassMirror.seq = Record.save('pass', PassMirror.seq + 1, table.concat(f, '|'))
+  end
+
+  -- A version of the mirror (this process, this computer or the other drivers): the newest one is kept. The versions
+  -- this start saves itself do not count against the others' (they were not there when the failure happened)
+  local function apply(body, seq, source)
+    if seq <= PassMirror.loaded then return end
+    local f = {}
+    for v in (tostring(body) .. '|'):gmatch('([^|]*)|') do f[#f + 1] = v end
+    if #f < FIELDS then return end
+    PassMirror.loaded = seq
+    PassMirror.seq = math.max(PassMirror.seq, seq)
+    local shift = Rules.lapShift(f[23])
+    if f[19] == '1' then state.list.jumped = true end
+    if tonumber(f[22]) ~= 0 then
+      PassMirror.red = { received = f[20] == '1', committed = f[21] == '1', since = tonumber(f[22]) }
+    end
+    if f[2] ~= '1' then return end
+    -- The pass open in the record: the same pass goes on in the pit lane; out of it, its exit runs (wasInPitlane)
+    local paid = {}
+    for v in f[10]:gmatch('[^;]+') do paid[#paid + 1] = v end
+    local entry, stop = tonumber(f[3]), tonumber(f[6])
+    PitStops.line = math.max(PitStops.line, tonumber(f[1]) or 0)
+    PitStops.pass = { id = tonumber(f[1]), entryMs = entry >= 0 and entry or nil, jumped = f[4] == '1',
+      stopped = f[5] == '1', stop = stop ~= 0 and stop or nil, raceFlag = f[7], driverFlag = f[8],
+      service = f[9] ~= '' and f[9] or nil, paid = paid, sgPaid = Rules.itemDecode(f[11], shift),
+      sgServiced = f[12] == '1' or nil, sgParked = f[13] == '1' or nil, snap = nil }
+    local sw = state.swap
+    sw.passSwap, sw.passSwapValid, sw.passVoided = f[14]:sub(1, 1) == '1', f[14]:sub(2, 2) == '1', f[14]:sub(3, 3) == '1'
+    state.pitPaid = Rules.itemDecode(f[15], shift)
+    PitSpeed.over, PitSpeed.maxKmh = f[16] == '1', tonumber(f[17]) or 0
+    local lines = tonumber(f[18]) or -1
+    PitSpeed.entryLap = lines >= 0 and CarRead.num(ac.getCar(0).lapCount) - lines or nil
+    PitStops.wasInPitlane = true
+    ac.log(string.format('race-control: pass mirror: pit pass %s taken back (%s, version %d)', f[1], source, seq))
+  end
+
+  -- Session start or script reload: the version of this process or this computer; the other drivers' come later
+  function PassMirror.load()
+    PassMirror.seq, PassMirror.loaded, PassMirror.last, PassMirror.red = 0, 0, nil, nil
+    local body, seq, source = Record.load('pass')
+    if body then apply(body, seq, source) end
+  end
+
+  RecordSync.restorers.pass = function(body, seq) apply(body, seq, 'other drivers') end
 end
 -- ============================================================
 -- Race table (front E, E3; decisions 197, 198, 207). Read locally, never sent car by car (the online queue sends one
@@ -7084,7 +7628,8 @@ end
 function Panel.cellPit()
   local s, e = PitStops.window()
   if not s or not sim.isSessionStarted then return nil end
-  local t = sessionElapsedMs()
+  -- The window clock (stands still from the red flag to the green flag of the restart, decision 343)
+  local t = PitStops.windowTime()
   if t < s then return nil end
   if state.pit.done then return { value = TEXTS.pitDone, color = 'dim' } end
   if t <= e then return { value = string.format(TEXTS.pitOpen, mmss2((e - t) / 1000)), color = 'yellow' } end
@@ -10561,13 +11106,13 @@ local drawDesktopUI = (function()
   -- The game's messages of the controls shown: blocked while ours show them (titles of test T1)
   local BLOCK = { elec = 'ABS|TC|TC2', engine = 'Engine Map', pit = 'Pit limiter' }
   local blockOff, blockKey = nil, ''
-  -- The game's message of the pit place that sends to the ESC menu (the AC pit menu is off, decision 30; order of
-  -- 30/09: "NADA DISSO DEVERIA ESTAR APARECENDO"): blocked all the time (decision 277)
-  local escBlock, serverBlock = nil, nil
+  -- Every system message of the game on screen is blocked, all the time (finding of 30/09: with the chat closed, the
+  -- game showed every KMR and server line at the top of the screen as "SERVER: ..."; order: "NÃO PODE EXIBIR NADA DO
+  -- JOGO, NENHUMA MENSAGEM"). It replaces the ones of the ESC (decision 277) and of "SERVER:" (decision 291). The
+  -- lines of the KMR and the server still reach the message window of the platform through the chat (chat.lua)
+  local allBlock = nil
   local function blockUpdate()
-    if not escBlock and ac.blockSystemMessages then escBlock = ac.blockSystemMessages('ESC|Esc') end
-    -- The system message "SERVER:" with nothing else, after the ESC (decision 291; of the game or the ACSM, not the chat)
-    if not serverBlock and ac.blockSystemMessages then serverBlock = ac.blockSystemMessages('^ *SERVER:? *$') end
+    if not allBlock and ac.blockSystemMessages then allBlock = ac.blockSystemMessages('.') end
     local parts = {}
     if Settings.ctl.on then
       for _, g in ipairs({ 'elec', 'engine', 'pit' }) do if Settings.ctl[g] then parts[#parts + 1] = BLOCK[g] end end
@@ -11725,8 +12270,9 @@ function script.drawUI()
     end
   end
 
-  -- Flag box (E2, decision 194): red and yellow first, above the slowdown and the penalty boxes (finding 7 of 29-30/09:
-  -- the flag over the slowdown); information and green / chequered below them; one flag at a time
+  -- Flag box (E2, decision 194): every flag first, above the slowdown and the penalty boxes (finding 7 of 29-30/09: the
+  -- flag over the slowdown; finding of 30/09 night: the blue, white, green and chequered were still drawn under the
+  -- slowdown countdown); one flag at a time
   local flag = Flags.current
   local FLAG_COLORS = { red = BORDER_RED, yellow = BORDER_YELLOW, slippery = BORDER_YELLOW, blue = BORDER_BLUE,
     green = BORDER_GREEN, white = COLOR_TITLE, checkered = COLOR_TITLE, start = BORDER_YELLOW }
@@ -11749,7 +12295,7 @@ function script.drawUI()
     end
     return p2.y + gap
   end
-  if stackOn and flag and flag.group <= 2 then ySd = drawFlag(ySd) end
+  if stackOn and flag then ySd = drawFlag(ySd) end
   -- Own start lights (decision 257, design 10): the gantry of the AC, 5 columns of 2 LED lights, over the guard of the
   -- panel (the strip on demand), not in a box; from the 22nd place back, in the last 5 s of a standing start
   local litColumns = Flags.startLights(ac.getCar(0))
@@ -11983,7 +12529,6 @@ function script.drawUI()
       string.format(TEXTS.wrongWayTurn, ww, lim), string.format(TEXTS.wrongWayLimit, lim), 'noentry')
     yNext = p2.y + gap
   end
-  if stackOn and flag and flag.group >= 4 then yNext = drawFlag(yNext) end
   -- Driver swap panel (green), below the slowdown and damage boxes; also the wrong driver countdown
   if config.swapOn() or state.list.wrong then
     local sw = state.swap
@@ -11991,11 +12536,17 @@ function script.drawUI()
     local total = config.swapMinSeconds
     local title, line1, line2
     local wrongLeft = WrongDriver.remaining()
-    if wrongLeft and not (state.dtDsqActive or state.pitDsqActive) then
+    if state.swapInvalid and not (state.dtDsqActive or state.pitDsqActive) then
+      -- Invalid driver swap (stop & go served in this stop by another driver): leave the car, with the countdown
+      title, line1 = TEXTS.swapInvalidTitle, TEXTS.swapInvalidLeave
+      local left = WrongDriver.invalidLeft()
+      if left then line2 = string.format(TEXTS.wrongDriverTime, mmss(left)) end
+    elseif wrongLeft and not (state.dtDsqActive or state.pitDsqActive) then
       title, line1 = TEXTS.wrongDriverTitle, TEXTS.wrongDriverLeave
       line2 = string.format(TEXTS.wrongDriverTime, mmss(wrongLeft))
     elseif sw.clearUntil and clock < sw.clearUntil then
       title, line1 = TEXTS.swapTitle, TEXTS.swapClear
+      if sw.clearElapsed then line2 = string.format(TEXTS.swapTimes, mmss(sw.clearElapsed), mmss(total)) end
     elseif sw.remaining then
       local left = math.max(sw.remaining - (clock - sw.remainingT), 0)
       title = TEXTS.swapTitle
@@ -12004,9 +12555,9 @@ function script.drawUI()
     elseif sw.stopT and #state.list.items > 0 then
       -- Penalties pending: only the driver who caused them pays them, so no swap
       title, line1 = TEXTS.swapActive, TEXTS.swapBlocked
-    elseif sw.stopT then
+    elseif sw.stopT and sw.allowT then
       title, line1 = TEXTS.swapActive, TEXTS.swapDisconnect
-      line2 = string.format(TEXTS.swapTimes, mmss(clock - sw.stopT), mmss(total))
+      line2 = string.format(TEXTS.swapTimes, mmss(clock - sw.allowT), mmss(total))
     end
     if title and stackOn then
       local ySwap = math.max(ySd + sdH + gap, yNext)
@@ -12100,6 +12651,7 @@ function script.update(dt)
       -- The red flag belongs to its session (a script reload keeps it: the track record of this process)
       state.redFlag = nil
       state.restart = nil
+      state.postRed = nil
     end
     l.curLap = lapCount
     state.lastSessionIndex = sim.currentSessionIndex
@@ -12131,6 +12683,8 @@ function script.update(dt)
     PitStops.pass = nil
     PitStops.line = 0
     PitStops.endChecked = false
+    -- The pass mirror: the pit pass and the line of the record, compared with the game on the first frames
+    PassMirror.load()
     -- A new session or a restart within the running script: the game puts the car back (not the script's first frame)
     if transition then PitStops.settleUntil = state.ui.clock + PitStops.SETTLE_SECONDS end
     DriverTable.reset()
@@ -12195,6 +12749,12 @@ function script.update(dt)
   end
   if sw.prevInPit == false and parked then sw.stopT = state.ui.clock end
   if not parked then sw.stopT = nil end
+  -- The swap time counts only while the swap is allowed (finding 7 / question 41 of 30/09, organizer 01/10: "FICA
+  -- PARADO O PRAZO COM O CARRO PARADO"): nothing pending (rule 15: pay first, then swap) and no service in this stop
+  -- (rule 35). A stop & go served at the place starts it then, not at the stop
+  local swapAllowed = sw.stopT and #state.list.items == 0 and not state.pitPassServiced
+    and not (state.dtDsqActive or state.pitDsqActive)
+  if not swapAllowed then sw.allowT = nil elseif not sw.allowT then sw.allowT = state.ui.clock end
   if not inPit then sw.remaining = nil end
   sw.prevInPit = parked
   updateSwapRelay()
@@ -12366,6 +12926,8 @@ function script.update(dt)
     DamageClass.update(car, lineFrame)
     -- Flags: this car's incident told to the others; the flag of this car now (E2)
     Start.update(car)
+    -- The official start of the race on the grid, and every drive-through of the game taken out (finding 33)
+    Flags.officialStart(car, g)
     Flags.update(car, lineFrame)
     -- Race table, this car's laps and the driver's stint (E3)
     RaceTable.update(car, lineFrame, viaPit)
@@ -12378,6 +12940,7 @@ function script.update(dt)
     Rules.invalidLaps(car)
     if not (state.dtDsqActive or state.pitDsqActive) then
       WrongDriver.update()
+      WrongDriver.invalidSwap(car)
       -- Driving the wrong way: our rule (the CSP penalty is off on the server)
       WrongWay.update(car)
       StopAndGo.update(car)
@@ -12396,6 +12959,8 @@ function script.update(dt)
 
     l.prevInPit = inPit
     l.prevGame = { t = g.t, p = g.p }
+    -- Every change of the rules in the pit pass and at the line: a new version of the pass mirror
+    PassMirror.update(car)
   end
 
   updateChat(dt)
