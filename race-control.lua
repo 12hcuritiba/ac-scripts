@@ -9687,6 +9687,21 @@ local drawDesktopUI = (function()
     if state.ui.clock - chatT < 1 then return chatRight end
     chatT, chatRight = state.ui.clock, nil
     if not ac.getAppWindows or not ac.accessAppWindow then return nil end
+    if Desktop.windowsLogged ~= sim.isInMainMenu and sim.isInMainMenu then
+      local size = ac.getUI().windowSize
+      ac.log(string.format('race-control: lobby, screen %.0f x %.0f, app windows:', size.x, size.y))
+      for _, w in ipairs(ac.getAppWindows() or {}) do
+        local ok, acc = pcall(ac.accessAppWindow, w.name)
+        if ok and acc and acc:valid() then
+          local pos, sz = acc:position(), acc:size()
+          ac.log(string.format('race-control: window %s | %s | visible %s | x %.0f y %.0f | w %.0f h %.0f',
+            tostring(w.name), tostring(w.title), tostring(acc:visible()), pos.x, pos.y, sz.x, sz.y))
+        else
+          ac.log(string.format('race-control: window %s | %s | no access', tostring(w.name), tostring(w.title)))
+        end
+      end
+    end
+    Desktop.windowsLogged = sim.isInMainMenu
     for _, w in ipairs(ac.getAppWindows() or {}) do
       local tag = (tostring(w.name) .. ' ' .. tostring(w.title)):lower()
       if tag:find('chat', 1, true) then
