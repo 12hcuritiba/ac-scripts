@@ -1,3 +1,35 @@
+-- race-control app (apps/lua/race-control) — CSP Lua app (12h Curitiba)
+--
+-- ============================================================================================================
+-- LEGAL NOTICE
+--
+-- Copyright (c) 2026 12h Curitiba, amx racing, amx mods and Max Schrappe. All rights reserved.
+--
+-- This software, including its source code, rules logic, texts, layouts and documentation, is the exclusive
+-- property of 12h Curitiba, amx racing, amx mods and Max Schrappe. It is proprietary and confidential, and it is
+-- NOT open source.
+--
+-- No license is granted. Without the prior written authorization of the copyright holders, it is prohibited to:
+--   - use, run or host this software, in whole or in part, on any server, event or championship other than the
+--     ones organized or authorized by 12h Curitiba;
+--   - copy, reproduce, modify, adapt, translate or create derivative works from it;
+--   - distribute, publish, sell, rent, sublicense or otherwise make it available to third parties;
+--   - remove, alter or hide this notice or any other ownership or authorship information.
+--
+-- Its publication at a public address exists only so that the game clients of the 12h Curitiba servers can
+-- download it, and does not grant any right of use, copy or distribution.
+--
+-- This software is protected by copyright law, including the Brazilian Copyright Law (Lei nº 9.610/1998) and the
+-- Brazilian Software Law (Lei nº 9.609/1998), and by international treaties, including the Berne Convention.
+-- Unauthorized use, copy or distribution is a copyright infringement and may result in civil and criminal
+-- liability, including damages, under the applicable law.
+--
+-- THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT SHALL THE
+-- COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM ITS USE.
+--
+-- Authorization requests: 12hcuritiba@gmail.com
+-- ============================================================================================================
+
 -- ============================================================
 -- Race Control app (front E, decision 189): only what the online script cannot do. The online script runs the tool
 -- (rules, screens); this app writes the pit stop preset of pressure and wing (decision 201), which only apps can do
@@ -27,6 +59,30 @@ if ac.getSim().isOnlineRace then
       ac.log('race-control app: HIDE_ICONS ' .. key .. ' ' .. tostring(was) .. ' -> 1')
     end
   end
+  -- Nothing of the game on screen (organizer 01/10: "NADA DO JOGO DEVE APARECER, NEM OS ÍCONES DE EXCESSO DE
+  -- VELOCIDADE"): the pit speed limit sign, the manual limiter icon and its warning of the CSP, [EXTRA_HUD_ELEMENTS] of
+  -- the same gui.ini (keys of the official CSP config, acc-extension-config/config/gui.ini); the values before are kept
+  -- once
+  for _, key in ipairs({ 'PIT_SPEED_LIMIT', 'MANUAL_PIT_SPEED_LIMITER', 'WARN_ABOUT_MANUAL_LIMITER' }) do
+    local was = ini:get('EXTRA_HUD_ELEMENTS', key, 1)
+    if ac.storage['extraHud' .. key] == nil then ac.storage['extraHud' .. key] = tostring(was) end
+    if tonumber(was) ~= 0 then
+      ini:setAndSave('EXTRA_HUD_ELEMENTS', key, 0)
+      ac.log('race-control app: EXTRA_HUD_ELEMENTS ' .. key .. ' ' .. tostring(was) .. ' -> 0')
+    end
+  end
+  -- The extra HUD elements of the game also hidden from the app (the online script does it every 5 s; finding of
+  -- 01/10: the session time of the game still at the top of the screen): again every 5 s, a call refused is logged once
+  local refused = {}
+  setInterval(function()
+    for _, id in ipairs({ 'sessionTime', 'startingLights', 'wrongWay' }) do
+      local ok, err = pcall(ac.disableExtraHUDElements, id, true)
+      if not ok and not refused[id] then
+        refused[id] = true
+        ac.log('race-control app: disableExtraHUDElements ' .. id .. ' refused: ' .. tostring(err))
+      end
+    end
+  end, 5)
 end
 
 local APP_REQUEST = '12hcuritiba.race-control.preset'

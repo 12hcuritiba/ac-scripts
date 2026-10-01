@@ -215,6 +215,11 @@ local cfg = ac.configValues({
   --   registered in the KMR from its JSON (/?drivers=true&page=N): name, GUID, money, km, infractions and crashes per
   --   100 km, laps and best lap of the track. Empty = the drivers seen on the server only.
   kmrStatsUrl = '',
+  -- baseUrl = https://api.12hcuritiba.com (optional): the base online of the event (Cloudflare Worker). Every record
+  --   of the car (penalties, window, swaps, track, car, pit, stint, pass) goes there too, and a script that starts
+  --   reads back the records of its car and the track of the session: a driver swap or a reconnection with nobody
+  --   else on the server loses nothing. Empty = off (the other drivers and this computer only).
+  baseUrl = '',
 
   -- ------------------------------------------------------------
   -- 3. Driver swap and pit stops (the ACSM keys must match the ACSM race settings)
@@ -602,6 +607,7 @@ local TEXTS = {
     RC = 'Race Control decision',
     JS = 'Jump start at the standing restart',
     JSS = 'Jump start at the race start',
+    PX = 'Left the pits before the car ahead at the race restart',
   },
   -- KMR drive-through reasons (category K<n>); on screen with " (KMR)", in the log with " (issued by KMR)"
   kmrReasons = {
@@ -661,7 +667,11 @@ local TEXTS = {
   scrOpt = 'Opt.', scrCarBest = 'Car best', scrStintN = 'STINT %d - %s', scrStintInfo = '%d laps - %s',
   scrStintMin = ' / min %d', scrBestAvg = 'Best %s - avg %s', scrDeltaButton = 'Δ',
   scrGaps = 'GAPS', scrObligations = 'OBLIGATIONS', scrTrack = 'Track', scrKmr = 'KMR points',
-  scrKmrRating = 'KMR rating',
+  exitTitle = 'RACE RESTART', exitLine1 = 'Pit exit in single file - restart order',
+  exitWait = 'Wait at your pit place - leave after %s passes', exitGo = 'Your turn - leave the pits now, single file',
+  exitFirst = 'First of the restart order - leave the pits now', exitEarlyLog = 'Left the pits before %s passed (out of the restart order)',
+  scrKmrRating = 'KMR rating', scrKmrCrashes = 'KMR crashes', scrKmrInfr = 'KMR infractions',
+  scrKmrNone = 'none yet',
   sessionName = { [ac.SessionType.Practice] = 'PRACTICE', [ac.SessionType.Qualify] = 'QUALIFY', [ac.SessionType.Race] = 'RACE' },
   -- desktop editor and indicator (draw/desktop_editor.lua)
   edTitle = 'SCREENS', edPitDesk = 'Pit desktop', edDeskOf = 'Desktop %s of %d', edHint = 'drag a screen to its place - title line moves this window',
@@ -699,6 +709,7 @@ local TEXTS = {
   setServer = 'Server', setCsp = 'CSP', setScript = 'Script', setApp = 'App', setRunning = 'running',
   msgTitle = 'MESSAGES', setMissing = 'missing', setChecking = 'checking', setAllGood = 'All good - closes in %d s', setNotGood = 'Not all good - close it yourself',
   redTitle = 'RED FLAG CONTROL', redNone = 'no red flag', redConfirm = 'CONFIRM RED FLAG', redVsc = 'RESUME VSC %d s',
+  dirLightsRed = 'LIGHTS RED', dirLightsGreen = 'LIGHTS GREEN', dirLightsAuto = 'LIGHTS AUTO',
   redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET MONEY', dirStats = 'RESET STATS', dirNoSg = 'NO S&G', dirNoDsq = 'NO DSQ',
   dirKmrLine = 'KMR  points %s / %d  -  safety %s  -  %s  -  infractions %s (%s / 100 km)',
   dirKmrCrashes = 'crashes %s (%s / 100 km)', dirBalRes = 'ballast %.0f kg  restrictor %.0f', dirKmrLaps = '  -  laps %d best %s', dirKmrNoStats = 'stats: none yet (not driven enough)',
@@ -909,6 +920,8 @@ local config = {
   eventName = tostring(cfg.eventName or ''),
   -- KMR web stats of the server (decision 284), without the ending bar
   kmrStatsUrl = (tostring(cfg.kmrStatsUrl or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')),
+  -- Base online of the event (decision 41; core/base_sync.lua), without the ending bar; empty = off
+  baseUrl = (tostring(cfg.baseUrl or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')),
   -- KMR safety rating (decision 215): dsqAt; on = the key is set (empty = the rating is only shown)
   kmrRating = (function()
     local r = structKey('kmrRating', { dsqAt = 0 })
@@ -1230,8 +1243,11 @@ function CarRead.serviced(car, s)
   end
   return false
 end
--- Stopped at its own pit place: the game's own reading (SDK car.isInPit: "parked in its pit stop place")
-function CarRead.parked(car) return car.isInPit end
+-- Stopped at its own pit place (question 39, organizer 01/10: "SIGO A RECOMENDAÇÃO"): the game's reading (SDK
+-- car.isInPit) and the car stopped. The game says isInPit within about 1.5 m of the pit position at any speed (log of
+-- 30/09 22:06: true at 23.51 and 7.25 km/h); stopped measured there at 0.14 to 0.42 km/h
+CarRead.PARKED_KMH = 1
+function CarRead.parked(car) return car.isInPit and CarRead.num(car.speedKmh) < CarRead.PARKED_KMH end
 -- Moving: any speed
 function CarRead.moving(car) return car.speedKmh > 0 end
 -- Setup values as shown (value x displayMultiplier), by setup section name (WING_1, SPRING_RATE_LF ...); '-' for an item
@@ -1803,6 +1819,103 @@ do
   Record.onSave = RecordSync.publish
 end
 -- ============================================================
+-- Base online: the fourth layer of the records (organizer: "NÃO PODE PERDER A TROCA DO PILOTO", decision 41;
+-- Arquitetura — persistência 11.9: Cloudflare Workers + D1, at no cost, recording local and on the server; Desenho —
+-- frente E, 8). Every record saved by this car goes also to the base of the event, in batches: one request at a time,
+-- BASE_GAP apart, the newest record of each list. A script that starts asks the base for the records of its car and
+-- the track record of the session, so a driver swap or a reconnection with nobody else on the server keeps everything
+-- (item of security S1). The base answers as the other drivers do: a record as new or newer than the local one wins
+-- (RecordSync.pending, the restorers compare the versions). The checksum of each record is checked here, as for the
+-- other drivers (Record.decode). Key baseUrl empty: off, as before. Requests by web.request (SDK, lib_web.lua).
+-- ============================================================
+
+RecordSync.base = { queue = {}, nextT = 0, busy = false, failLogged = false }
+-- Helpers kept inside this block: the whole script is one chunk, limited to 200 local variables
+do
+  local BASE_GAP = 5
+  local B = RecordSync.base
+
+  local function on() return config.baseUrl ~= '' and web ~= nil and web.request ~= nil end
+
+  local function jsonStr(s)
+    return '"' .. tostring(s):gsub('[%c"\\]', function(c)
+      if c == '"' then return '\\"' elseif c == '\\' then return '\\\\' end
+      return string.format('\\u%04x', c:byte())
+    end) .. '"'
+  end
+
+  local function urlEncode(s)
+    return (tostring(s):gsub('[^%w%-%._~]', function(c) return string.format('%%%02X', c:byte()) end))
+  end
+
+  -- A record of this car was saved: kept for the next batch (a newer one of the same list replaces it)
+  function B.push(list, seq, text)
+    if on() then B.queue[list] = text end
+  end
+
+  -- The batch: at most one request at a time; a batch not accepted goes back to the queue
+  function B.update()
+    if not on() or B.busy or state.ui.clock < B.nextT or next(B.queue) == nil then return end
+    local sent, parts = B.queue, {}
+    B.queue = {}
+    for _, text in pairs(sent) do parts[#parts + 1] = jsonStr(text) end
+    B.busy, B.nextT = true, state.ui.clock + BASE_GAP
+    local body = '{"key":' .. jsonStr(Record.key()) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '')
+      .. ',"records":[' .. table.concat(parts, ',') .. ']}'
+    web.request('POST', config.baseUrl .. '/v1/batch', { ['Content-Type'] = 'application/json' }, body,
+      function(err, res)
+        B.busy = false
+        if err or not res or (tonumber(res.status) or 0) >= 300 then
+          for list, text in pairs(sent) do if B.queue[list] == nil then B.queue[list] = text end end
+          if not B.failLogged then
+            B.failLogged = true
+            ac.log('race-control: base online not reached (' .. tostring(err or (res and res.status)) .. '): kept to send again')
+          end
+        elseif B.failLogged then
+          B.failLogged = false
+          ac.log('race-control: base online reached again')
+        end
+      end)
+  end
+
+  -- A new start of this script: the records of this car and the track record of the session from the base
+  function B.askOwn()
+    if not on() then return end
+    local key = Record.key()
+    local function ask(path, apply)
+      web.request('GET', config.baseUrl .. path .. '?key=' .. urlEncode(key), nil, nil, function(err, res)
+        if err or not res or tonumber(res.status) ~= 200 then
+          ac.log('race-control: base online ' .. path .. ' not read (' .. tostring(err or (res and res.status)) .. ')')
+          return
+        end
+        for line in tostring(res.body or ''):gmatch('[^\r\n]+') do
+          local rec = Record.decode(line)
+          if rec then apply(rec) end
+        end
+      end)
+    end
+    local function keep(rec, from)
+      local p = RecordSync.pending[rec.list]
+      if not p or rec.seq >= p.seq then
+        RecordSync.pending[rec.list] = { body = rec.body, seq = rec.seq }
+        ac.log('race-control: record ' .. rec.list .. ' ' .. rec.seq .. ' from the base online (' .. from .. ')')
+      end
+    end
+    ask('/v1/record', function(rec)
+      if rec.list ~= 'track' and Record.sameRace(rec.key, key) then keep(rec, 'own car') end
+    end)
+    ask('/v1/track', function(rec)
+      if rec.list == 'track' and Record.sameSession(rec.key, key) then keep(rec, 'track of the session') end
+    end)
+  end
+
+  local publish = Record.onSave
+  Record.onSave = function(list, seq, text)
+    if publish then publish(list, seq, text) end
+    B.push(list, seq, text)
+  end
+end
+-- ============================================================
 -- Link with the Race Control app (front E, decision 189: the app does only what the online script cannot). One channel,
 -- shared events (measured in M1: online script and app see each other's shared events; the sender comes with its ID,
 -- M9). Today: the pressure and wing of the pit stop preset (decision 201), written by the app with
@@ -2243,7 +2356,8 @@ end
 -- The clock of the pit window (decision 343, organizer 01/10): it freezes when the red flag is given and goes on at the
 -- restart, the green flag at the line on track (the end of the VSC after the red flag, or the lights out of a standing
 -- restart), counting down from where it stopped. Kept in the same record: <frozen ms in total>|<frozen since, server
--- ms, or empty>|<after the red flag, waiting for the green of the restart: 1 / 0>
+-- ms, or empty>|<after the red flag, waiting for the green of the restart: 1 / 0>|<track lights held by the race
+-- direction: RED, GREEN or empty> (organizer 01/10)
 -- ============================================================
 
 local TrackList = {
@@ -2256,10 +2370,11 @@ local TrackList = {
 do
   local function trackBody()
     local red = state.redFlag
-    return string.format('%s|%d|%s|%s|%s|%d|%s|%d', state.code80 or 'GREEN', math.floor(TrackList.since),
+    return string.format('%s|%d|%s|%s|%s|%d|%s|%d|%s', state.code80 or 'GREEN', math.floor(TrackList.since),
       red and 'RED' or '-', red and red.reason and (red.reason:gsub('[|\r\n]', ' ')) or '',
       state.restart and math.floor(state.restart.t0) or '', math.floor(TrackList.frozenMs),
-      TrackList.frozenSince and math.floor(TrackList.frozenSince) or '', state.postRed and 1 or 0)
+      TrackList.frozenSince and math.floor(TrackList.frozenSince) or '', state.postRed and 1 or 0,
+      state.lights or '')
   end
 
   local function trackSave()
@@ -2294,8 +2409,8 @@ do
 
   -- A track record (from this process or from the other drivers): applied when its change is newer than the one in force
   local function trackApply(body, source)
-    local kind, since, red, reason, rt, frozen, frozenSince, postRed =
-      tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)|?(%d*)|?(%d*)|?(%d?)$')
+    local kind, since, red, reason, rt, frozen, frozenSince, postRed, lights =
+      tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)|?(%d*)|?(%d*)|?(%d?)|?(%a*)$')
     since = tonumber(since)
     if not since or since <= TrackList.since then return false end
     local code80 = kind ~= 'GREEN' and kind or nil
@@ -2310,6 +2425,7 @@ do
     state.redFlag = red == 'RED' and { reason = reason ~= '' and reason or nil } or nil
     state.restart = (rt or '') ~= '' and { t0 = tonumber(rt) } or nil
     state.postRed = postRed == '1' or nil
+    state.lights = (lights == 'RED' or lights == 'GREEN') and lights or nil
     TrackList.frozenMs = tonumber(frozen) or 0
     TrackList.frozenSince = (frozenSince or '') ~= '' and tonumber(frozenSince) or nil
     TrackList.since = since
@@ -3231,7 +3347,17 @@ ac.onChatMessage(function(message, senderCarIndex)
     if kind then
       if DICT.code80Kinds[kind] then
         if not state.code80 then ac.log('race-control: CODE-80 start (' .. kind .. ')') end
-        if state.code80 ~= kind then
+        -- A neutralization given with the red flag up is the restart under it (organizer 01/10: "YELLOW VSC APÓS
+        -- VERMELHA TEM QUE RENDERIZAR VERDE ... É CRIAR A REGRA E FAZER ACONTECER"): the red flag goes down with it, as
+        -- RC REDFLAG OFF ALL, and the window clock waits for the green flag (decision 343)
+        local redDown = state.redFlag ~= nil and not state.restart
+        if redDown then
+          state.redFlag = nil
+          state.postRed = true
+          ac.log('race-control: red flag off: restart under the ' .. kind)
+          rcLog('Red flag off', 'restart under the ' .. kind)
+        end
+        if state.code80 ~= kind or redDown then
           state.code80 = kind
           TrackList.changed()
         end
@@ -5843,6 +5969,10 @@ end
 --   KMR <ID>: the client of the car asks its KMR numbers again (kmr stats, kmr money; decision 282: after a reset)
 --   Standing restart (decisions 293, 298): RESTART ALL [@<server time ms>] with the red flag up takes it off and starts
 --   the procedure (flags/restart.lua); RESTART OFF ALL before the green cancels it (red flag again)
+--   Green (organizer 01/10): GREEN ALL makes the track green at once: the red flag down and the CODE-80 over in the
+--   Race Control (the KMR has no command to end its VSC: it only expires); the track lights follow
+--   Track lights (organizer 01/10): LIGHTS RED ALL / LIGHTS GREEN ALL hold the pit exit and start lights of the track
+--   in that colour over everything; LIGHTS AUTO ALL gives them back to the state of the track
 -- Every command goes to the server log ([RC] line) and to the driver's message box; the car record is kept up to date.
 -- ============================================================
 
@@ -5956,6 +6086,23 @@ do
           rcLog(on and 'Red flag' or 'Red flag off', reason ~= '' and reason or '-')
           ac.log('race-control: red flag ' .. (on and 'on' or 'off') .. (reason ~= '' and (' - ' .. reason) or ''))
         end
+      end
+      -- Green: the track green at once (the red flag down, the CODE-80 over); the green of the restart (decision 343)
+      if body:upper():match('^%s*RC%s+GREEN%s+ALL') and not state.restart
+          and (state.redFlag or state.code80 or state.postRed) then
+        if state.code80 then state.code80Ended = true end
+        state.redFlag, state.code80, state.postRed = nil, nil, nil
+        TrackList.changed()
+        rcLog('Green flag', reason ~= '' and reason or '-')
+        ac.log('race-control: green flag by Race Control command (red flag down, CODE-80 over)')
+      end
+      -- Track lights held by the race direction, or given back to the state of the track
+      local lights = body:upper():match('^%s*RC%s+LIGHTS%s+(%a+)%s+ALL')
+      if (lights == 'RED' or lights == 'GREEN' or lights == 'AUTO') and (state.lights or 'AUTO') ~= lights then
+        state.lights = lights ~= 'AUTO' and lights or nil
+        TrackList.changed()
+        rcLog('Track lights', lights)
+        ac.log('race-control: track lights ' .. lights .. ' by Race Control command')
       end
       -- Standing restart: the time of the command (@ms, sent by the direction window) is the same on every client;
       -- typed by hand without it, the next whole 5 s of the server time
@@ -6142,7 +6289,7 @@ local Flags = { incidents = {}, own = 0, ownSince = nil, sentKind = 0, sentT = -
   sector = nil, lastLap = nil, lastLapSession = nil, ending = nil, endSession = nil, overLeader = nil,
   prevPitlane = nil, hudOff = false, redSent = 'off', redSentT = -1e9, redLocked = false, redLockT = 0, redWasUp = false,
   redSince = nil, redReceived = false, redPrevLane = nil, redSwaps = {}, mySwapMs = nil, restartUntil = nil,
-  swapSentT = -1e9, redOver = false, redOverSince = nil, localYellow = false, giveBack = {} }
+  swapSentT = -1e9, lightsSent = nil, lightsSentT = -1e9, redOver = false, redOverSince = nil, localYellow = false, giveBack = {} }
 do
   local INC = { none = 0, slow = 1, stopped = 2, broken = 3, oil = 4 }
   local INC_RESEND = 20        -- seconds: an incident in progress is told again (for who connects later)
@@ -6289,9 +6436,9 @@ do
       local kmh = CarRead.num(car.speedKmh)
       local over = not car.isInPitlane and cfg.redSpeedKmh > 0 and kmh > cfg.redSpeedKmh
       -- At the pit place: the lock on the first line, the restart place on the second (decision 264)
-      local atPlace = car.isInPit and restartText()
+      local atPlace = CarRead.parked(car) and restartText()
       red = { 1, 'red', TEXTS.flagRed, atPlace and TEXTS.flagRedLocked or TEXTS.flagRedLine, over and string.format(TEXTS.flagRedSpeed, cfg.redSpeedKmh, kmh)
-        or atPlace or (car.isInPit and TEXTS.flagRedLocked)
+        or atPlace or (CarRead.parked(car) and TEXTS.flagRedLocked)
         or ((state.ui.clock - (Flags.redSince or clock)) < cfg.redGraceSeconds and string.format(TEXTS.flagRedGrace,
           math.ceil(cfg.redGraceSeconds - (state.ui.clock - (Flags.redSince or clock)))))
         or (not car.isInPitlane and not Flags.redReceived and TEXTS.flagRedToLine)
@@ -6306,6 +6453,12 @@ do
     if state.code80 then
       yellow = { 2, 'yellow', TEXTS.flagCode80[state.code80] or state.code80, TEXTS.flagCode80Line,
         restartText() or TEXTS.flagRaceControl }
+    end
+    -- The pit exit of the race restart in single file (decision 342): the turn of this car on the second line of the
+    -- neutralization box, or its own box when the restart has no neutralization
+    if Flags.exitLine then
+      if yellow then yellow[5] = Flags.exitLine
+      else yellow = { 2, 'yellow', TEXTS.exitTitle, TEXTS.exitLine1, Flags.exitLine } end
     end
     -- Incidents of the other cars ahead
     local slow, slip
@@ -6414,6 +6567,47 @@ do
     local d = CarRead.num(car.splinePosition) - CarRead.num(c.splinePosition)
     if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
     return d
+  end
+
+  -- Race restart (decision 342, organizer 01/10: "4.2 JÁ ERA PARA ESTAR FEITO"): the red flag goes down, the pit light
+  -- turns green and the cars leave the pits in single file, in the restart order (decision 264: race position, then
+  -- the cars of a driver swap under the red flag); a car waits at its pit place and joins the file when the car
+  -- immediately ahead of it in that order passes it (moving, ahead of it in the pit lane, or out of the pit lane). The
+  -- leader of the order leaves at once. Leaving before the turn (question 58, organizer 01/10: "VAMOS APLICAR O
+  -- DRIVE-THROUGH CONFORME PROPOSTO"): a drive-through within restart.jumpLaps laps, as the jump start (decision 298),
+  -- and the line for the race direction. Until the green of the restart (state.postRed)
+  local function exitQueue(car)
+    if not state.postRed or not car.isInPitlane or sim.raceSessionType ~= ac.SessionType.Race
+        or state.dtDsqActive or state.pitDsqActive then
+      Flags.exitLine, Flags.exitWait = nil, nil
+      return
+    end
+    local k, aheadI = restartPlace()
+    local wait = false
+    if k and aheadI then
+      local c = ac.getCar(aheadI)
+      wait = c ~= nil and c.isConnected and (CarRead.parked(c) or (c.isInPitlane and sideOf(car, c) > 0))
+    end
+    if CarRead.parked(car) then
+      if wait ~= Flags.exitWait then
+        ac.log(string.format('race-control: race restart pit exit: %s', wait and ('waits for car ' .. aheadI)
+          or 'leaves now'))
+      end
+      Flags.exitWait = wait and aheadI or false
+      Flags.exitLine = wait and string.format(TEXTS.exitWait, carTag(aheadI))
+        or (aheadI and TEXTS.exitGo or TEXTS.exitFirst)
+    elseif Flags.exitWait ~= nil then
+      if Flags.exitWait then
+        ac.log('race-control: race restart: left the pits before car ' .. Flags.exitWait .. ' passed')
+        rcLog('Race restart', string.format(TEXTS.exitEarlyLog, carTag(Flags.exitWait)))
+        if listAdd('PX', config.restart.jumpLaps) then
+          Rules.finalize()
+          rcLog('Drive-through', TEXTS.reason.PX)
+          showNotice(TEXTS.rcTitle, TEXTS.reason.PX)
+        end
+      end
+      Flags.exitLine, Flags.exitWait = nil, nil
+    end
   end
 
   -- Yellow flag (decision 267): while the flag box shows the yellow of an incident (or of the game), no overtaking,
@@ -6579,6 +6773,14 @@ do
     end
     return nil
   end
+  -- A session start (another index, or the start / restart event of the SDK, which keeps the index): nothing of the
+  -- end of the session before stays (finding of 01/10: the chequered box of the session before stayed open in the next
+  -- one, also on track; a restarted session keeps its index, so the index alone does not clear it)
+  function Flags.sessionReset()
+    Flags.endSession, Flags.ending, Flags.overLeader, Flags.prevPitlane = nil, nil, nil, nil
+    Flags.lastLap, Flags.lastLapSession, Flags.sector, Flags.greenUntil, Flags.lastGroup = nil, nil, nil, 0, nil
+  end
+
   -- End of the session and the last lap of the race by laps (decision 257)
   local function sessionEnd(car, lineFrame)
     if Flags.endSession ~= sim.currentSessionIndex then
@@ -6667,8 +6869,14 @@ do
       Flags.redSent, Flags.redSentT = ev, state.ui.clock
       ac.broadcastSharedEvent(RED_TRACK_EVENT, ev)
     end
+    -- The track lights held by the race direction (RC LIGHTS): 'red' / 'green' every 2 s while held, 'auto' once
+    local lt = state.lights and state.lights:lower() or 'auto'
+    if lt ~= Flags.lightsSent or (state.lights and state.ui.clock - Flags.lightsSentT >= 2) then
+      Flags.lightsSent, Flags.lightsSentT = lt, state.ui.clock
+      ac.broadcastSharedEvent('race-control.lights', lt)
+    end
     local ownLock = state.pitService or state.dtDsqActive or state.pitDsqActive
-    if up and car.isInPit and not ownLock then
+    if up and CarRead.parked(car) and not ownLock then
       if not Flags.redLocked or state.ui.clock >= Flags.redLockT then
         physics.lockUserControlsFor(3)
         Flags.redLocked, Flags.redLockT = true, state.ui.clock + 2
@@ -6702,6 +6910,7 @@ do
     publish(car)
     redRules(car, lineFrame)
     restartUpdate()
+    exitQueue(car)
     if Flags.standingUpdate then Flags.standingUpdate(car) end
     yellowRules(car)
     Flags.current = pick(car)
@@ -7162,7 +7371,7 @@ do
     RaceTable.passes[c.index] = ps
     if c.isInPitlane then
       ps.lane = true
-      if c.isInPit then ps.parked = true end
+      if CarRead.parked(c) then ps.parked = true end
     elseif ps.lane then
       if ps.parked then
         RaceTable.stops[c.index] = (RaceTable.stops[c.index] or 0) + 1
@@ -8542,6 +8751,10 @@ Desktop.commands = {
     { 'RC REDFLAG OFF ALL', 'red flag off: rolling restart under the VSC' },
     { 'RC RESTART ALL', 'standing restart, red flag up (STANDING RESTART button)' },
     { 'RC RESTART OFF ALL', 'cancels the standing restart before the green' },
+    { 'RC GREEN ALL', 'track green at once: red flag down, CODE-80 over (GREEN button)' },
+    { 'RC LIGHTS RED ALL', 'pit exit and start lights of the track held red (LIGHTS RED button)' },
+    { 'RC LIGHTS GREEN ALL', 'pit exit and start lights of the track held green (LIGHTS GREEN button)' },
+    { 'RC LIGHTS AUTO ALL', 'track lights back to the state of the track (LIGHTS AUTO button)' },
   } },
   { key = 'kmr', title = 'KMR', how = 'KMR chat: /kmr login <password> once, then /kmr <command> - or the KMR console', rows = {
     { 'help', 'shows a full list of commands' },
@@ -10509,8 +10722,8 @@ local drawRaceScreens = (function()
   local function raceScreen(car, w, h, s)
     local me = RaceTable.byIndex[0]
     local session = ac.getSession(sim.currentSessionIndex)
-    -- Height: 3 rows, a category and 3 gap rows, a category and 2 rows of chips, 5 rows, the 3 separators
-    local content = 3 * ROW + SEP + ROW + 3 * ROW + SEP + ROW + 2 * CHIP_H + CHIP_GAP + 4 + SEP + 5 * ROW + 4
+    -- Height: 3 rows, a category and 3 gap rows, a category and 2 rows of chips, 7 rows, the 3 separators
+    local content = 3 * ROW + SEP + ROW + 3 * ROW + SEP + ROW + 2 * CHIP_H + CHIP_GAP + 4 + SEP + 7 * ROW + 4
     local p1, p2, y = frame('race', w, h, s, content / ROW, TEXTS.scrRace, TEXTS.sessionName[sim.raceSessionType] or '')
     local x0, xr = p1.x + 14 * s, p2.x - 14 * s
     local function line(label, value, color)
@@ -10572,19 +10785,28 @@ local drawRaceScreens = (function()
     chip2(vec2(x0 + cw + CHIP_GAP * s, y + cy), cw, s, TEXTS.scrStintLine, stint, stintLight)
     y = y + (2 * CHIP_H + CHIP_GAP + 4) * s
     sep()
-    -- Tyres, track, pending, KMR points and safety rating
+    -- Tyres, track, pending, KMR points and safety rating, and the KMR crashes and infractions of this driver with their
+    -- rate per 100 km (organizer 01/10: "SÃO AS BATIDAS E AS INFRAÇÕES DO KMR QUE TEM QUE ENTRAR ALI"; the answer of
+    -- kmr stats, decision 278)
     local life = CarRead.tyreLife(car, 0, state.tyreLineKm[0] or 0)
     local wet = CarRead.num(sim.rainWetness) > 0.05
     local pen = Panel.cellPenalties()
     local kmr = Audit.points and string.format('%d / %d', Audit.points, config.kmrPoints.limit) or '-'
     local rt = config.kmrRating
     local rating = Audit.rating and Audit.num(Audit.rating) or '-'
+    local function per100(n, rate)
+      if Audit.noStats then return TEXTS.scrKmrNone end
+      if n == nil then return '-' end
+      return rate and string.format('%d - %.2f / 100 km', n, rate) or tostring(n)
+    end
     for _, l in ipairs({
       { TEXTS.scrTyres, string.format('%d laps%s', state.tyreLaps[0] or 0, life and string.format(' - %d%%', math.floor(life)) or '') },
       { TEXTS.scrTrack, string.format('%s - grip %d%%', wet and 'WET' or 'DRY', math.floor(CarRead.num(sim.roadGrip) * 100)) },
       { TEXTS.scrPending, pen and pen.value or '-', pen and ORANGE },
       { TEXTS.scrKmr, kmr, Audit.points and Audit.points >= config.kmrPoints.limit * 0.8 and RED or nil },
-      { TEXTS.scrKmrRating, rating, rt.on and Audit.rating and Audit.rating <= rt.dsqAt and RED or nil } }) do
+      { TEXTS.scrKmrRating, rating, rt.on and Audit.rating and Audit.rating <= rt.dsqAt and RED or nil },
+      { TEXTS.scrKmrCrashes, per100(Audit.crashes, Audit.crashRate) },
+      { TEXTS.scrKmrInfr, per100(Audit.infractions, Audit.infractionRate) } }) do
       row(p1, y, s, { { l[1], 14, COLOR_DIM, false, FONT_TEXT }, { l[2], 286, l[3] or COLOR_TITLE, true } })
       y = y + ROW * s
     end
@@ -11842,13 +12064,13 @@ local drawDesktopUI = (function()
           if state.redFlag then queueCommand('/kmr admin_say RC REDFLAG OFF ALL') end
         end)
       end
-      -- GREEN takes the red flag off (restart with the green at once). With the VSC of the KMR on (no command of the KMR
-      -- ends it), the VSC is deployed again for 1 s so that it ends at once (finding of 30/09; to measure in the game)
-      x = chip(TEXTS.redGreen, vec2(x, y), s, false, (red or state.code80) and PANEL_COLORS.green or COLOR_OFF, function()
-        if state.redFlag then
-          sendKmr('admin_say RC REDFLAG OFF ALL', 'GREEN')
-        elseif state.code80 then
-          sendKmr('virtual_safety_car_deploy 1', 'GREEN - VSC 1 s')
+      -- GREEN: the track green at once in the Race Control (RC GREEN ALL: the red flag down, the CODE-80 over; organizer
+      -- 01/10: not depending on anything). The KMR has no command to end its VSC (it only expires): with it on, the VSC
+      -- of the KMR is deployed again for 1 s so that it ends too (finding of 30/09; to measure in the game)
+      x = chip(TEXTS.redGreen, vec2(x, y), s, false, (red or state.code80 or state.postRed) and PANEL_COLORS.green or COLOR_OFF, function()
+        if state.redFlag or state.code80 or state.postRed then
+          if state.code80 then queueCommand('/kmr virtual_safety_car_deploy 1') end
+          sendKmr('admin_say RC GREEN ALL', 'GREEN')
         else
           Direction.status, Direction.statusT, Direction.statusColor = TEXTS.dirNoRed, state.ui.clock, PANEL_COLORS.yellow
         end
@@ -11868,7 +12090,17 @@ local drawDesktopUI = (function()
       y = y + 22 * s
       -- Session
       x = confirmChip(TEXTS.dirNextSession, 'next', vec2(x0, y), s, nil, function() sendKmr('admin_next_session', 'NEXT SESSION') end)
-      confirmChip(TEXTS.dirRestart, 'restart', vec2(x, y), s, nil, function() sendKmr('admin_restart_session', 'RESTART SESSION') end)
+      x = confirmChip(TEXTS.dirRestart, 'restart', vec2(x, y), s, nil, function() sendKmr('admin_restart_session', 'RESTART SESSION') end)
+      -- Track lights (organizer 01/10): held red or green by the race direction over the state of the track, or back to
+      -- it (AUTO); lit chip = the state in force
+      x = x + 10 * s
+      for _, lt in ipairs({ { 'RED', TEXTS.dirLightsRed, PANEL_COLORS.red }, { 'GREEN', TEXTS.dirLightsGreen, PANEL_COLORS.green },
+          { 'AUTO', TEXTS.dirLightsAuto, nil } }) do
+        local on = (state.lights or 'AUTO') == lt[1]
+        x = chip(lt[2], vec2(x, y), s, on, on and lt[3] or nil, function()
+          sendKmr('admin_say RC LIGHTS ' .. lt[1] .. ' ALL', lt[2])
+        end)
+      end
       y = y + 22 * s
     end
     -- The answer of the KMR can be long (finding of 30/09: a hash out of the window): cut to the width of the window
@@ -12652,6 +12884,7 @@ function script.update(dt)
       state.redFlag = nil
       state.restart = nil
       state.postRed = nil
+      state.lights = nil
     end
     l.curLap = lapCount
     state.lastSessionIndex = sim.currentSessionIndex
@@ -12667,6 +12900,7 @@ function script.update(dt)
     state.dtDsqActive = false
     state.code80 = nil
     state.code80Ended = false
+    Flags.sessionReset()
     Start.reset()
     state.pitPaid = nil
     Audit.askAt = nil
@@ -12717,6 +12951,7 @@ function script.update(dt)
     SwapRecord.apply(Record.load('swap'))
     -- The records of this car kept by the other drivers (reconnection, restarted game, driver swap)
     RecordSync.askOwn()
+    RecordSync.base.askOwn()
     ac.log(string.format('race-control: laps car=%d leaderboard=%s server time=%d ms', lapCount,
       tostring(leaderboardLaps()), serverTimeMs()))
     state.ui.lastSeq = l.seq
@@ -12729,6 +12964,7 @@ function script.update(dt)
   CarRead.updateMotion(car)
   OnlineQueue.update()
   RecordSync.update()
+  RecordSync.base.update()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
     state.hold = nil
     PitRecord.save()
