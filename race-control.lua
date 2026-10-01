@@ -53,6 +53,7 @@ local cfg = ac.configValues({
   kmrRating = '',
   kmrStatsUrl = '',
   baseUrl = '',
+  gameHud = 'hide',
   practiceDriverSwap = 0,
   qualifyDriverSwap = 0,
   raceDriverSwap = 0,
