@@ -1,4 +1,4 @@
--- race-control app (apps/lua/race-control) — CSP Lua app (12h Curitiba)
+-- race-control app (apps/lua/race-control) — Racing Control, CSP Lua app (AMX Racing)
 --
 -- ============================================================================================================
 -- LEGAL NOTICE
@@ -74,8 +74,8 @@ if ac.getSim().isOnlineRace then
     end
   end, 5)
 end
-local APP_REQUEST = '12hcuritiba.race-control.preset'
-local APP_ANSWER = '12hcuritiba.race-control.preset.done'
+local APP_REQUEST = 'amxracing.race-control.preset'
+local APP_ANSWER = 'amxracing.race-control.preset.done'
 local TRACK_ID = 'amx_curitiba'
 local CHECK_SECONDS, CLOSE_SECONDS = 60, 10
 local heard, elapsed, closed = false, 0, false
@@ -85,7 +85,7 @@ if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK
     if heard or closed or elapsed < CHECK_SECONDS then return end
     local left = math.max(CHECK_SECONDS + CLOSE_SECONDS - elapsed, 0)
     if elapsed == CHECK_SECONDS then ac.log('race-control app: the online script is not running: the game closes') end
-    ac.setMessage('RACE CONTROL NOT RUNNING', string.format('The online script of the event did not start - the game '
+    ac.setMessage('RACING CONTROL NOT RUNNING', string.format('The online script of the event did not start - the game '
       .. 'closes in %d s. Tell the organizer.', left), 'illegal', 1.5)
     pcall(physics.lockUserControlsFor, 3)
     if left <= 0 then
