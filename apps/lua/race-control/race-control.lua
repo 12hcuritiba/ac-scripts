@@ -79,6 +79,7 @@ local APP_ANSWER = 'amxracing.race-control.preset.done'
 local TRACK_ID = 'amx_curitiba'
 local CHECK_SECONDS, CLOSE_SECONDS = 60, 10
 local heard, elapsed, closed = false, 0, false
+local PING_SAMPLES = 10
 local guard = {}
 local function guardEnd(why)
   if not guard.on then return end
@@ -87,35 +88,110 @@ local function guardEnd(why)
   guard.list = {}
   ac.log('race-control app: guard off (' .. why .. ')')
 end
+local function pingState()
+  local s = guard.pings or {}
+  local now = s[#s]
+  local dev = 0
+  if #s >= 3 then
+    local sum = 0
+    for _, v in ipairs(s) do sum = sum + v end
+    local mean = sum / #s
+    local sq = 0
+    for _, v in ipairs(s) do sq = sq + (v - mean) ^ 2 end
+    dev = math.sqrt(sq / #s)
+  end
+  local high = now and guard.pingLimit and now > guard.pingLimit
+  local unstable = guard.pingDeviation and #s >= 3 and dev > guard.pingDeviation
+  return now, dev, high, unstable
+end
+local function guardBox()
+  local size = ac.getUI().windowSize
+  local s = math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3)
+  local w, h = 560 * s, 92 * s
+  local p1 = vec2(math.floor(size.x / 2 - w / 2), math.floor(size.y * 0.18))
+  local p2 = vec2(p1.x + w, p1.y + h)
+  local now, dev, high, unstable = pingState()
+  local bad = high or unstable
+  local border = bad and rgbm(1, 0.3, 0.3, 1) or rgbm(1, 0.85, 0.25, 1)
+  ui.drawRectFilled(p1, p2, rgbm(0.04, 0.04, 0.05, 0.92), 8 * s)
+  ui.drawRect(p1, p2, border, 8 * s, nil, 1.5 * s)
+  local function line(text, font, size_, y, color)
+    ui.pushDWriteFont(font)
+    ui.dwriteDrawText(text, size_ * s, vec2(p1.x + 16 * s, p1.y + y * s), color)
+    ui.popDWriteFont()
+  end
+  local left = math.max(CHECK_SECONDS - elapsed, 0)
+  line('RACING CONTROL - LOADING', 'Segoe UI;Weight=Bold', 14, 6, rgbm(0.96, 0.96, 0.96, 1))
+  line(string.format('Waiting for the Racing Control of the event - please wait (the game closes in %d s if it does not load)', left + CLOSE_SECONDS),
+    'Segoe UI;Weight=SemiBold', 11, 28, rgbm(1, 0.85, 0.25, 1))
+  local ping
+  if not now or now < 0 then ping = 'Connection: ping not known yet'
+  elseif high then ping = string.format('Connection problem: ping %d ms, over the limit of %d ms of the server - check your internet', now, guard.pingLimit)
+  elseif unstable then ping = string.format('Connection problem: unstable ping (%d ms, varying %d ms) - check your internet', now, math.floor(dev + 0.5))
+  else ping = string.format('Connection: ping %d ms', now) end
+  line(ping, 'Consolas', 11, 50, bad and rgbm(1, 0.3, 0.3, 1) or rgbm(0.6, 0.63, 0.65, 1))
+  line(string.format('%d messages held for the Racing Control', guard.swallowed), 'Consolas', 10, 68, rgbm(0.6, 0.63, 0.65, 1))
+end
 if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
   local mode = 'hide'
   local okX, extras = pcall(ac.INIConfig.onlineExtras)
-  local okK, key = pcall(function() return extras and extras:get('SCRIPT_1', 'gameHud', '') end)
-  if okX and okK and key and tostring(key) ~= '' then mode = tostring(key):lower():match('^%s*(%a+)') or 'hide' end
-  guard = { on = true, list = {}, swallowed = 0 }
+  local function key(name)
+    local ok, v = pcall(function() return extras and extras:get('SCRIPT_1', name, '') end)
+    return ok and v and tostring(v) or ''
+  end
+  if okX and key('gameHud') ~= '' then mode = key('gameHud'):lower():match('^%s*(%a+)') or 'hide' end
+  guard = { on = true, list = {}, swallowed = 0, pings = {} }
+  local pingKey = key('ping')
+  guard.pingLimit = tonumber(pingKey:match('limit%s*:%s*(%d+)'))
+  guard.pingDeviation = tonumber(pingKey:match('deviation%s*:%s*(%d+)'))
   local function keep(d) if d then guard.list[#guard.list + 1] = d end end
-  keep(ac.onChatMessage(function()
+  keep(ac.onChatMessage(function(message, carIndex)
     if not guard.on then return end
     guard.swallowed = guard.swallowed + 1
+    ac.log('race-control app: guard, chat held (car ' .. tostring(carIndex) .. '): ' .. tostring(message))
     return true
   end))
+  if ac.onMessage then
+    keep(ac.onMessage(function(title, description)
+      if not guard.on then return end
+      guard.swallowed = guard.swallowed + 1
+      ac.log('race-control app: guard, game message held: ' .. tostring(title or '') .. ' - ' .. tostring(description or ''))
+    end))
+  end
   keep(ac.blockSystemMessages('.'))
-  if mode ~= 'show' and ui.onExclusiveHUD then
+  if ui.onExclusiveHUD then
     keep(ui.onExclusiveHUD(function(m)
-      if not guard.on or m ~= 'game' then return end
+      if not guard.on or (m ~= 'game' and m ~= 'menu') then return end
+      guardBox()
+      if m ~= 'game' or mode == 'show' then return end
       return mode == 'hideall' and true or 'apps'
     end))
   end
-  ac.log('race-control app: guard on until the online script runs (gameHud ' .. mode .. ', key '
-    .. (okX and extras and 'read' or 'not read') .. ')')
+  ac.log('race-control app: guard on until the online script runs (gameHud ' .. mode .. ', ping key '
+    .. (pingKey ~= '' and pingKey or 'none') .. ', server options ' .. (okX and extras and 'read' or 'not read') .. ')')
   setInterval(function()
     elapsed = elapsed + 1
-    if heard then guardEnd('online script running, ' .. guard.swallowed .. ' chat lines swallowed') end
+    if guard.on then
+      local car = ac.getCar(0)
+      local ping = car and tonumber(car.ping)
+      if ping and ping >= 0 then
+        guard.pings[#guard.pings + 1] = ping
+        if #guard.pings > PING_SAMPLES then table.remove(guard.pings, 1) end
+        local _, dev, high, unstable = pingState()
+        if (high or unstable) and not guard.pingTold then
+          guard.pingTold = true
+          ac.log(string.format('race-control app: guard, connection problem: ping %d ms, deviation %.0f ms', ping, dev))
+        end
+      end
+    end
+    if heard then guardEnd('online script running, ' .. guard.swallowed .. ' messages held') end
     if heard or closed or elapsed < CHECK_SECONDS then return end
     local left = math.max(CHECK_SECONDS + CLOSE_SECONDS - elapsed, 0)
     if elapsed == CHECK_SECONDS then
+      local now, dev = pingState()
       guardEnd('online script not running')
-      ac.log('race-control app: the online script is not running: the game closes')
+      ac.log(string.format('race-control app: the online script is not running: the game closes (ping %s ms, deviation %.0f ms)',
+        tostring(now or '-'), dev))
     end
     ac.setMessage('RACING CONTROL NOT RUNNING', string.format('The online script of the event did not start - the game '
       .. 'closes in %d s. Tell the organizer.', left), 'illegal', 1.5)
@@ -132,7 +208,7 @@ ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
     return
   end
   heard = true
-  if guard.on then guardEnd('online script running, ' .. guard.swallowed .. ' chat lines swallowed') end
+  if guard.on then guardEnd('online script running, ' .. guard.swallowed .. ' messages held') end
   if tostring(data or '') == '' then
     ac.broadcastSharedEvent(APP_ANSWER, '')
     return
