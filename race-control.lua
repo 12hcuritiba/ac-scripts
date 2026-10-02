@@ -7317,33 +7317,33 @@ local FONT_TITLE = 'Segoe UI;Weight=Bold'
 local FONT_TEXT = 'Segoe UI;Weight=SemiBold'
 local FONT_MONO = 'Consolas'
 do
-  local MONO = { 'Roboto Mono;Weight=Medium', 'Roboto Mono', 'Roboto Mono Medium' }
+  local function face(file, style, names)
+    local out = {}
+    for _, n in ipairs(names) do out[#out + 1] = n .. style end
+    for _, n in ipairs(names) do out[#out + 1] = n .. ':@System' .. style end
+    out[#out + 1] = names[1] .. ':content/fonts/race-control-' .. file .. '.ttf' .. style
+    out[#out + 1] = names[1] .. ':apps/lua/race-control/fonts/' .. file .. '.ttf' .. style
+    out[#out + 1] = names[1] .. ':content/fonts' .. style
+    out[#out + 1] = names[1] .. ':apps/lua/race-control/fonts' .. style
+    return out
+  end
+  local MONO = face('roboto-mono-500', ';Weight=Medium', { 'Roboto Mono', 'Roboto Mono Medium' })
   Desktop.text = { id = 'segoe', min = 0, minPx = 0, sets = {
     { id = 'segoe', name = 'Segoe UI', title = 'Segoe UI;Weight=Bold', text = 'Segoe UI;Weight=SemiBold', mono = 'Consolas' },
-    { id = '12h', name = '12h Curitiba', title = { 'Oswald;Weight=SemiBold', 'Oswald', 'Oswald SemiBold' },
-      text = { 'Raleway Thin;Weight=SemiBold', 'Raleway Thin', 'Raleway Thin SemiBold', 'Raleway;Weight=SemiBold' }, mono = MONO, files = true },
-    { id = 'titillium', name = 'Titillium Web', title = { 'Titillium Web;Weight=Bold', 'Titillium Web Bold' },
-      text = { 'Titillium Web;Weight=SemiBold', 'Titillium Web SemiBold' }, mono = MONO, files = true },
-    { id = 'barlow', name = 'Barlow', title = { 'Barlow Condensed;Weight=SemiBold', 'Barlow Condensed SemiBold' },
-      text = { 'Barlow;Weight=SemiBold', 'Barlow SemiBold' }, mono = MONO, files = true },
-    { id = 'rajdhani', name = 'Rajdhani', title = { 'Rajdhani;Weight=Bold', 'Rajdhani Bold' },
-      text = { 'Rajdhani;Weight=SemiBold', 'Rajdhani SemiBold' }, mono = MONO, files = true },
+    { id = '12h', name = '12h Curitiba', title = face('oswald-600', ';Weight=SemiBold', { 'Oswald', 'Oswald SemiBold' }),
+      text = face('raleway-600', ';Weight=SemiBold', { 'Raleway Thin', 'Raleway Thin SemiBold', 'Raleway' }), mono = MONO, files = true },
+    { id = 'titillium', name = 'Titillium Web', title = face('titillium-web-700', ';Weight=Bold', { 'Titillium Web', 'Titillium Web Bold' }),
+      text = face('titillium-web-600', ';Weight=SemiBold', { 'Titillium Web', 'Titillium Web SemiBold' }), mono = MONO, files = true },
+    { id = 'barlow', name = 'Barlow', title = face('barlow-condensed-600', ';Weight=SemiBold', { 'Barlow Condensed', 'Barlow Condensed SemiBold' }),
+      text = face('barlow-600', ';Weight=SemiBold', { 'Barlow', 'Barlow SemiBold' }), mono = MONO, files = true },
+    { id = 'rajdhani', name = 'Rajdhani', title = face('rajdhani-700', ';Weight=Bold', { 'Rajdhani', 'Rajdhani Bold' }),
+      text = face('rajdhani-600', ';Weight=SemiBold', { 'Rajdhani', 'Rajdhani SemiBold' }), mono = MONO, files = true },
     { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
       text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
   } }
-  local function withSystem(list)
-    local out = {}
-    for _, n in ipairs(list) do out[#out + 1] = n end
-    for _, n in ipairs(list) do
-      local fam, style = n:match('^([^;]+)(.*)$')
-      out[#out + 1] = fam .. ':@System' .. style
-    end
-    return out
-  end
   for _, f in ipairs(Desktop.text.sets) do
     f.ready = f.files == nil
     if f.files then
-      f.title, f.text, f.mono = withSystem(f.title), withSystem(f.text), withSystem(f.mono)
       f.names = { title = f.title, text = f.text, mono = f.mono }
       f.title, f.text, f.mono = f.title[1], f.text[1], f.mono[1]
     end
@@ -7376,7 +7376,9 @@ function Desktop.fontCheck()
         for _, spec in ipairs(f.names[face]) do
           if not absent(spec) then got = spec break end
         end
-        if got then f[face] = got; used[#used + 1] = got else missing[#missing + 1] = table.concat(f.names[face], ' / ') end
+        if got then f[face] = got; used[#used + 1] = got
+        elseif face == 'mono' then f.mono = 'Consolas'; used[#used + 1] = 'Consolas (numbers; Roboto Mono not loaded)'
+        else missing[#missing + 1] = table.concat(f.names[face], ' / ') end
       end
       f.ready = #missing == 0
       ac.log(string.format('race-control: font %s %s (%s)', f.id, f.ready and 'found' or 'missing',
