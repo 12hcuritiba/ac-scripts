@@ -280,6 +280,7 @@ local TEXTS = {
   dsqTitle = 'DISQUALIFIED',
   dsqStop = 'Stop at your pit before the line',
   dsqTow = 'Car withdrawn - return to pits',
+  dsqOut = 'Out of the session - controls locked',
   dsqSafety = 'Safety hazard - damage beyond the safety limit',
   editedFile = 'Edited file',
   editedFileDetail = 'record %s - car %d - ban pending',
@@ -361,7 +362,7 @@ local TEXTS = {
   exitTitle = 'RACE RESTART', exitLine1 = 'Pit exit in single file - restart order',
   exitWait = 'Wait at your pit place - leave after %s passes', exitGo = 'Your turn - leave the pits now, single file',
   exitFirst = 'First of the restart order - leave the pits now', exitEarlyLog = 'Left the pits before %s passed (out of the restart order)',
-  scrKmrRating = 'KMR rating', scrKmrCrashes = 'KMR crashes', scrKmrInfr = 'KMR infractions',
+  scrKmrRating = 'KMR rating', scrKmrCrashes = 'KMR crashes', scrKmrInfr = 'KMR infractions', scrKmrKm = 'KMR distance',
   scrKmrNone = 'none yet',
   sessionName = { [ac.SessionType.Practice] = 'PRACTICE', [ac.SessionType.Qualify] = 'QUALIFY', [ac.SessionType.Race] = 'RACE' },
   edTitle = 'SCREENS', edPitDesk = 'Pit desktop', edDeskOf = 'Desktop %s of %d', edHint = 'drag a screen to its place - title line moves this window',
@@ -426,7 +427,9 @@ local TEXTS = {
   edChoose = 'Click a screen to choose it and drag it to its place',
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
-    weather = 'Weather', map = 'Track map' },
+    weather = 'Weather', map = 'Track map', telemetry = 'Telemetry' },
+  scrTelemetry = 'TELEMETRY',
+  teleChannels = { thr = 'THR', brk = 'BRK', clu = 'CLU', str = 'STR', spd = 'SPD', gear = 'GEAR', glat = 'G LAT', glon = 'G LON' },
   scrClassSel = '< CLASS: %s >', scrLapsCar = 'LAPS - CAR #%s', scrLapsMore = 'MORE', scrLapsLess = 'LESS',
   scrCompare = 'COMPARE', scrDriverSel = '< DRIVER: %s >', scrStintShort = 'ST %d', scrMap = 'TRACK MAP', scrNoMap = 'No map of this track',
   scrMapLegend = { 'yellow you - blue lap ahead - beige lap down', 'grey pit - red stopped' },
@@ -1514,6 +1517,7 @@ do
         pt = { 'acidentes: (%d+) %(per 100km: ([%d%.,]+)', 'batidas: (%d+) %(batidas por 100km: ([%d%.,]+)' } },
       infractions = { en = { 'driving infractions: (%d+) %(per 100km: ([%d%.,]+)' },
         pt = { 'infrações de pilotagem: (%d+) %(per 100km: ([%d%.,]+)', 'infracoes de pilotagem: (%d+) %(per 100km: ([%d%.,]+)' } },
+      distance = { en = { 'driven distance: ([%d%.,]+)%s*km' }, pt = { 'distância pilotada: ([%d%.,]+)%s*km', 'distancia pilotada: ([%d%.,]+)%s*km' } },
       noStats = { en = { 'no stats to show yet' }, pt = { 'sem status para mostrar ainda' } },
       ratingNow = { en = { 'you now have ' .. N, 'you have ' .. N .. '%S* in your account' },
         pt = { 'voce agora possui ' .. N, 'agora voce possui ' .. N, 'voce possui ' .. N .. '%S* na sua conta' } },
@@ -2067,6 +2071,8 @@ do
     local function n(x) return tonumber((tostring(x or ''):gsub(',', '.'))) end
     if c then Audit.crashes, Audit.crashRate, Audit.noStats = tonumber(c), n(cr), false end
     if i then Audit.infractions, Audit.infractionRate = tonumber(i), n(ir) end
+    local km = DICT.match(low, DICT.kmr.distance)
+    if km then Audit.km = n(km) end
     if c or i then ac.log('race-control: KMR driving stats: ' .. message) end
     if not c and DICT.match(low, DICT.kmr.noStats) then
       Audit.noStats = true
@@ -3535,13 +3541,50 @@ do
   local ROWS = { 'fuel', 'compound', 'tyres', 'suspension', 'powertrain', 'body', 'mode' }
   PitBox.preset = {}
   local function presetSpinners()
-    local out = {}
+    local out, byName = {}, {}
     for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
-      if (sp.type == 'pressure' or sp.type == 'wing') and not sp.readOnly then out[#out + 1] = sp end
+      if (sp.type == 'pressure' or sp.type == 'wing') and not sp.readOnly then
+        local same = byName[sp.name]
+        if same then same.n = same.n + 1
+        else
+          local e = { name = sp.name, type = sp.type, min = sp.min, max = sp.max, value = sp.value, readOnly = sp.readOnly, n = 1 }
+          byName[sp.name] = e
+          out[#out + 1] = e
+        end
+      end
     end
     return out
   end
   PitBox.presetSpinners = presetSpinners
+  local WHEEL_WORDS = { { 'FL', { 'LF', 'FL', 'FRONTLEFT', 'LEFTFRONT' } }, { 'FR', { 'RF', 'FR', 'FRONTRIGHT', 'RIGHTFRONT' } },
+    { 'RL', { 'LR', 'RL', 'REARLEFT', 'LEFTREAR' } }, { 'RR', { 'RR', 'REARRIGHT', 'RIGHTREAR' } } }
+  function PitBox.spinnerWheel(name)
+    local up = tostring(name or ''):upper()
+    local flat = up:gsub('[^A-Z]', '')
+    for _, w in ipairs(WHEEL_WORDS) do
+      for _, k in ipairs(w[2]) do
+        if #k > 2 and flat:find(k, 1, true) then return w[1] end
+        if #k == 2 and (up:match('[^A-Z]' .. k .. '$') or up:match('^' .. k .. '[^A-Z]') or up:match('[^A-Z]' .. k .. '[^A-Z]')) then return w[1] end
+      end
+    end
+    if flat:find('FRONT', 1, true) then return 'F' end
+    if flat:find('REAR', 1, true) then return 'R' end
+    return nil
+  end
+  local loggedSession = nil
+  function PitBox.logSpinners(why)
+    local parts = {}
+    for i, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+      parts[#parts + 1] = string.format('%d:%s/%s=%s[%s..%s]%s', i, tostring(sp.name), tostring(sp.type), tostring(sp.value),
+        tostring(sp.min), tostring(sp.max), sp.readOnly and 'ro' or '')
+    end
+    ac.log('race-control: pit stop spinners (' .. why .. '): ' .. (#parts > 0 and table.concat(parts, ' ') or 'none'))
+  end
+  function PitBox.logSpinnersOnce()
+    if loggedSession == sim.currentSessionIndex then return end
+    loggedSession = sim.currentSessionIndex
+    PitBox.logSpinners('session')
+  end
   local function buildRows()
     local rows = { 'fuel', 'compound', 'tyres' }
     for _, sp in ipairs(presetSpinners()) do rows[#rows + 1] = 'set:' .. sp.name end
@@ -3734,8 +3777,10 @@ do
         if sp.type == 'fuel' and not sp.readOnly then req[#req + 1] = { name = sp.name, value = 0, type = 'fuel' } end
       end
       AppLink.onWritten = function()
+        PitBox.logSpinners('after the write')
         if state.pitService then gameStop(true, 'preset written by the app') end
       end
+      PitBox.logSpinners('before the write')
       AppLink.setPreset(req)
     end
     physics.lockUserControlsFor(p.total + SERVICE_LOCK_EXTRA)
@@ -5709,10 +5754,11 @@ do
       end
       local laps = RaceTable.laps
       laps[#laps + 1] = { lap = leaderboardLaps() or car.lapCount, ms = math.floor(CarRead.num(car.previousLapTimeMs)),
-        valid = car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0, pit = viaPit == true, s = s,
+        valid = car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0 and not state.lapCut, pit = viaPit == true, s = s,
         driver = tostring(ac.getDriverName(0) or ''):gsub('[,;|]', ' ') }
       if #laps > MAX_LAPS then table.remove(laps, 1) end
       lapsSave()
+      state.lapCut = false
     end
     stintUpdate(car)
     if state.ui.clock >= RaceTable.nextT then
@@ -5897,6 +5943,7 @@ local function checkCutZone(zoneIndex, zone, lapCount)
   end
   if not state.cutPassPenalized[zoneIndex] and car.wheelsOutside > zone.maxWheelsOut then
     state.cutPassPenalized[zoneIndex] = true
+    state.lapCut = true
     if state.dtDsqActive or state.pitDsqActive then
       ac.log(string.format('race-control: cut %s after the DSQ: logged, not applied', zone.category))
       return
@@ -6235,7 +6282,7 @@ local Desktop = { current = 1, count = 1, pitOn = true, place = {}, focus = nil,
   indicatorUntil = 0, drawnOrder = {}, wasInPit = nil }
 do
   local SCREENS = { 'pitbox', 'setup', 'status', 'race', 'laps', 'standings', 'relative', 'laptime', 'delta', 'event',
-    'weather', 'map' }
+    'weather', 'map', 'telemetry' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local STORAGE_KEY = 'rc.desktops'
   Desktop.SCREENS = SCREENS
@@ -6844,8 +6891,8 @@ Desktop.commands = {
 local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
-    'event', 'weather', 'map' }
-  local DEFAULT_MODE = { laps = 'hidden' }
+    'event', 'weather', 'map', 'telemetry' }
+  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden' }
   local MODES = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
   local ICON_SIZE, ICON_GAP = 12, 3
@@ -6920,7 +6967,7 @@ do
           { ui.Icons.CarFront, 'status' }, { ui.Icons.Flag, 'race' }, { ui.Icons.List, 'laps' },
           { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
           { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.Weather, 'weather' },
-          { ui.Icons.Map, 'map' } }) do
+          { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
       end
     end
@@ -7261,6 +7308,7 @@ do
       { 'tyres', TEXTS.pitTyres, nil, p.times.tyres },
     }
     local spinners = PitBox.presetSpinners()
+    if #spinners > 0 then PitBox.logSpinnersOnce() end
     if #spinners > 0 then
       local count, seen = {}, {}
       for _, sp in ipairs(spinners) do count[sp.type] = (count[sp.type] or 0) + 1 end
@@ -7268,8 +7316,9 @@ do
       for _, sp in ipairs(spinners) do
         seen[sp.type] = (seen[sp.type] or 0) + 1
         local names4 = count[sp.type] == 4 and { 'FL', 'FR', 'RL', 'RR' } or count[sp.type] == 2 and { 'F', 'R' } or nil
+        local wheel = sp.type == 'pressure' and PitBox.spinnerWheel(sp.name) or nil
         local label = (sp.type == 'wing' and TEXTS.pitWing or TEXTS.pitPressure) .. ' '
-          .. (names4 and names4[seen[sp.type]] or tostring(seen[sp.type]))
+          .. (wheel or ((sp.n or 1) > 1 and string.format('x%d', sp.n)) or (names4 and names4[seen[sp.type]]) or tostring(seen[sp.type]))
         local on = sp.type == 'wing' or tyresOn
         rows[#rows + 1] = { 'set:' .. sp.name, label, on and ('< ' .. tostring(PitBox.preset[sp.name] or sp.value) .. ' >')
           or tostring(sp.value), nil, off = not on }
@@ -7327,6 +7376,14 @@ do
     end
     local chosen = PitBox.ROWS[PitBox.row]
     local vx = p1.x + BOX.side * s + labelW + 8 * s
+    local function cursorLine(x1, x2, y)
+      local ly, dash, gapD = y + fs + 2 * s, 4 * s, 3 * s
+      local x = x1
+      while x < x2 do
+        ui.drawSimpleLine(vec2(x, ly), vec2(math.min(x + dash, x2), ly), COLOR_SEL, 1)
+        x = x + dash + gapD
+      end
+    end
     local rowsTop = p1.y + BOX.head * s + gap
     for i, r in ipairs(rows) do
       local y = rowsTop + (i - 1) * ROW_H * s
@@ -7337,13 +7394,16 @@ do
           drawText(PitBox.WHEELS[wIdx], FONT_MONO, fs, vec2(vx + wIdx * 26 * s, y),
             chips[wIdx] and (sel and COLOR_SEL or COLOR_SWAP) or COLOR_OFF)
         end
+        if sel then cursorLine(vx, vx + 3 * 26 * s + textWidth(PitBox.WHEELS[3], FONT_MONO, fs), y) end
       elseif r[1] == 'suspension' or r[1] == 'powertrain' or r[1] == 'body' then
         local value = p.repair[r[1]] and TEXTS.pitRepairYes
           or (PitBox.damaged(car, r[1]) and (PitBox.repairLocked() and TEXTS.pitRepairLocked or TEXTS.pitRepairNo)
           or TEXTS.pitRepairNone)
         drawText(value, FONT_MONO, fs, vec2(vx, y), sel and COLOR_SEL or COLOR_TITLE)
+        if sel then cursorLine(vx, vx + textWidth(value, FONT_MONO, fs), y) end
       else
         drawText(r[3], FONT_MONO, fs, vec2(vx, y), sel and COLOR_SEL or ((r[1] and not r.off) and COLOR_TITLE or COLOR_OFF))
+        if sel then cursorLine(vx, vx + textWidth(tostring(r[3] or ''), FONT_MONO, fs), y) end
       end
       if r[4] then
         local rest = sv and left[r[1]]
@@ -7360,6 +7420,7 @@ do
       or string.format(TEXTS.pitBoxMode, PitBox.isAuto() and TEXTS.pitModeAuto or TEXTS.pitModeManual) .. TEXTS.pitBoxStart
     drawText(footer, FONT_TEXT, fs, vec2(p1.x + BOX.side * s, fy),
       sv and COLOR_SWAP or (modeSel and COLOR_SEL or COLOR_TITLE))
+    if modeSel then cursorLine(p1.x + BOX.side * s, p1.x + BOX.side * s + textWidth(footer, FONT_TEXT, fs), fy) end
     drawTextRight(string.format('%s / %s', mmss(elapsed), mmss(p.total)), FONT_MONO, fs, p2.x - BOX.side * s, fy,
       COLOR_TITLE)
     Drag.icons('pitbox', p1, p2, s)
@@ -7812,7 +7873,7 @@ local drawRaceScreens = (function()
   local FS = 10
   local PLACE = { relative = { 1572, 380, 300 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 430 }, event = { 770, 200, 380 },
-    weather = { 48, 620, 300 }, map = { 1572, 110, 300 } }
+    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 } }
   local filter = Desktop.filter
   local function lapTime(ms)
     if not ms or ms <= 0 then return '-' end
@@ -7835,6 +7896,11 @@ local drawRaceScreens = (function()
     local bh = (26 + rows * ROW + 2) * s
     local o = Drag.offset(g, h)
     local p1 = vec2(math.floor(pl[1] * k + o.x), math.floor(pl[2] * k + o.y))
+    local baseW = pl[3] * s
+    if bw ~= baseW then
+      if p1.x + baseW / 2 > w / 2 then p1.x = p1.x + baseW - bw end
+      p1.x = math.floor(math.min(math.max(p1.x, 0), w - bw))
+    end
     local p2 = vec2(p1.x + bw, p1.y + bh)
     Drag.group = g
     drawPanel(p1, p2, Desktop.focus == g and BORDER_YELLOW or BORDER_BASE, s)
@@ -7944,6 +8010,8 @@ local drawRaceScreens = (function()
       local dl = front.laps - r.laps
       return dl >= 1 and string.format('%d L', dl) or string.format('%.1f', math.abs(ac.getGapBetweenCars(r.index, front.index)))
     end
+    local cutBest = {}
+    for _, l in ipairs(RaceTable.laps) do if not l.valid then cutBest[l.ms] = true end end
     for i = first, last do
       local r = list[i]
       local me = r.index == 0
@@ -7957,7 +8025,7 @@ local drawRaceScreens = (function()
         { '#' .. r.number, 58, col }, { r.name, 88, col, false, me and FONT_TITLE or FONT_TEXT },
         { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 266, col, true }, { gapTo(r, leader), 306, col, true },
         { gapTo(r, list[i - 1]), 346, col, true },
-        { lapTime(r.best), 398, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
+        { lapTime(r.best), 398, (me and cutBest[r.best]) and RED or (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
         { tostring(r.stops or 0), 416, col, true },
       })
       end
@@ -8421,7 +8489,7 @@ local drawRaceScreens = (function()
   local function raceScreen(car, w, h, s)
     local me = RaceTable.byIndex[0]
     local session = ac.getSession(sim.currentSessionIndex)
-    local content = 3 * ROW + SEP + ROW + 3 * ROW + SEP + ROW + 2 * CHIP_H + CHIP_GAP + 4 + SEP + 7 * ROW + 4
+    local content = 3 * ROW + SEP + ROW + 3 * ROW + SEP + ROW + 2 * CHIP_H + CHIP_GAP + 4 + SEP + 8 * ROW + 4
     local p1, p2, y = frame('race', w, h, s, content / ROW, TEXTS.scrRace, TEXTS.sessionName[sim.raceSessionType] or '')
     local x0, xr = p1.x + 14 * s, p2.x - 14 * s
     local function line(label, value, color)
@@ -8499,11 +8567,107 @@ local drawRaceScreens = (function()
       { TEXTS.scrKmr, kmr, Audit.points and Audit.points >= config.kmrPoints.limit * 0.8 and RED or nil },
       { TEXTS.scrKmrRating, rating, rt.on and Audit.rating and Audit.rating <= rt.dsqAt and RED or nil },
       { TEXTS.scrKmrCrashes, per100(Audit.crashes, Audit.crashRate) },
-      { TEXTS.scrKmrInfr, per100(Audit.infractions, Audit.infractionRate) } }) do
+      { TEXTS.scrKmrInfr, per100(Audit.infractions, Audit.infractionRate) },
+      { TEXTS.scrKmrKm, Audit.km and string.format('%.1f km', Audit.km) or '-' } }) do
       row(p1, y, s, { { l[1], 14, COLOR_DIM, false, FONT_TEXT }, { l[2], 286, l[3] or COLOR_TITLE, true } })
       y = y + ROW * s
     end
     Drag.icons('race', p1, p2, s)
+  end
+  local Tele = { WINDOW = 8, RATE = 30, n = 0, at = 0, t = -1, buf = {} }
+  local TELE_ORDER = { 'thr', 'brk', 'clu', 'str', 'spd', 'gear', 'glat', 'glon' }
+  local TELE_COLOR = { thr = rgbm(0.16, 1, 0, 1), brk = rgbm(1, 0.16, 0, 1), clu = rgbm(0.16, 0.6, 1, 1),
+    str = rgbm(0.9, 0.9, 0.9, 1), spd = rgbm(1, 0.6, 0.1, 1), gear = rgbm(0.6, 0.6, 0.6, 1),
+    glat = rgbm(1, 0.9, 0, 1), glon = rgbm(0.6, 0.3, 1, 1) }
+  local TELE_ON = { thr = true, brk = true, clu = true, str = true }
+  do
+    local kept = tostring(ac.storage['rc.telemetry'] or '')
+    if kept ~= '' then
+      TELE_ON = {}
+      for k in kept:gmatch('[^,]+') do TELE_ON[k] = true end
+    end
+  end
+  local function teleSave()
+    local on = {}
+    for _, k in ipairs(TELE_ORDER) do if TELE_ON[k] then on[#on + 1] = k end end
+    ac.storage['rc.telemetry'] = #on > 0 and table.concat(on, ',') or 'none'
+  end
+  local TELE_MAX = 8 * 30
+  local function teleSample(car)
+    local now = CarRead.num(sim.time) / 1000
+    if now - Tele.t < 1 / Tele.RATE and now >= Tele.t then return end
+    Tele.t = now
+    local acc = car.acceleration
+    local lock = math.max(CarRead.num(car.steerLock), 1)
+    local v = { thr = CarRead.num(car.gas), brk = CarRead.num(car.brake), clu = 1 - CarRead.num(car.clutch == nil and 1 or car.clutch),
+      str = 0.5 + 0.5 * math.max(-1, math.min(1, CarRead.num(car.steer) / lock)),
+      spd = math.min(CarRead.num(car.speedKmh) / 320, 1), gear = math.max(0, math.min(CarRead.num(car.gear), 8)) / 8,
+      glat = 0.5 + 0.5 * math.max(-1, math.min(1, (acc and CarRead.num(acc.x) or 0) / 3)),
+      glon = 0.5 + 0.5 * math.max(-1, math.min(1, (acc and CarRead.num(acc.z) or 0) / 3)) }
+    Tele.at = Tele.at % TELE_MAX + 1
+    Tele.buf[Tele.at] = v
+    Tele.n = math.min(Tele.n + 1, TELE_MAX)
+  end
+  Desktop.teleSample = teleSample
+  local function telemetryScreen(car, w, h, s)
+    local GH = 92
+    local p1, p2, y = frame('telemetry', w, h, s, (GH + 6) / ROW, TEXTS.scrTelemetry, nil)
+    local x = p2.x - 14 * s
+    for i = #TELE_ORDER, 1, -1 do
+      local k = TELE_ORDER[i]
+      local t = TEXTS.teleChannels[k]
+      local tw = textWidth(t, FONT_MONO, 8.5 * s)
+      local a, b = vec2(x - tw - 6 * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
+      if TELE_ON[k] then ui.drawRectFilled(a, b, TELE_COLOR[k], 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
+      drawText(t, FONT_MONO, 8.5 * s, vec2(a.x + 3 * s, a.y + 1 * s), TELE_ON[k] and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
+      Drag.clickable(a, b, function() TELE_ON[k] = not TELE_ON[k]; teleSave() end)
+      x = a.x - 4 * s
+    end
+    local gx1, gy1 = p1.x + 14 * s, y + 2 * s
+    local gx2, gy2 = p2.x - 196 * s, y + (GH - 2) * s
+    ui.drawRectFilled(vec2(gx1, gy1), vec2(gx2, gy2), rgbm(1, 1, 1, 0.04), 2 * s)
+    for q = 1, 3 do
+      local ly = gy2 - (gy2 - gy1) * q / 4
+      ui.drawSimpleLine(vec2(gx1, ly), vec2(gx2, ly), rgbm(1, 1, 1, q == 2 and 0.14 or 0.07), 1)
+    end
+    local n = Tele.n
+    if n > 1 then
+      for _, k in ipairs(TELE_ORDER) do
+        if TELE_ON[k] then
+          for i = 1, n do
+            local v = Tele.buf[(Tele.at - n + i - 1) % TELE_MAX + 1]
+            local px_ = gx1 + (gx2 - gx1) * (i - 1) / (TELE_MAX - 1) + (gx2 - gx1) * (TELE_MAX - n) / (TELE_MAX - 1)
+            ui.pathLineTo(vec2(px_, gy2 - (gy2 - gy1) * (v and v[k] or 0)))
+          end
+          ui.pathStroke(TELE_COLOR[k], false, 1.6 * s)
+        end
+      end
+    end
+    local last = Tele.buf[Tele.at] or {}
+    local bx = gx2 + 14 * s
+    for _, k in ipairs({ 'clu', 'brk', 'thr' }) do
+      local val = math.max(0, math.min(1, last[k] or 0))
+      local a, b = vec2(bx, gy1 + 12 * s), vec2(bx + 14 * s, gy2)
+      ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.08), 2 * s)
+      ui.drawRectFilled(vec2(a.x, b.y - (b.y - a.y) * val), b, TELE_COLOR[k], 2 * s)
+      drawText(string.format('%d', math.floor(val * 100 + 0.5)), FONT_MONO, 8 * s, vec2(a.x, gy1), COLOR_DIM)
+      bx = bx + 22 * s
+    end
+    local r = (GH / 2 - 6) * s
+    local c = vec2(p2.x - 14 * s - r - 10 * s, (gy1 + gy2) / 2)
+    ui.drawCircle(c, r, rgbm(1, 1, 1, 0.85), 40, 5 * s)
+    local ang = math.rad(CarRead.num(car.steer)) - math.pi / 2
+    local m1 = vec2(c.x + math.cos(ang) * (r - 6 * s), c.y + math.sin(ang) * (r - 6 * s))
+    local m2 = vec2(c.x + math.cos(ang) * (r + 3 * s), c.y + math.sin(ang) * (r + 3 * s))
+    ui.drawLine(m1, m2, TELE_COLOR.brk, 5 * s)
+    local gear = math.floor(CarRead.num(car.gear))
+    local gt = gear < 0 and 'R' or gear == 0 and 'N' or tostring(gear)
+    local gw = textWidth(gt, FONT_TITLE, 30 * s)
+    drawText(gt, FONT_TITLE, 30 * s, vec2(c.x - gw / 2, c.y - 17 * s), COLOR_TITLE)
+    local st = string.format('%d km/h', math.floor(CarRead.num(car.speedKmh) + 0.5))
+    local sw = textWidth(st, FONT_MONO, 9 * s)
+    drawText(st, FONT_MONO, 9 * s, vec2(c.x - sw / 2, c.y - r + 8 * s), COLOR_DIM)
+    Drag.icons('telemetry', p1, p2, s)
   end
   return function(car, w, h, s)
     local line, sector = Desktop.recent('line'), Desktop.recent('sector')
@@ -8516,6 +8680,7 @@ local drawRaceScreens = (function()
     if shown('event', car.isInPitlane) then eventScreen(car, w, h, s) end
     if shown('weather', line) then weatherScreen(car, w, h, s) end
     if shown('map', Desktop.close or line) then mapScreen(car, w, h, s) end
+    if shown('telemetry', false) then telemetryScreen(car, w, h, s) end
   end
 end)()
 local drawDesktopUI = (function()
@@ -9745,7 +9910,7 @@ local drawDesktopUI = (function()
       if it.area == nil or it.area == 'rc' or Audit.allow(it.area) then msgs[#msgs + 1] = it end
       if #msgs >= 8 then break end
     end
-    local p2 = vec2(p1.x + LW, p1.y + (30 + 7 * 13 + 22 + math.max(#msgs, 1) * 24 + 8) * s)
+    local p2 = vec2(p1.x + LW, p1.y + (30 + 8 * 13 + 22 + math.max(#msgs, 1) * 24 + 8) * s)
     Drag.group = nil
     drawPanel(p1, p2, BORDER_BLUE, s)
     drawText(config.eventName ~= '' and config.eventName:upper() or TEXTS.lobbyTitle, FONT_TITLE, 12 * s,
@@ -9764,6 +9929,7 @@ local drawDesktopUI = (function()
         and string.format('%d - %.2f / 100 km', Audit.crashes, Audit.crashRate) or tostring(Audit.crashes)) or '-') },
       { TEXTS.scrKmrInfr, Audit.noStats and TEXTS.scrKmrNone or (Audit.infractions and (Audit.infractionRate
         and string.format('%d - %.2f / 100 km', Audit.infractions, Audit.infractionRate) or tostring(Audit.infractions)) or '-') },
+      { TEXTS.scrKmrKm, Audit.km and string.format('%.1f km', Audit.km) or '-' },
       { TEXTS.lobbyWeather, string.format('%.0f / %.0f C', CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature)) },
     }
     for _, r in ipairs(rows) do
@@ -9959,7 +10125,7 @@ function script.drawUI(exclusive)
   local h = size.y
   local gameFlag = state.list.dsqStage == 1
   local dsqReason = state.list.dsqReason
-  local dsqText = gameFlag and (state.pitDsqActive and TEXTS.pitDsq
+  local dsqText = gameFlag and config.gameHud == 'show' and (state.pitDsqActive and TEXTS.pitDsq
     or (dsqReason == TEXTS.dsqDtReason and TEXTS.dtDsq)
     or string.format(TEXTS.dsqGame, dsqReason or TEXTS.dsqBlackFlag)) or nil
   if dsqText then
@@ -10098,6 +10264,13 @@ function script.drawUI(exclusive)
       end
     end
     return p2.y + gap
+  end
+  local dlTop = state.list
+  if stackOn and dlTop.dsq > 0 and (dlTop.dsqStage ~= 1 or config.gameHud ~= 'show') then
+    local p2 = vec2(x + boxW, ySd + sdH)
+    drawFlagBox(vec2(x, ySd), p2, s, BORDER_RED, nil, TEXTS.dsqTitle, BORDER_RED, dlTop.dsqReason,
+      dlTop.dsqStage == 1 and TEXTS.dsqOut or dlTop.dsqStage == 2 and TEXTS.dsqTow or TEXTS.dsqStop, nil, BORDER_RED)
+    ySd = p2.y + gap
   end
   if stackOn and flag then ySd = drawFlag(ySd) end
   local litColumns = Flags.startLights(ac.getCar(0))
@@ -10282,11 +10455,7 @@ function script.drawUI(exclusive)
     yNext = p2.y + gap
   end
   if not stackOn then
-  elseif dl.dsq > 0 and dl.dsqStage ~= 1 then
-    local p2 = vec2(x + boxW, yNext + sdH)
-    drawFlagBox(vec2(x, yNext), p2, s, BORDER_RED, nil, TEXTS.dsqTitle, BORDER_RED, dl.dsqReason,
-      dl.dsqStage == 2 and TEXTS.dsqTow or TEXTS.dsqStop, nil, BORDER_RED)
-    yNext = p2.y + gap
+  elseif dl.dsq > 0 then
   elseif rp.lapsLeft and rp.class == 'repair' then
     local p2 = vec2(x + boxW, yNext + sdH)
     local title = rp.lapsLeft <= 1 and TEXTS.damageRepairLast or string.format(TEXTS.damageRepairLaps, rp.lapsLeft)
@@ -10503,6 +10672,7 @@ function script.update(dt)
   PitStops.update(car)
   DriverTable.update()
   Desktop.update(car)
+  if Desktop.teleSample then Desktop.teleSample(car) end
   if config.mode == 'CSP' then PitBox.update(car) end
   if sw.pendingList then
     local items = sw.pendingList

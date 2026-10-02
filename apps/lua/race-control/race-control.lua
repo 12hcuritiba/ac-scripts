@@ -100,6 +100,10 @@ ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
     local ok, res = pcall(ac.setPitstopSpinnerValue, name, tonumber(value))
     answer[#answer + 1] = name .. '=' .. ((ok and res) and 'ok' or 'fail')
   end
+  local back = {}
+  local okList, list = pcall(ac.getPitstopSpinners)
+  for i, sp in ipairs(okList and list or {}) do back[#back + 1] = string.format('%d:%s=%s', i, tostring(sp.name), tostring(sp.value)) end
+  ac.log('race-control app: spinners after the write: ' .. table.concat(back, ' '))
   local text = table.concat(answer, ';')
   ac.log('race-control app: preset ' .. tostring(data) .. ' -> ' .. text)
   ac.broadcastSharedEvent(APP_ANSWER, text)
