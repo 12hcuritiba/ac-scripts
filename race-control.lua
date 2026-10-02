@@ -489,6 +489,8 @@ local TEXTS = {
   flagRestart = 'Restart P%d - behind %s', flagRestartFirst = 'Restart P%d - first car',
   flagRestartSwap = 'Restart P%d - driver swap: back of the field, behind %s',
   appMissing = 'Race Control app not running - install it from the event page - the game closes in %d s',
+  realNameMissing = 'Registration incomplete - you cannot take part in this session - missing: %s - complete it in the 12h Curitiba app',
+  realNameWhat = { cadastro = 'registration', steam = 'Steam account confirmed with Assetto Corsa', nome = 'real name' },
   redTowDeferred = 'Tow under the red flag: the tow and repair time starts at the restart',
   redNoLineSG = 'Pit entry with the red flag not received at the line', redFuelUnlocked = 'Fuel unlocked by Race Control',
   redFlagNoPitDsq = 'Not in the pits at the restart after the red flag',
@@ -547,7 +549,7 @@ local config = (function()
   }
   local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
     pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
-  local FIELDS = { kmr = { points = 1, ratingDsq = 1 },
+  local FIELDS = { kmr = { points = 1, ratingDsq = 1 }, base = { realName = 1 },
     stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
   for _, m in pairs(OLD) do
     if THEMES[m[1]] then FIELDS[m[1]] = FIELDS[m[1]] or {}; FIELDS[m[1]][m[2]] = 1 end
@@ -692,6 +694,7 @@ local config = (function()
     eventName = tostring(K('eventName') or ''),
     kmrStatsUrl = clean(K('kmrStatsUrl')),
     baseUrl = clean(K('baseUrl')),
+    realName = tostring((theme('base') or {}).realName or ''):match('^%s*1%s*$') ~= nil,
     gameHud = (function()
       local v = tostring(K('gameHud') or ''):lower():gsub('%s', '')
       return (v == 'show' or v == 'hideall') and v or 'hide'
@@ -766,6 +769,7 @@ local config = (function()
     end
     table.sort(lines)
     lines[#lines + 1] = string.format('kmr: points=%s ratingDsq=%s', tostring(kmrPoints.limit), kmrRating.on and tostring(kmrRating.dsqAt) or '-')
+    lines[#lines + 1] = 'base: realName=' .. (c.realName and 1 or 0)
     return lines
   end
   return c
@@ -1455,6 +1459,51 @@ do
     ask('/v1/track', function(rec)
       if rec.list == 'track' and Record.sameSession(rec.key, key) then keep(rec, 'track of the session') end
     end)
+  end
+  local NAME_GAP = 30
+  B.name = { status = nil, nextT = 0, busy = false, lockT = -1e9, told = nil, failLogged = false }
+  local function missingText(list)
+    local out = {}
+    for w in tostring(list or ''):gmatch('[^,]+') do out[#out + 1] = TEXTS.realNameWhat[w] or w end
+    return table.concat(out, ', ')
+  end
+  function B.nameUpdate()
+    if not config.realName or not on() then return end
+    local N = B.name
+    if not N.busy and N.status ~= 'ok' and state.ui.clock >= N.nextT then
+      N.busy, N.nextT = true, state.ui.clock + NAME_GAP
+      web.request('GET', config.baseUrl .. '/v1/name?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
+        N.busy = false
+        if err or not res or tonumber(res.status) ~= 200 then
+          if not N.failLogged then
+            N.failLogged = true
+            ac.log('race-control: real name not read from the base (' .. tostring(err or (res and res.status)) .. '): nothing locked')
+          end
+          return
+        end
+        local kind, rest = tostring(res.body or ''):match('^(%u+)|([^\r\n]*)')
+        if kind == 'OK' and rest:match('%S') then
+          N.status, N.missing = 'ok', nil
+          if N.told then physics.lockUserControlsFor(0) end
+          local was = tostring(ac.getDriverName(0) or '')
+          if was ~= rest and physics.setDriverName then physics.setDriverName(rest) end
+          ac.log('race-control: real name ' .. rest .. ' (name of the AC: ' .. was .. ')')
+        elseif kind == 'MISSING' then
+          N.status, N.missing = 'missing', missingText(rest)
+          if N.told ~= N.missing then
+            N.told = N.missing
+            rcLog('Registration incomplete', 'missing: ' .. N.missing)
+          end
+        end
+      end)
+    end
+    if N.status == 'missing' then
+      if state.ui.clock - N.lockT >= 2 then
+        N.lockT = state.ui.clock
+        physics.lockUserControlsFor(3)
+      end
+      showNotice(TEXTS.rcTitle, string.format(TEXTS.realNameMissing, N.missing), nil, 1)
+    end
   end
   local publish = Record.onSave
   Record.onSave = function(list, seq, text)
@@ -7235,12 +7284,6 @@ local FONT_TITLE = 'Segoe UI;Weight=Bold'
 local FONT_TEXT = 'Segoe UI;Weight=SemiBold'
 local FONT_MONO = 'Consolas'
 do
-  local root = ''
-  if ac.getFolder and ac.FolderID and ac.FolderID.Root then
-    local ok, dir = pcall(ac.getFolder, ac.FolderID.Root)
-    if ok and dir then root = tostring(dir) .. '/' end
-  end
-  local function file(name) return root .. 'apps/lua/race-control/fonts/' .. name .. '.ttf' end
   local function font(family, name, style)
     return family .. ':apps/lua/race-control/fonts/' .. name .. '.ttf' .. (style or '')
   end
@@ -7259,17 +7302,31 @@ do
     { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
       text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
   } }
+  for _, f in ipairs(Desktop.text.sets) do f.ready = f.files == nil end
+end
+local FONT_PROBE = 'RACE CONTROL Wim 1:40.123'
+function Desktop.fontCheck()
+  if Desktop.text.checked then return end
+  Desktop.text.checked = true
+  local function width(spec)
+    ui.pushDWriteFont(spec)
+    local w = ui.measureDWriteText(FONT_PROBE, 20).x
+    ui.popDWriteFont()
+    return w
+  end
+  local none = width('Race Control No Font:apps/lua/race-control/fonts/none.ttf')
   for _, f in ipairs(Desktop.text.sets) do
-    f.ready = true
-    local missing = {}
-    for _, n in ipairs(f.files or {}) do
-      if not (io.fileExists and io.fileExists(file(n))) then f.ready = false; missing[#missing + 1] = n end
-    end
     if f.files then
-      ac.log(string.format('race-control: font %s %s (%s) title=%s', f.id, f.ready and 'found' or 'missing',
-        #missing > 0 and table.concat(missing, ' ') or file(f.files[1]), f.title))
+      local missing = {}
+      for _, spec in ipairs({ f.title, f.text, f.mono }) do
+        if math.abs(width(spec) - none) < 0.01 then missing[#missing + 1] = spec end
+      end
+      f.ready = #missing == 0
+      ac.log(string.format('race-control: font %s %s (%s)', f.id, f.ready and 'found' or 'missing',
+        f.ready and f.title or table.concat(missing, ' ')))
     end
   end
+  if Desktop.text.wanted then Desktop.textApply(Desktop.text.wanted) end
 end
 function Desktop.textApply(id, min)
   for _, f in ipairs(Desktop.text.sets) do
@@ -7279,13 +7336,14 @@ function Desktop.textApply(id, min)
     end
   end
   if min then Desktop.text.min = min end
+  if not Desktop.text.checked then return end
   ac.storage['rc.font'] = Desktop.text.id
   ac.storage['rc.textMin'] = tostring(Desktop.text.min)
 end
 do
   local id = tostring(ac.storage['rc.font'] or '')
-  local min = tonumber(ac.storage['rc.textMin'] or '') or 0
-  if id ~= '' and id ~= 'segoe' then Desktop.textApply(id, min) else Desktop.text.min = min end
+  Desktop.text.min = tonumber(ac.storage['rc.textMin'] or '') or 0
+  if id ~= '' and id ~= 'segoe' then Desktop.text.wanted = id; Desktop.textApply(id) end
 end
 local COLOR_TITLE = rgbm(0.96, 0.96, 0.96, 1)
 local COLOR_TEXT = rgbm(1, 0.85, 0.25, 1)
@@ -9887,7 +9945,7 @@ local drawDesktopUI = (function()
       Direction.status, Direction.statusColor = string.format(TEXTS.dirGuidNone, Direction.guidJob.name), PANEL_COLORS.red
       Direction.statusT, Direction.guidJob = state.ui.clock, nil
     end
-    local W5, H5 = cmd and 940 or 560, 30 + 16 + (cmd and (22 + 22 + 22 + 22) or 0) + 18 + 16 + #cars * 44 + 22
+    local W5, H5 = cmd and 940 or 560, 30 + (cmd and 22 or 16) + (cmd and (22 + 22 + 22 + 22) or 0) + 18 + 16 + #cars * 44 + 22
     for _, e in ipairs(cars) do
       local n = #fitLines((penaltyLine(e.i, e.c)), 8.5 * s, (W5 - 74) * s) + #fitLines(kmrLine(e, e.c), 8.5 * s, (W5 - 74) * s)
       H5 = H5 + math.max(n - 2, 0) * 12
@@ -9909,7 +9967,7 @@ local drawDesktopUI = (function()
     drawText(sessionLine(), FONT_MONO, 10 * s, vec2(x0, y), COLOR_TITLE)
     chip(TEXTS.dirCmdBtn, vec2(p2.x - 14 * s - textWidth(TEXTS.dirCmdBtn, FONT_MONO, 9 * s) - 10 * s, y - 1 * s), s,
       Direction.cmdOpen, nil, function() Direction.cmdOpen = not Direction.cmdOpen end)
-    y = y + 16 * s
+    y = y + (cmd and 22 or 16) * s
     if cmd then
       if state.kmrAdmin then
         drawText(TEXTS.redKmrOn, FONT_MONO, 9.5 * s, vec2(x0, y + 1 * s), PANEL_COLORS.green)
@@ -10305,6 +10363,7 @@ function script.drawUI(exclusive)
     end
     return
   end
+  Desktop.fontCheck()
   local size = ac.getUI().windowSize
   local w = size.x
   local h = size.y
@@ -10722,6 +10781,7 @@ function script.update(dt)
   local lapCount = car.lapCount
   state.ui.clock = state.ui.clock + dt
   AppLink.update()
+  RecordSync.base.nameUpdate()
   if car.lapCount > (Audit.askLap or car.lapCount) then Audit.askPending = true end
   if Audit.askAt == nil then Audit.askAt = state.ui.clock + 15 end
   if state.ui.clock >= Audit.askAt and Audit.askAt > 0 then Audit.askPending, Audit.askAt = true, 0 end
