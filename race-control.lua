@@ -385,7 +385,7 @@ local TEXTS = {
   dirFailed = 'Failed: %s', dirSent = 'Sent: %s - waiting for the KMR', dirAnswer = 'KMR: %s',
   dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT', dirFuel = 'FUEL',
   setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', text = 'Text', app = 'App' },
-  setFontSample = 'RACE CONTROL  P3  Slow down', setFontMissing = 'not installed (app Race Control fonts folder)', setTextMin = 'Small text at least', setTextMinOff = 'Off', setPreset = 'Preset',
+  setFontSample = 'RACE CONTROL  P3  Slow down', setFontMissing = 'not installed (content/fonts, by the Race Room)', setTextMin = 'Small text at least', setTextMinOff = 'Off', setPreset = 'Preset',
   setPresets = { verbose = 'Verbose', race = 'Race', minimal = 'Minimal', custom = 'Custom' }, setAlways = 'always - on the Race Control panel',
   setAreas = { rc = 'Race Control, flags, driver swap, race director', limits = 'Track limits and invalid laps',
     damage = 'Collisions and damage', points = 'Points and rating (KMR)', warnings = 'Behaviour warnings',
@@ -7317,21 +7317,17 @@ local FONT_TITLE = 'Segoe UI;Weight=Bold'
 local FONT_TEXT = 'Segoe UI;Weight=SemiBold'
 local FONT_MONO = 'Consolas'
 do
-  local function font(family, name, style)
-    return family .. ':apps/lua/race-control/fonts/' .. name .. '.ttf' .. (style or '')
-  end
-  local MONO = font('Roboto Mono', 'roboto-mono-500')
+  local function font(family, style) return family .. (style or '') end
+  local MONO = font('Roboto Mono')
   Desktop.text = { id = 'segoe', min = 0, minPx = 0, sets = {
     { id = 'segoe', name = 'Segoe UI', title = 'Segoe UI;Weight=Bold', text = 'Segoe UI;Weight=SemiBold', mono = 'Consolas' },
-    { id = '12h', name = '12h Curitiba', title = font('Oswald', 'oswald-600'), text = font('Raleway Thin', 'raleway-600'),
-      mono = MONO, files = { 'oswald-600', 'raleway-600', 'roboto-mono-500' } },
-    { id = 'titillium', name = 'Titillium Web', title = font('Titillium Web', 'titillium-web-700', ';Weight=Bold'),
-      text = font('Titillium Web SemiBold', 'titillium-web-600'), mono = MONO,
-      files = { 'titillium-web-700', 'titillium-web-600', 'roboto-mono-500' } },
-    { id = 'barlow', name = 'Barlow', title = font('Barlow Condensed SemiBold', 'barlow-condensed-600'),
-      text = font('Barlow SemiBold', 'barlow-600'), mono = MONO, files = { 'barlow-condensed-600', 'barlow-600', 'roboto-mono-500' } },
-    { id = 'rajdhani', name = 'Rajdhani', title = font('Rajdhani', 'rajdhani-700', ';Weight=Bold'),
-      text = font('Rajdhani SemiBold', 'rajdhani-600'), mono = MONO, files = { 'rajdhani-700', 'rajdhani-600', 'roboto-mono-500' } },
+    { id = '12h', name = '12h Curitiba', title = font('Oswald'), text = font('Raleway Thin'), mono = MONO, files = true },
+    { id = 'titillium', name = 'Titillium Web', title = font('Titillium Web', ';Weight=Bold'),
+      text = font('Titillium Web SemiBold'), mono = MONO, files = true },
+    { id = 'barlow', name = 'Barlow', title = font('Barlow Condensed SemiBold'), text = font('Barlow SemiBold'), mono = MONO,
+      files = true },
+    { id = 'rajdhani', name = 'Rajdhani', title = font('Rajdhani', ';Weight=Bold'), text = font('Rajdhani SemiBold'),
+      mono = MONO, files = true },
     { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
       text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
   } }
@@ -7347,12 +7343,17 @@ function Desktop.fontCheck()
     ui.popDWriteFont()
     return w
   end
-  local none = width('Race Control No Font:apps/lua/race-control/fonts/none.ttf')
+  local none = {}
+  local function absent(spec)
+    local style = spec:match(';.*$') or ''
+    none[style] = none[style] or width('Race Control No Font' .. style)
+    return math.abs(width(spec) - none[style]) < 0.01
+  end
   for _, f in ipairs(Desktop.text.sets) do
     if f.files then
       local missing = {}
       for _, spec in ipairs({ f.title, f.text, f.mono }) do
-        if math.abs(width(spec) - none) < 0.01 then missing[#missing + 1] = spec end
+        if absent(spec) then missing[#missing + 1] = spec end
       end
       f.ready = #missing == 0
       ac.log(string.format('race-control: font %s %s (%s)', f.id, f.ready and 'found' or 'missing',
