@@ -79,12 +79,44 @@ local APP_ANSWER = 'amxracing.race-control.preset.done'
 local TRACK_ID = 'amx_curitiba'
 local CHECK_SECONDS, CLOSE_SECONDS = 60, 10
 local heard, elapsed, closed = false, 0, false
+local guard = {}
+local function guardEnd(why)
+  if not guard.on then return end
+  guard.on = false
+  for _, d in ipairs(guard.list) do pcall(d) end
+  guard.list = {}
+  ac.log('race-control app: guard off (' .. why .. ')')
+end
 if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
+  local mode = 'hide'
+  local okX, extras = pcall(ac.INIConfig.onlineExtras)
+  local okK, key = pcall(function() return extras and extras:get('SCRIPT_1', 'gameHud', '') end)
+  if okX and okK and key and tostring(key) ~= '' then mode = tostring(key):lower():match('^%s*(%a+)') or 'hide' end
+  guard = { on = true, list = {}, swallowed = 0 }
+  local function keep(d) if d then guard.list[#guard.list + 1] = d end end
+  keep(ac.onChatMessage(function()
+    if not guard.on then return end
+    guard.swallowed = guard.swallowed + 1
+    return true
+  end))
+  keep(ac.blockSystemMessages('.'))
+  if mode ~= 'show' and ui.onExclusiveHUD then
+    keep(ui.onExclusiveHUD(function(m)
+      if not guard.on or m ~= 'game' then return end
+      return mode == 'hideall' and true or 'apps'
+    end))
+  end
+  ac.log('race-control app: guard on until the online script runs (gameHud ' .. mode .. ', key '
+    .. (okX and extras and 'read' or 'not read') .. ')')
   setInterval(function()
     elapsed = elapsed + 1
+    if heard then guardEnd('online script running, ' .. guard.swallowed .. ' chat lines swallowed') end
     if heard or closed or elapsed < CHECK_SECONDS then return end
     local left = math.max(CHECK_SECONDS + CLOSE_SECONDS - elapsed, 0)
-    if elapsed == CHECK_SECONDS then ac.log('race-control app: the online script is not running: the game closes') end
+    if elapsed == CHECK_SECONDS then
+      guardEnd('online script not running')
+      ac.log('race-control app: the online script is not running: the game closes')
+    end
     ac.setMessage('RACING CONTROL NOT RUNNING', string.format('The online script of the event did not start - the game '
       .. 'closes in %d s. Tell the organizer.', left), 'illegal', 1.5)
     pcall(physics.lockUserControlsFor, 3)
@@ -100,6 +132,7 @@ ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
     return
   end
   heard = true
+  if guard.on then guardEnd('online script running, ' .. guard.swallowed .. ' chat lines swallowed') end
   if tostring(data or '') == '' then
     ac.broadcastSharedEvent(APP_ANSWER, '')
     return
