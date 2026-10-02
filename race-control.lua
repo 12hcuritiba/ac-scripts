@@ -7317,21 +7317,27 @@ local FONT_TITLE = 'Segoe UI;Weight=Bold'
 local FONT_TEXT = 'Segoe UI;Weight=SemiBold'
 local FONT_MONO = 'Consolas'
 do
-  local function font(family, style) return family .. (style or '') end
-  local MONO = font('Roboto Mono')
+  local MONO = { 'Roboto Mono;Weight=Medium', 'Roboto Mono', 'Roboto Mono Medium' }
   Desktop.text = { id = 'segoe', min = 0, minPx = 0, sets = {
     { id = 'segoe', name = 'Segoe UI', title = 'Segoe UI;Weight=Bold', text = 'Segoe UI;Weight=SemiBold', mono = 'Consolas' },
-    { id = '12h', name = '12h Curitiba', title = font('Oswald'), text = font('Raleway Thin'), mono = MONO, files = true },
-    { id = 'titillium', name = 'Titillium Web', title = font('Titillium Web', ';Weight=Bold'),
-      text = font('Titillium Web SemiBold'), mono = MONO, files = true },
-    { id = 'barlow', name = 'Barlow', title = font('Barlow Condensed SemiBold'), text = font('Barlow SemiBold'), mono = MONO,
-      files = true },
-    { id = 'rajdhani', name = 'Rajdhani', title = font('Rajdhani', ';Weight=Bold'), text = font('Rajdhani SemiBold'),
-      mono = MONO, files = true },
+    { id = '12h', name = '12h Curitiba', title = { 'Oswald;Weight=SemiBold', 'Oswald', 'Oswald SemiBold' },
+      text = { 'Raleway Thin;Weight=SemiBold', 'Raleway Thin', 'Raleway Thin SemiBold', 'Raleway;Weight=SemiBold' }, mono = MONO, files = true },
+    { id = 'titillium', name = 'Titillium Web', title = { 'Titillium Web;Weight=Bold', 'Titillium Web Bold' },
+      text = { 'Titillium Web;Weight=SemiBold', 'Titillium Web SemiBold' }, mono = MONO, files = true },
+    { id = 'barlow', name = 'Barlow', title = { 'Barlow Condensed;Weight=SemiBold', 'Barlow Condensed SemiBold' },
+      text = { 'Barlow;Weight=SemiBold', 'Barlow SemiBold' }, mono = MONO, files = true },
+    { id = 'rajdhani', name = 'Rajdhani', title = { 'Rajdhani;Weight=Bold', 'Rajdhani Bold' },
+      text = { 'Rajdhani;Weight=SemiBold', 'Rajdhani SemiBold' }, mono = MONO, files = true },
     { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
       text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
   } }
-  for _, f in ipairs(Desktop.text.sets) do f.ready = f.files == nil end
+  for _, f in ipairs(Desktop.text.sets) do
+    f.ready = f.files == nil
+    if f.files then
+      f.names = { title = f.title, text = f.text, mono = f.mono }
+      f.title, f.text, f.mono = f.title[1], f.text[1], f.mono[1]
+    end
+  end
 end
 local FONT_PROBE = 'RACE CONTROL Wim 1:40.123'
 function Desktop.fontCheck()
@@ -7351,13 +7357,17 @@ function Desktop.fontCheck()
   end
   for _, f in ipairs(Desktop.text.sets) do
     if f.files then
-      local missing = {}
-      for _, spec in ipairs({ f.title, f.text, f.mono }) do
-        if absent(spec) then missing[#missing + 1] = spec end
+      local missing, used = {}, {}
+      for _, face in ipairs({ 'title', 'text', 'mono' }) do
+        local got
+        for _, spec in ipairs(f.names[face]) do
+          if not absent(spec) then got = spec break end
+        end
+        if got then f[face] = got; used[#used + 1] = got else missing[#missing + 1] = table.concat(f.names[face], ' / ') end
       end
       f.ready = #missing == 0
       ac.log(string.format('race-control: font %s %s (%s)', f.id, f.ready and 'found' or 'missing',
-        f.ready and f.title or table.concat(missing, ' ')))
+        f.ready and table.concat(used, ' + ') or ('none of: ' .. table.concat(missing, ' | ') .. (#used > 0 and (' - loaded: ' .. table.concat(used, ' + ')) or ''))))
     end
   end
   if Desktop.text.wanted then Desktop.textApply(Desktop.text.wanted) end
