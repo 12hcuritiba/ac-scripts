@@ -139,7 +139,8 @@ if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK
     local ok, v = pcall(function() return extras and extras:get('SCRIPT_1', name, '') end)
     return ok and v and tostring(v) or ''
   end
-  if okX and key('gameHud') ~= '' then mode = key('gameHud'):lower():match('^%s*(%a+)') or 'hide' end
+  local hud = key('event'):match('gameHud%s*:%s*(%a+)') or key('gameHud'):match('^%s*(%a+)')
+  if okX and hud then mode = hud:lower() end
   guard = { on = true, list = {}, swallowed = 0, pings = {} }
   local pingKey = key('ping')
   guard.pingLimit = tonumber(pingKey:match('limit%s*:%s*(%d+)'))
