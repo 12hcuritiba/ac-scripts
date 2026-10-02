@@ -7363,10 +7363,7 @@ function Desktop.fontCheck()
   local function absent(spec)
     local style = spec:match(';.*$') or ''
     none[style] = none[style] or width('Race Control No Font' .. style)
-    local w = width(spec)
-    local out = math.abs(w - none[style]) < 0.01
-    ac.log(string.format('race-control: font try "%s" width %.2f, default %.2f: %s', spec, w, none[style], out and 'not loaded' or 'loaded'))
-    return out
+    return math.abs(width(spec) - none[style]) < 0.01
   end
   for _, f in ipairs(Desktop.text.sets) do
     if f.files then
