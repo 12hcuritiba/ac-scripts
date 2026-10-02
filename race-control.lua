@@ -401,7 +401,7 @@ local TEXTS = {
   msgTitle = 'MESSAGES', setMissing = 'missing', setChecking = 'checking', setAllGood = 'All good - closes in %d s', setNotGood = 'Not all good - close it yourself',
   redTitle = 'RED FLAG CONTROL', redNone = 'no red flag', redConfirm = 'CONFIRM RED FLAG', redVsc = 'RESUME VSC %d s',
   dirLightsRed = 'LIGHTS RED', dirLightsGreen = 'LIGHTS GREEN', dirLightsAuto = 'LIGHTS AUTO',
-  redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET MONEY', dirStats = 'RESET STATS', dirNoSg = 'NO S&G', dirNoDsq = 'NO DSQ',
+  redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET MONEY', dirStats = 'RESET STATS', dirBan = 'BAN', dirUnban = 'UNBAN', dirNoSg = 'NO S&G', dirNoDsq = 'NO DSQ',
   dirKmrLine = 'KMR  points %s / %d  -  safety %s  -  %s  -  infractions %s (%s / 100 km)',
   dirPrompt = 'Prompt', dirPromptSent = 'Sent: %s', dirKmrCrashes = 'crashes %s (%s / 100 km)', dirBalRes = 'ballast %.0f kg  restrictor %.0f', dirKmrLaps = '  -  laps %d best %s', dirKmrNoStats = 'stats: none yet (not driven enough)',
   dirKmrNone = 'KMR  no numbers from this driver yet',
@@ -490,7 +490,8 @@ local TEXTS = {
   flagRestartSwap = 'Restart P%d - driver swap: back of the field, behind %s',
   appMissing = 'Race Control app not running - install it from the event page - the game closes in %d s',
   realNameMissing = 'Registration incomplete - you cannot take part in this session - missing: %s - complete it in the 12h Curitiba app',
-  realNameWhat = { cadastro = 'registration', steam = 'Steam account confirmed with Assetto Corsa', nome = 'real name' },
+  realNameWhat = { cadastro = 'registration', steam = 'Steam account confirmed', nome = 'real name' },
+  realNameOffline = 'Registration not confirmed - the base of the event does not answer - wait for it before the session starts',
   redTowDeferred = 'Tow under the red flag: the tow and repair time starts at the restart',
   redNoLineSG = 'Pit entry with the red flag not received at the line', redFuelUnlocked = 'Fuel unlocked by Race Control',
   redFlagNoPitDsq = 'Not in the pits at the restart after the red flag',
@@ -549,7 +550,7 @@ local config = (function()
   }
   local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
     pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
-  local FIELDS = { kmr = { points = 1, ratingDsq = 1 }, base = { realName = 1 },
+  local FIELDS = { kmr = { points = 1, ratingDsq = 1 }, base = { realName = 1, offline = 1 },
     stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
   for _, m in pairs(OLD) do
     if THEMES[m[1]] then FIELDS[m[1]] = FIELDS[m[1]] or {}; FIELDS[m[1]][m[2]] = 1 end
@@ -695,6 +696,7 @@ local config = (function()
     kmrStatsUrl = clean(K('kmrStatsUrl')),
     baseUrl = clean(K('baseUrl')),
     realName = tostring((theme('base') or {}).realName or ''):match('^%s*1%s*$') ~= nil,
+    realNameOffline = tostring((theme('base') or {}).offline or ''):lower():match('lock') and 'lock' or 'free',
     gameHud = (function()
       local v = tostring(K('gameHud') or ''):lower():gsub('%s', '')
       return (v == 'show' or v == 'hideall') and v or 'hide'
@@ -769,7 +771,7 @@ local config = (function()
     end
     table.sort(lines)
     lines[#lines + 1] = string.format('kmr: points=%s ratingDsq=%s', tostring(kmrPoints.limit), kmrRating.on and tostring(kmrRating.dsqAt) or '-')
-    lines[#lines + 1] = 'base: realName=' .. (c.realName and 1 or 0)
+    lines[#lines + 1] = 'base: realName=' .. (c.realName and 1 or 0) .. ' offline=' .. c.realNameOffline
     return lines
   end
   return c
@@ -1461,7 +1463,13 @@ do
     end)
   end
   local NAME_GAP = 30
-  B.name = { status = nil, nextT = 0, busy = false, lockT = -1e9, told = nil, failLogged = false }
+  B.name = { status = nil, nextT = 0, busy = false, lockT = -1e9, told = nil, failLogged = false, offline = false, alertDue = nil }
+  local function sendAlert(text)
+    local body = '{"kind":"base_offline","steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"text":' .. jsonStr(text) .. '}'
+    web.request('POST', config.baseUrl .. '/v1/alert', { ['Content-Type'] = 'application/json' }, body, function(err, res)
+      if not err and res and tonumber(res.status) == 200 then B.name.alertDue = nil end
+    end)
+  end
   local function missingText(list)
     local out = {}
     for w in tostring(list or ''):gmatch('[^,]+') do out[#out + 1] = TEXTS.realNameWhat[w] or w end
@@ -1475,12 +1483,25 @@ do
       web.request('GET', config.baseUrl .. '/v1/name?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
         N.busy = false
         if err or not res or tonumber(res.status) ~= 200 then
+          N.offline = true
           if not N.failLogged then
             N.failLogged = true
-            ac.log('race-control: real name not read from the base (' .. tostring(err or (res and res.status)) .. '): nothing locked')
+            local started = sim.isSessionStarted
+            local lock = config.realNameOffline == 'lock' and not started
+            ac.log('race-control: real name not read from the base (' .. tostring(err or (res and res.status)) .. '): '
+              .. (lock and 'controls locked until it answers' or 'nothing locked'))
+            local what = string.format('base of the event not answering - real name not confirmed - %s',
+              lock and 'controls locked (session not started)' or (started and 'session started, driving' or 'not locked'))
+            rcLog('Base offline', what)
+            N.alertDue = what
           end
           return
         end
+        if N.offline then
+          N.offline = false
+          if N.told == TEXTS.realNameOffline then physics.lockUserControlsFor(0); N.told = nil end
+        end
+        if N.alertDue then sendAlert(N.alertDue) end
         local kind, rest = tostring(res.body or ''):match('^(%u+)|([^\r\n]*)')
         if kind == 'OK' and rest:match('%S') then
           N.status, N.missing = 'ok', nil
@@ -1503,6 +1524,18 @@ do
         physics.lockUserControlsFor(3)
       end
       showNotice(TEXTS.rcTitle, string.format(TEXTS.realNameMissing, N.missing), nil, 1)
+    elseif N.offline and N.status ~= 'ok' and config.realNameOffline == 'lock' then
+      if not sim.isSessionStarted then
+        N.told = TEXTS.realNameOffline
+        if state.ui.clock - N.lockT >= 2 then
+          N.lockT = state.ui.clock
+          physics.lockUserControlsFor(3)
+        end
+        showNotice(TEXTS.rcTitle, TEXTS.realNameOffline, nil, 1)
+      elseif N.told == TEXTS.realNameOffline then
+        N.told = nil
+        physics.lockUserControlsFor(0)
+      end
     end
   end
   local publish = Record.onSave
@@ -6974,7 +7007,7 @@ Desktop.commands = {
     { 'player_drive_through_list', 'lists all the drive-through penalties that haven\'t been cleared yet' },
     { 'player_kick 0', 'kicks the player associated with the slot number 0' },
     { 'player_temporary_ban 0|60', 'bans the player in slot number 0 for 60 minutes' },
-    { 'player_temporary_ban_guid 12345678901234567|60', 'bans the player with GUID 12345678901234567 for 60 minutes' },
+    { 'player_temporary_ban_guid 12345678901234567|60', 'bans the player with GUID 12345678901234567 for 60 minutes (BAN of the race direction: 5256000 minutes, 10 years)' },
     { 'player_ban_list', 'lists all the banned players' },
     { 'player_unban 12345678901234567', 'unbans the player with GUID 12345678901234567' },
     { 'reserved_slots_list', 'shows a list of the reserved slots' },
@@ -9584,18 +9617,19 @@ local drawDesktopUI = (function()
       end
     end
   end
-  local function releaseDriver(action, name, label)
+  local BAN_MINUTES = 5256000
+  local function releaseDriver(action, name, label, suffix)
     if name == '' then return end
     local known = Direction.guids[name]
     if known then
-      queueCommand('/kmr ' .. action .. ' ' .. known)
+      queueCommand('/kmr ' .. action .. ' ' .. known .. (suffix or ''))
       refreshDriver(name)
       Direction.status, Direction.statusT = string.format(TEXTS.dirSent, label .. ' ' .. name), state.ui.clock
       Direction.statusColor = PANEL_COLORS.yellow
       ac.log('race-control: race direction command sent: ' .. action .. ' for ' .. name)
       return
     end
-    Direction.guidJob = { action = action, name = name, label = label, t = state.ui.clock }
+    Direction.guidJob = { action = action, name = name, label = label, suffix = suffix, t = state.ui.clock }
     queueCommand('/kmr driver_get_guid ' .. name)
     Direction.status, Direction.statusT = string.format(TEXTS.dirGuidAsk, name), state.ui.clock
     Direction.statusColor = PANEL_COLORS.yellow
@@ -9620,7 +9654,7 @@ local drawDesktopUI = (function()
           state.ui.clock, COLOR_TITLE
         return
       end
-      queueCommand('/kmr ' .. job.action .. ' ' .. guid)
+      queueCommand('/kmr ' .. job.action .. ' ' .. guid .. (job.suffix or ''))
       refreshDriver(job.name)
       Direction.status, Direction.statusT = string.format(TEXTS.dirSent, job.label .. ' ' .. job.name), state.ui.clock
       Direction.statusColor = PANEL_COLORS.yellow
@@ -10015,6 +10049,10 @@ local drawDesktopUI = (function()
         releaseDriver('driver_reset_money', Direction.target, 'reset money') end)
       tx = confirmChip(TEXTS.dirStats, 'tstats', vec2(tx, y - 1 * s), s, nil, function()
         releaseDriver('driver_reset_driving_stats', Direction.target, 'reset stats') end)
+      tx = confirmChip(TEXTS.dirBan, 'tban', vec2(tx, y - 1 * s), s, PANEL_COLORS.red, function()
+        releaseDriver('player_temporary_ban_guid', Direction.target, 'ban', '|' .. BAN_MINUTES) end)
+      tx = confirmChip(TEXTS.dirUnban, 'tunban', vec2(tx, y - 1 * s), s, nil, function()
+        releaseDriver('player_unban', Direction.target, 'unban') end)
       tx = chip(TEXTS.dirListBtn, vec2(tx, y - 1 * s), s, Direction.listOpen, nil, function()
         Direction.listOpen = not Direction.listOpen
         if Direction.listOpen and state.kmrAdmin then queueCommand('/kmr player_list') end
