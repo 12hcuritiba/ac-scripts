@@ -7334,7 +7334,7 @@ do
       text = face('raleway-600', ';Weight=SemiBold', { 'Raleway Thin', 'Raleway Thin SemiBold', 'Raleway' }), mono = MONO, files = true },
     { id = 'titillium', name = 'Titillium Web', title = face('titillium-web-700', ';Weight=Bold', { 'Titillium Web', 'Titillium Web Bold' }),
       text = face('titillium-web-600', ';Weight=SemiBold', { 'Titillium Web', 'Titillium Web SemiBold' }), mono = MONO, files = true },
-    { id = 'barlow', name = 'Barlow', title = face('barlow-condensed-600', ';Weight=SemiBold', { 'Barlow Condensed', 'Barlow Condensed SemiBold' }),
+    { id = 'barlow', name = 'Barlow', title = face('barlow-condensed-600', ';Weight=SemiBold;Stretch=Condensed', { 'Barlow', 'Barlow Condensed' }),
       text = face('barlow-600', ';Weight=SemiBold', { 'Barlow', 'Barlow SemiBold' }), mono = MONO, files = true },
     { id = 'rajdhani', name = 'Rajdhani', title = face('rajdhani-700', ';Weight=Bold', { 'Rajdhani', 'Rajdhani Bold' }),
       text = face('rajdhani-600', ';Weight=SemiBold', { 'Rajdhani', 'Rajdhani SemiBold' }), mono = MONO, files = true },
@@ -7367,19 +7367,17 @@ function Desktop.fontCheck()
   end
   for _, f in ipairs(Desktop.text.sets) do
     if f.files then
-      local missing, used = {}, {}
+      local missing = {}
       for _, face in ipairs({ 'title', 'text', 'mono' }) do
         local got
         for _, spec in ipairs(f.names[face]) do
           if not absent(spec) then got = spec break end
         end
-        if got then f[face] = got; used[#used + 1] = got
-        elseif face == 'mono' then f.mono = 'Consolas'; used[#used + 1] = 'Consolas (numbers; Roboto Mono not loaded)'
+        if got then f[face] = got
+        elseif face == 'mono' then f.mono = 'Consolas'
         else missing[#missing + 1] = table.concat(f.names[face], ' / ') end
       end
       f.ready = #missing == 0
-      ac.log(string.format('race-control: font %s %s (%s)', f.id, f.ready and 'found' or 'missing',
-        f.ready and table.concat(used, ' + ') or ('none of: ' .. table.concat(missing, ' | ') .. (#used > 0 and (' - loaded: ' .. table.concat(used, ' + ')) or ''))))
     end
   end
   if Desktop.text.wanted then Desktop.textApply(Desktop.text.wanted) end

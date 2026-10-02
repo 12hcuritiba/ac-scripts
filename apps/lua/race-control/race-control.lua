@@ -33,16 +33,9 @@ do
   local root = ac.getFolder(ac.FolderID.Root)
   local from = root .. '\\apps\\lua\\race-control\\fonts'
   local to = root .. '\\content\\fonts'
-  local copied, failed = {}, {}
   for _, name in ipairs(io.scanDir(from, '*.ttf') or {}) do
     local src, dst = from .. '\\' .. name, to .. '\\race-control-' .. name
-    if io.fileSize(dst) ~= io.fileSize(src) then
-      if io.copyFile(src, dst, false) then copied[#copied + 1] = name else failed[#failed + 1] = name end
-    end
-  end
-  if #copied > 0 or #failed > 0 then
-    ac.log('race-control app: fonts to content/fonts: copied ' .. (#copied > 0 and table.concat(copied, ' ') or 'none')
-      .. (#failed > 0 and ('; failed ' .. table.concat(failed, ' ')) or ''))
+    if io.fileSize(dst) ~= io.fileSize(src) then io.copyFile(src, dst, false) end
   end
 end
 if ac.getSim().isOnlineRace then
