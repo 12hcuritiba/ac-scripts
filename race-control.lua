@@ -381,7 +381,7 @@ local TEXTS = {
   dirNoAnswer = 'No answer from the KMR in 5 s - login or command failed',
   dirFailed = 'Failed: %s', dirSent = 'Sent: %s - waiting for the KMR', dirAnswer = 'KMR: %s',
   dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT', dirFuel = 'FUEL',
-  setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', text = 'Text', app = 'App' },
+  setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', text = 'Text', app = 'App', room = 'Racing Room' },
   setFontSample = 'RACING CONTROL  P3  Slow down', setFontMissing = 'not installed', setTextMin = 'Small text at least', setTextMinOff = 'Off', setPreset = 'Preset',
   setPresets = { verbose = 'Verbose', race = 'Race', minimal = 'Minimal', custom = 'Custom' }, setAlways = 'always - on the Racing Control panel',
   setAreas = { rc = 'Racing Control, flags, driver swap, race director', limits = 'Track limits and invalid laps',
@@ -416,6 +416,18 @@ local TEXTS = {
   redPlace = 'pit place', redLane = 'pit lane', redTrack = 'track', redCount = 'In the pits %d / %d - over the limit %d',
   lobbyTitle = 'RACING CONTROL', lobbyStops = 'Stops', lobbyKmr = 'KMR points / rating', lobbyWeather = 'Air / track',
   lobbyMessages = 'MESSAGES', lobbyWindow = 'Racing Control - lobby',
+  scrShare = 'RACING ROOM', shareOn = 'GAME SCREEN SHARED', shareOff = 'GAME SCREEN NOT SHARED', shareHint = '< off   on >',
+  rrRoom = '%s - %s', rrNone = 'Not connected - no voice and video', rrOther = 'Open on another computer - no voice and video',
+  rrOffline = 'Base of the event not answering', rrNoRoom = 'Open, not in a room - no voice and video', rrWait = 'Checking...',
+  rrAreas = { pitwall = 'Pitwall', anteroom = 'Anteroom', control = 'Control room', individual = 'Individual room', workshop = 'Workshop' },
+  lobbyRc = 'RACING CONTROL', lobbyAccount = 'Account', lobbyRegistration = 'Registration', lobbyBase = 'Base of the event',
+  lobbyApp = 'Racing Control app', lobbyRoom = 'Racing Room', lobbyShare = 'Game screen', lobbyOk = 'ok', lobbyMissing = 'missing: %s',
+  lobbyOnline = 'online', lobbyOffline = 'offline', lobbyRunning = 'running', lobbyNotRunning = 'not running', lobbyShared = 'shared',
+  lobbyNotShared = 'not shared', lobbyOff = 'not used on this server',
+  setShareSource = 'Source', setShareLayout = 'Screens', setShareVr = 'VR: Game window (the mirror of the headset on the PC)',
+  setShareSources = { game = 'Game window', screen1 = 'Screen 1', screen2 = 'Screen 2', screen3 = 'Screen 3' },
+  setShareLayouts = { single = 'Single', triple = 'Triple (all)', center = 'Triple (middle)' },
+  setShareGo = 'SHARE GAME SCREEN', setShareStop = 'STOP SHARING',
   menuDesktops = 'Desktops', menuAudit = 'Audit', auditTitle = 'AUDIT', auditPoints = 'KMR points %d / %d',
   auditRating = 'KMR rating %s',
   auditCount = '%d messages', auditEmpty = 'No messages in this session',
@@ -423,7 +435,7 @@ local TEXTS = {
   edChoose = 'Click a screen to choose it and drag it to its place',
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
-    weather = 'Weather', map = 'Track map', telemetry = 'Telemetry' },
+    weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room' },
   scrTelemetry = 'TELEMETRY',
   teleChannels = { thr = 'THR', brk = 'BRK', clu = 'CLU', str = 'STR', spd = 'SPD', gear = 'GEAR', glat = 'G LAT', glon = 'G LON' },
   teleShort = { thr = 'T', brk = 'B', clu = 'C', str = 'S', spd = 'V', gear = 'G', glat = 'X', glon = 'Z' },
@@ -1575,6 +1587,58 @@ do
         for v in s:gmatch("%d+") do sec[#sec + 1] = tonumber(v) end
         W.value = { ms = tonumber(ms), s = sec }
       end)
+  end
+  local RR_GAP = 5
+  B.rr = { state = 'unknown', nextT = 0, busy = false, garage = '', area = '', screen = false, game = false, logged = nil,
+    source = tostring(ac.storage['rc.share.source'] or 'game'), layout = tostring(ac.storage['rc.share.layout'] or 'single') }
+  function B.rrSet(source, layout)
+    local R = B.rr
+    if source then R.source = source; ac.storage['rc.share.source'] = source end
+    if layout then R.layout = layout; ac.storage['rc.share.layout'] = layout end
+  end
+  function B.rrUpdate()
+    local R = B.rr
+    if not on() or R.busy or state.ui.clock < R.nextT then return end
+    R.busy, R.nextT = true, state.ui.clock + RR_GAP
+    web.request('GET', config.baseUrl .. '/v1/rr?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
+      R.busy = false
+      if err or not res or tonumber(res.status) ~= 200 then R.state = 'offline'
+      else
+        local body = tostring(res.body or '')
+        local garage, area, screen, game = body:match('^OK|([^|]*)|([^|]*)|(%d)|(%d)')
+        if garage then
+          R.state, R.garage, R.area, R.screen, R.game = 'on', garage, area, screen == '1', game == '1'
+        else
+          R.state, R.screen, R.game = body:find('^OTHER') and 'other' or 'none', false, false
+        end
+      end
+      local now = R.state .. '|' .. R.garage .. '|' .. R.area .. '|' .. tostring(R.game)
+      if R.logged ~= now then
+        R.logged = now
+        ac.log('race-control: Racing Room ' .. R.state .. (R.state == 'on' and (' - ' .. R.garage .. ' / ' .. R.area .. (R.game and ' - game screen shared' or '')) or ''))
+      end
+    end)
+  end
+  function B.rrRoom()
+    local R = B.rr
+    if R.state == 'on' and R.area ~= '' then return string.format(TEXTS.rrRoom, R.garage, TEXTS.rrAreas[R.area] or R.area), 'ok' end
+    if R.state == 'on' then return TEXTS.rrNoRoom, 'warn' end
+    if R.state == 'other' then return TEXTS.rrOther, 'warn' end
+    if R.state == 'offline' then return TEXTS.rrOffline, 'bad' end
+    if R.state == 'unknown' then return TEXTS.rrWait, 'dim' end
+    return TEXTS.rrNone, 'bad'
+  end
+  function B.rrShare(share)
+    local R = B.rr
+    if not on() then return end
+    local body = '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"share":' .. (share and 'true' or 'false')
+      .. ',"source":' .. jsonStr(R.source) .. ',"layout":' .. jsonStr(R.layout) .. '}'
+    R.asked = share
+    ac.log('race-control: game screen ' .. (share and 'on' or 'off') .. ' asked to the Racing Room (' .. R.source .. ', ' .. R.layout .. ')')
+    web.request('POST', config.baseUrl .. '/v1/rr/share', { ['Content-Type'] = 'application/json' }, body, function(err, res)
+      R.answer = (not err and res and tostring(res.body or '')) or 'offline'
+      R.nextT = 0
+    end)
   end
   local publish = Record.onSave
   Record.onSave = function(list, seq, text)
@@ -6530,7 +6594,7 @@ local Desktop = { current = 1, count = 1, pitOn = true, place = {}, focus = nil,
   indicatorUntil = 0, drawnOrder = {}, wasInPit = nil }
 do
   local SCREENS = { 'pitbox', 'setup', 'status', 'race', 'laps', 'standings', 'relative', 'laptime', 'delta', 'event',
-    'weather', 'map', 'telemetry' }
+    'weather', 'map', 'telemetry', 'share' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local STORAGE_KEY = 'rc.desktops'
   local OFF_KEY = 'rc.desktopsOff'
@@ -6759,6 +6823,8 @@ do
       Desktop.setMode('delta', Desktop.mode('delta') == 'hidden' and 'visible' or 'hidden')
     elseif g == 'delta' then
       Desktop.deltaStep(dir)
+    elseif g == 'share' then
+      RecordSync.base.rrShare(dir > 0)
     end
   end
   Desktop.filter = { relative = 'ALL', standings = 'ALL', map = 'ALL', weather = 'forecast' }
@@ -7183,7 +7249,7 @@ Desktop.commands = {
 local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
-    'event', 'weather', 'map', 'telemetry' }
+    'event', 'weather', 'map', 'telemetry', 'share' }
   local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden' }
   local MODES = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
@@ -7259,7 +7325,7 @@ do
           { ui.Icons.CarFront, 'status' }, { ui.Icons.Flag, 'race' }, { ui.Icons.List, 'laps' },
           { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
           { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.Weather, 'weather' },
-          { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' } }) do
+          { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' }, { ui.Icons.VideoCamera, 'share' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
       end
     end
@@ -8209,7 +8275,7 @@ local drawRaceScreens = (function()
   local FS = 10
   local PLACE = { relative = { 1572, 380, 300 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 430 }, event = { 770, 200, 380 },
-    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 } }
+    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 } }
   local filter = Desktop.filter
   local function lapTime(ms)
     if not ms or ms <= 0 then return '-' end
@@ -9091,6 +9157,21 @@ local drawRaceScreens = (function()
     drawText(st, FONT_MONO, ssz, vec2(c.x - sw / 2, small and (c.y + 1 * s) or (c.y - r + 8 * s)), COLOR_DIM)
     Drag.icons('telemetry', p1, p2, s)
   end
+  local function shareScreen(car, w, h, s)
+    local Rr = RecordSync.base.rr
+    local p1, p2, y = frame('share', w, h, s, 2, TEXTS.scrShare, TEXTS.shareHint)
+    local isz = 22 * s
+    local a = vec2(p1.x + 14 * s, y)
+    local b = vec2(a.x + isz, a.y + isz)
+    local on = Rr.game
+    ui.drawRectFilled(a, b, on and rgbm(0.2, 0.6, 0.3, 0.9) or rgbm(1, 1, 1, 0.08), 3 * s)
+    ui.drawIcon(ui.Icons.VideoCamera, vec2(a.x + 3 * s, a.y + 3 * s), vec2(b.x - 3 * s, b.y - 3 * s), on and COLOR_TITLE or COLOR_DIM)
+    if Rr.state == 'on' and Rr.area ~= '' then Drag.clickable(a, b, function() RecordSync.base.rrShare(not on) end) end
+    drawText(on and TEXTS.shareOn or TEXTS.shareOff, FONT_TITLE, 10 * s, vec2(b.x + 10 * s, y), on and GREEN or COLOR_DIM)
+    local room, level = RecordSync.base.rrRoom()
+    drawText(room, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + 13 * s), ({ ok = COLOR_TITLE, warn = YELLOW, bad = RED })[level] or COLOR_DIM)
+    Drag.icons('share', p1, p2, s)
+  end
   return function(car, w, h, s)
     local line, sector = Desktop.recent('line'), Desktop.recent('sector')
     if shown('race', car.isInPitlane or line) then raceScreen(car, w, h, s) end
@@ -9103,6 +9184,7 @@ local drawRaceScreens = (function()
     if shown('weather', line) then weatherScreen(car, w, h, s) end
     if shown('map', Desktop.close or line) then mapScreen(car, w, h, s) end
     if shown('telemetry', false) then telemetryScreen(car, w, h, s) end
+    if shown('share', car.isInPitlane) then shareScreen(car, w, h, s) end
   end
 end)()
 local drawDesktopUI = (function()
@@ -9638,7 +9720,7 @@ local drawDesktopUI = (function()
     drawPanel(p1, p2, BORDER_BASE, s)
     drawText(TEXTS.setTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     local x = p1.x + 150 * s
-    for _, t in ipairs({ 'messages', 'controls', 'text', 'app' }) do
+    for _, t in ipairs({ 'messages', 'controls', 'text', 'app', 'room' }) do
       x = chip(TEXTS.setTabs[t], vec2(x, p1.y + 4 * s), s, Settings.tab == t, nil, function()
         Settings.tab = t
         Settings.appT = nil
@@ -9701,6 +9783,27 @@ local drawDesktopUI = (function()
         cx = chip(v == 0 and TEXTS.setTextMinOff or (v .. ' px'), vec2(cx, y), s, Desktop.text.min == v, nil,
           function() Desktop.textApply(Desktop.text.id, v) end)
       end
+    elseif Settings.tab == 'room' then
+      local Rr = RecordSync.base.rr
+      drawText(TEXTS.setShareSource, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      local cx = x0 + 70 * s
+      for _, k in ipairs({ 'game', 'screen1', 'screen2', 'screen3' }) do
+        cx = chip(TEXTS.setShareSources[k], vec2(cx, y), s, Rr.source == k, nil, function() RecordSync.base.rrSet(k, nil) end)
+      end
+      y = y + 22 * s
+      drawText(TEXTS.setShareLayout, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      cx = x0 + 70 * s
+      for _, k in ipairs({ 'single', 'triple', 'center' }) do
+        cx = chip(TEXTS.setShareLayouts[k], vec2(cx, y), s, Rr.layout == k, nil, function() RecordSync.base.rrSet(nil, k) end)
+      end
+      y = y + 22 * s
+      drawText(TEXTS.setShareVr, FONT_MONO, 9 * s, vec2(x0, y), COLOR_DIM)
+      y = y + 20 * s
+      local room, level = RecordSync.base.rrRoom()
+      drawText(TEXTS.lobbyRoom, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      drawText(room, FONT_TEXT, 10 * s, vec2(x0 + 70 * s, y), ({ ok = PANEL_COLORS.green, warn = PANEL_COLORS.yellow, bad = PANEL_COLORS.red })[level] or COLOR_DIM)
+      y = y + 20 * s
+      chip(Rr.game and TEXTS.setShareStop or TEXTS.setShareGo, vec2(x0, y), s, Rr.game, nil, function() RecordSync.base.rrShare(not Rr.game) end)
     elseif Settings.tab == 'controls' then
       for _, c in ipairs(CTL) do
         local on = Settings.ctl[c]
@@ -10361,7 +10464,22 @@ local drawDesktopUI = (function()
       if it.area == nil or it.area == 'rc' or Audit.allow(it.area) then msgs[#msgs + 1] = it end
       if #msgs >= 8 then break end
     end
-    local p2 = vec2(p1.x + LW, p1.y + (30 + 8 * 13 + 22 + math.max(#msgs, 1) * 24 + 8) * s)
+    local Rr, Nm = RecordSync.base.rr, RecordSync.base.name
+    local room, level = RecordSync.base.rrRoom()
+    local LEVEL = { ok = PANEL_COLORS.green, warn = PANEL_COLORS.yellow, bad = PANEL_COLORS.red }
+    local baseOff = Rr.state == 'offline' or Nm.offline
+    local rcRows = {
+      { TEXTS.lobbyAccount, tostring(ac.getDriverName(0) or '') .. ' - ' .. tostring(ac.getUserSteamID() or ''), COLOR_TITLE },
+      { TEXTS.lobbyRegistration, not config.realName and TEXTS.lobbyOff or Nm.status == 'ok' and TEXTS.lobbyOk
+        or Nm.status == 'missing' and string.format(TEXTS.lobbyMissing, Nm.missing or '') or '-',
+        Nm.status == 'missing' and PANEL_COLORS.red or Nm.status == 'ok' and PANEL_COLORS.green or COLOR_DIM },
+      { TEXTS.lobbyBase, config.baseUrl == '' and TEXTS.lobbyOff or baseOff and TEXTS.lobbyOffline or TEXTS.lobbyOnline,
+        config.baseUrl == '' and COLOR_DIM or baseOff and PANEL_COLORS.red or PANEL_COLORS.green },
+      { TEXTS.lobbyApp, AppLink.alive and TEXTS.lobbyRunning or TEXTS.lobbyNotRunning, AppLink.alive and PANEL_COLORS.green or PANEL_COLORS.red },
+      { TEXTS.lobbyRoom, room, LEVEL[level] or COLOR_DIM },
+      { TEXTS.lobbyShare, Rr.game and TEXTS.lobbyShared or TEXTS.lobbyNotShared, Rr.game and PANEL_COLORS.green or COLOR_DIM },
+    }
+    local p2 = vec2(p1.x + LW, p1.y + (30 + 8 * 13 + 22 + 22 + #rcRows * 13 + math.max(#msgs, 1) * 24 + 8) * s)
     Drag.group = nil
     drawPanel(p1, p2, BORDER_BLUE, s)
     drawText(config.eventName ~= '' and config.eventName:upper() or TEXTS.lobbyTitle, FONT_TITLE, 12 * s,
@@ -10384,6 +10502,15 @@ local drawDesktopUI = (function()
     for _, r in ipairs(rows) do
       drawText(r[1], FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
       drawTextRight(r[2], FONT_MONO, 10 * s, p2.x - 14 * s, y, r[2] == '-' and COLOR_OFF or COLOR_TITLE)
+      y = y + 13 * s
+    end
+    drawSeparator(p1, p2, y + 3 * s, s)
+    y = y + 8 * s
+    drawText(TEXTS.lobbyRc, FONT_TITLE, 10 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+    y = y + 14 * s
+    for _, r in ipairs(rcRows) do
+      drawText(r[1], FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+      drawTextRight(r[2], FONT_MONO, 10 * s, p2.x - 14 * s, y, r[3])
       y = y + 13 * s
     end
     drawSeparator(p1, p2, y + 3 * s, s)
@@ -11121,6 +11248,7 @@ function script.update(dt)
   RecordSync.update()
   RecordSync.base.update()
   RecordSync.base.bestUpdate()
+  RecordSync.base.rrUpdate()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
     state.hold = nil
     PitRecord.save()
