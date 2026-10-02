@@ -119,12 +119,7 @@ local cfg = ac.configValues({
   practiceSlowdownUnpaidPenalty = 'DT',
   qualifySlowdownUnpaidPenalty = 'DT',
   raceSlowdownUnpaidPenalty = 'DT',
-  practiceSlowdownUnpaidParam = 0,
-  qualifySlowdownUnpaidParam = 0,
-  raceSlowdownUnpaidParam = 0,
   cutSpinAngle = 90,
-  pitSlowdownDeadline = 0,
-  pitSlowdownMaxGas = 0,
 })
 local RC_VERSION = '2026.09.26'
 local TEXTS = {
@@ -357,7 +352,7 @@ local TEXTS = {
   scrWindow = 'PIT WINDOW', scrStintLine = 'STINT', scrTyres = 'Tyres', scrPending = 'Pending',
   scrOpt = 'Opt.', scrCarBest = 'Car best', scrStintN = 'STINT %d - %s', scrStintInfo = '%d laps - %s',
   scrStintMin = ' / min %d', scrBestAvg = 'Best %s - avg %s', scrDeltaButton = 'Δ',
-  scrDeltaRefs = { best = 'BEST', session = 'SESS', optimal = 'OPT' }, scrDeltaSectors = 'SECTORS',
+  scrDeltaRefs = { best = 'BEST', session = 'SESS', optimal = 'OPT', alltime = 'ALL' }, scrDeltaSectors = 'SECTORS',
   cmWatch = 'WATCH ON BOARD', cmMine = 'MY CAR', cmNoWatch = 'watch on board: off on this server (roles watch:1)',
   scrGaps = 'GAPS', scrObligations = 'OBLIGATIONS', scrTrack = 'Track', scrKmr = 'KMR points',
   exitTitle = 'RACE RESTART', exitLine1 = 'Pit exit in single file - restart order',
@@ -1558,6 +1553,28 @@ do
         physics.lockUserControlsFor(0)
       end
     end
+  end
+  local BEST_GAP = 120
+  B.best = { value = nil, nextT = 0, busy = false }
+  function B.trackKey()
+    local layout = tostring(ac.getTrackLayout and ac.getTrackLayout() or '')
+    return (tostring(ac.getTrackID() or '') .. (layout ~= '' and ('-' .. layout) or '')):gsub('[|%s]', '_')
+  end
+  function B.carKey() return (tostring(ac.getCarID(0) or ''):gsub('[|%s]', '_')) end
+  function B.bestUpdate()
+    local W = B.best
+    if not on() or W.busy or state.ui.clock < W.nextT then return end
+    W.busy, W.nextT = true, state.ui.clock + BEST_GAP
+    web.request('GET', config.baseUrl .. '/v1/best?track=' .. urlEncode(B.trackKey()) .. '&car=' .. urlEncode(B.carKey()), nil, nil,
+      function(err, res)
+        W.busy = false
+        if err or not res or tonumber(res.status) ~= 200 then return end
+        local ms, s = tostring(res.body or ''):match('^OK|(%d+)|([%d/]*)')
+        if not ms then W.value = nil return end
+        local sec = {}
+        for v in s:gmatch("%d+") do sec[#sec + 1] = tonumber(v) end
+        W.value = { ms = tonumber(ms), s = sec }
+      end)
   end
   local publish = Record.onSave
   Record.onSave = function(list, seq, text)
@@ -4005,10 +4022,10 @@ do
   end
   local SERVICE_LOCK_EXTRA = 1
   local function button(name, key, period)
-    return ac.ControlButton('12hcuritiba.race-control/Pit stop ' .. name, { keyboard = { key = key }, period = period })
+    return ac.ControlButton('amxracing.race-control/Pit stop ' .. name, { keyboard = { key = key }, period = period })
   end
   local function padButton(name, pad, period)
-    return ac.ControlButton('12hcuritiba.race-control/Pit stop pad ' .. name, { gamepad = pad, period = period })
+    return ac.ControlButton('amxracing.race-control/Pit stop pad ' .. name, { gamepad = pad, period = period })
   end
   local KEYS = {
     up = button('up', ui.KeyIndex.Up),
@@ -5987,10 +6004,10 @@ do
           vkm[#vkm + 1] = string.format('%.2f', state.tyreLineKm[w] or 0)
         end
         local l = laps[#laps]
-        state.lapOut[#state.lapOut + 1] = string.format('L1|%d|%d|%d|%d|%s|%.2f|%.3f|%s|%s|%.1f|%.1f|%.0f|%s', l.lap, l.ms,
+        state.lapOut[#state.lapOut + 1] = string.format('L2|%d|%d|%d|%d|%s|%.2f|%.3f|%s|%s|%.1f|%.1f|%.0f|%s|%s|%s', l.lap, l.ms,
           l.valid and 1 or 0, l.pit and 1 or 0, table.concat(l.s, '/'), CarRead.num(car.fuel), CarRead.num(car.fuelPerLap),
           table.concat(life, ','), table.concat(vkm, ','), CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature),
-          CarRead.num(sim.roadGrip) * 100, l.driver)
+          CarRead.num(sim.roadGrip) * 100, RecordSync.base.trackKey(), RecordSync.base.carKey(), l.driver)
         if #state.lapOut > 200 then table.remove(state.lapOut, 1) end
       end
       state.lapCut = false
@@ -6519,7 +6536,7 @@ do
   local OFF_KEY = 'rc.desktopsOff'
   Desktop.off = {}
   Desktop.SCREENS = SCREENS
-  local function button(name) return ac.ControlButton('12hcuritiba.race-control/' .. name) end
+  local function button(name) return ac.ControlButton('amxracing.race-control/' .. name) end
   local NAV = { nextScreen = button('Next screen'), prevScreen = button('Previous screen'),
     nextDesktop = button('Next desktop'), prevDesktop = button('Previous desktop'), showPanel = button('Show panel'),
     titleBars = button('Title bars') }
@@ -8407,14 +8424,19 @@ local drawRaceScreens = (function()
     end
     Drag.icons('laptime', p1, p2, s)
   end
-  local DELTA_REFS = { 'best', 'session', 'optimal' }
+  local DELTA_REFS = { 'best', 'session', 'optimal', 'alltime' }
+  local function refOn(r) return r ~= 'alltime' or RecordSync.base.best.value ~= nil end
   local deltaRef = tostring(ac.storage['rc.deltaRef'] or '')
   if not TEXTS.scrDeltaRefs[deltaRef] then deltaRef = 'best' end
   local function setDeltaRef(r) deltaRef = r; ac.storage['rc.deltaRef'] = r end
   Desktop.deltaStep = function(dir)
     local at = 1
     for i, r in ipairs(DELTA_REFS) do if r == deltaRef then at = i end end
-    setDeltaRef(DELTA_REFS[(at - 1 + dir) % #DELTA_REFS + 1])
+    for _ = 1, #DELTA_REFS do
+      at = (at - 1 + dir) % #DELTA_REFS + 1
+      if refOn(DELTA_REFS[at]) then break end
+    end
+    setDeltaRef(DELTA_REFS[at])
   end
   local function sumSplits(list)
     local t = 0
@@ -8430,16 +8452,20 @@ local drawRaceScreens = (function()
         local t = TEXTS.scrDeltaRefs[r]
         local tw = textWidth(t, FONT_MONO, 9 * s)
         local a, b = vec2(x - tw - 6 * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
-        if deltaRef == r then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
-        drawText(t, FONT_MONO, 9 * s, vec2(a.x + 3 * s, a.y + 1 * s), deltaRef == r and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
-        Drag.clickable(a, b, function() setDeltaRef(r) end)
+        local avail = refOn(r)
+        if deltaRef == r and avail then ui.drawRectFilled(a, b, YELLOW, 2 * s)
+        else ui.drawRect(a, b, avail and rgbm(1, 1, 1, 0.3) or rgbm(1, 1, 1, 0.12), 2 * s) end
+        drawText(t, FONT_MONO, 9 * s, vec2(a.x + 3 * s, a.y + 1 * s), (deltaRef == r and avail) and rgbm(0.07, 0.07, 0.07, 1)
+          or avail and COLOR_DIM or COLOR_OFF)
+        if avail then Drag.clickable(a, b, function() setDeltaRef(r) end) end
         x = a.x - 4 * s
       end
     end
     local d0 = CarRead.num(car.performanceMeter)
     local own = CarRead.num(car.bestLapTimeMs)
+    local all = RecordSync.base.best.value
     local ref = deltaRef == 'session' and CarRead.num(sim.bestLapTimeMs) or deltaRef == 'optimal' and sumSplits(car.bestSplits)
-      or own
+      or deltaRef == 'alltime' and (all and all.ms or 0) or own
     local d = nil
     if deltaRef == 'best' then d = d0
     elseif own > 0 and ref > 0 then d = d0 + (CarRead.num(car.lapTimeMs) / 1000 - d0) * (1 - ref / own) end
@@ -8456,6 +8482,10 @@ local drawRaceScreens = (function()
     y = y + 15 * s
     local refSplit = deltaRef == 'optimal' and car.bestSplits or car.bestLapSplits
     local scale = (deltaRef == 'session' and own > 0 and ref > 0) and ref / own or 1
+    if deltaRef == 'alltime' then
+      refSplit, scale = {}, 1
+      for k, v in ipairs(all and all.s or {}) do refSplit[k - 1] = v end
+    end
     local cells = { { TEXTS.scrDeltaSectors, 14, COLOR_DIM } }
     for k = 0, 2 do
       local cur = car.currentSplits and CarRead.num(car.currentSplits[k]) or 0
@@ -11081,6 +11111,7 @@ function script.update(dt)
   OnlineQueue.update()
   RecordSync.update()
   RecordSync.base.update()
+  RecordSync.base.bestUpdate()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
     state.hold = nil
     PitRecord.save()
