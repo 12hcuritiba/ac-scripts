@@ -3,20 +3,20 @@
 -- ============================================================================================================
 -- LEGAL NOTICE
 --
--- Copyright (c) 2026 12h Curitiba, amx racing, amx mods and Max Schrappe. All rights reserved.
+-- Copyright (c) 2026 AMX RACING, amx racing, amx mods, 12h Curitiba and Codice - Sistemas. All rights reserved.
 --
 -- This software, including its source code, rules logic, texts, layouts and documentation, is the exclusive
--- property of 12h Curitiba, amx racing, amx mods and Max Schrappe. It is proprietary and confidential, and it is
--- NOT open source.
+-- property of AMX RACING, amx racing, amx mods, 12h Curitiba and Codice - Sistemas. It is proprietary and
+-- confidential, and it is NOT open source.
 --
 -- No license is granted. Without the prior written authorization of the copyright holders, it is prohibited to:
 --   - use, run or host this software, in whole or in part, on any server, event or championship other than the
---     ones organized or authorized by 12h Curitiba;
+--     ones organized or authorized by AMX RACING or 12h Curitiba;
 --   - copy, reproduce, modify, adapt, translate or create derivative works from it;
 --   - distribute, publish, sell, rent, sublicense or otherwise make it available to third parties;
 --   - remove, alter or hide this notice or any other ownership or authorship information.
 --
--- Its publication at a public address exists only so that the game clients of the 12h Curitiba servers can
+-- Its publication at a public address exists only so that the game clients of the AMX RACING and 12h Curitiba servers can
 -- download it, and does not grant any right of use, copy or distribution.
 --
 -- This software is protected by copyright law, including the Brazilian Copyright Law (Lei nº 9.610/1998) and the
@@ -27,7 +27,7 @@
 -- THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT SHALL THE
 -- COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM ITS USE.
 --
--- Authorization requests: 12hcuritiba@gmail.com
+-- Authorization requests: amxracingg@gmail.com / 12hcuritiba@gmail.com / suporte@codice-ti.com.br
 -- ============================================================================================================
 do
   local root = ac.getFolder(ac.FolderID.Root)
