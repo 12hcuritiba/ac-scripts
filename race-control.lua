@@ -7331,9 +7331,19 @@ do
     { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
       text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
   } }
+  local function withSystem(list)
+    local out = {}
+    for _, n in ipairs(list) do out[#out + 1] = n end
+    for _, n in ipairs(list) do
+      local fam, style = n:match('^([^;]+)(.*)$')
+      out[#out + 1] = fam .. ':@System' .. style
+    end
+    return out
+  end
   for _, f in ipairs(Desktop.text.sets) do
     f.ready = f.files == nil
     if f.files then
+      f.title, f.text, f.mono = withSystem(f.title), withSystem(f.text), withSystem(f.mono)
       f.names = { title = f.title, text = f.text, mono = f.mono }
       f.title, f.text, f.mono = f.title[1], f.text[1], f.mono[1]
     end
@@ -7353,7 +7363,10 @@ function Desktop.fontCheck()
   local function absent(spec)
     local style = spec:match(';.*$') or ''
     none[style] = none[style] or width('Race Control No Font' .. style)
-    return math.abs(width(spec) - none[style]) < 0.01
+    local w = width(spec)
+    local out = math.abs(w - none[style]) < 0.01
+    ac.log(string.format('race-control: font try "%s" width %.2f, default %.2f: %s', spec, w, none[style], out and 'not loaded' or 'loaded'))
+    return out
   end
   for _, f in ipairs(Desktop.text.sets) do
     if f.files then
