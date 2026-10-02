@@ -30,6 +30,8 @@
 -- Authorization requests: 12hcuritiba@gmail.com
 -- ============================================================================================================
 local cfg = ac.configValues({
+  control = '', cockpit = '', event = '', roles = '', kmr = '', base = '', driverSwap = '', pitStops = '',
+  pitWindow = '', pitExit = '', pitSpeed = '', dsq = '', cutZone1 = '', cutZone2 = '', slowdown = '',
   announce = 0,
   penaltyMode = 'CSP',
   forceCockpit = 0,
@@ -501,178 +503,286 @@ local BLACK_FLAG = ac.PenaltyType.BlackFlag
 local TELEPORT_TO_PITS = ac.PenaltyType.TeleportToPits
 local NONE = ac.PenaltyType.None
 local GAME_DT = 2
-local function rule(penalty, param)
-  return {
-    penalty = string.upper(tostring(penalty)),
-    param = math.floor(tonumber(param) or -1),
+local config = (function()
+  local OLD = {
+    penaltyMode = { 'control', 'mode', nil, 'CSP' }, announce = { 'control', 'announce', nil, 0 },
+    code80FreezeDeadlines = { 'control', 'code80Freeze', nil, 1 }, dataCheck = { 'control', 'dataCheck', nil, 1 },
+    forceCockpit = { 'cockpit', 'force', nil, 0 }, cockpitCameraMode = { 'cockpit', 'camera', nil, 0 },
+    cockpitCheckInterval = { 'cockpit', 'interval', nil, 0.05 }, cockpitExemptSteamIDs = { 'cockpit', 'exempt', nil, '' },
+    eventName = { 'event', 'name', nil, '' }, gameHud = { 'event', 'gameHud', nil, 'hide' },
+    raceControlSteamID = { 'roles', 'director', nil, '' }, staffSteamIDs = { 'roles', 'staff', nil, '' },
+    broadcastSteamIDs = { 'roles', 'broadcast', nil, '' },
+    kmrStatsUrl = { 'kmr', 'statsUrl', nil, '' },
+    baseUrl = { 'base', 'url', nil, '' },
+    practiceDriverSwap = { 'driverSwap', 'practice', nil, 0 }, qualifyDriverSwap = { 'driverSwap', 'qualify', nil, 0 },
+    raceDriverSwap = { 'driverSwap', 'race', nil, 0 }, driverSwapMinSeconds = { 'driverSwap', 'minSeconds', nil, 120 },
+    driverSwapRequired = { 'driverSwap', 'required', nil, '' },
+    wrongDriverSeconds = { 'driverSwap', 'wrongDriverSeconds', nil, '120' },
+    pitStopsEnabled = { 'pitStops', 'enabled', nil, 0 }, pitStopsRequired = { 'pitStops', 'required', nil, 0 },
+    pitStopOrder = { 'pitStops', 'order', nil, 'F<TR>' }, pitStopMode = { 'pitStops', 'mode', nil, 'AUTO' },
+    pitWindowStartMinutes = { 'pitWindow', 'startMinutes', nil, 0 }, pitWindowEndMinutes = { 'pitWindow', 'endMinutes', nil, 0 },
+    practiceClosedSeconds = { 'pitExit', 'practiceSeconds', nil, 0 }, qualifyClosedSeconds = { 'pitExit', 'qualifySeconds', nil, 120 },
+    raceClosedSeconds = { 'pitExit', 'raceSeconds', nil, 0 },
+    practicePenalty = { 'pitExit', 'practice', nil, 'NONE' }, qualifyPenalty = { 'pitExit', 'qualify', nil, 'DSQ' },
+    racePenalty = { 'pitExit', 'race', nil, 'NONE' },
+    pitSpeedLimit = { 'pitSpeed', 'limit', nil, 60 }, pitSpeedTolerance = { 'pitSpeed', 'tolerance', nil, 2 },
+    pitSpeedDeadlineLaps = { 'pitSpeed', 'deadlineLaps', nil, 1 },
+    holdShortSeconds = { 'stopAndGo', 'holdShort', nil, 45 }, holdLongSeconds = { 'stopAndGo', 'holdLong', nil, 90 },
+    dsqBlackFlagLaps = { 'dsq', 'blackFlagLaps', nil, 3 },
+    cutZoneStart = { 'cutZone1', 'start', nil, 0.16 }, cutZoneEnd = { 'cutZone1', 'end', nil, 0.24 },
+    cutMaxWheelsOut = { 'cutZone1', 'maxWheelsOut', nil, 3 }, cutSlowdownMaxGas = { 'cutZone1', 'maxGas', nil, 0.2 },
+    cutGainTolerance = { 'cutZone1', 'gainTolerance', nil, 6 }, cutSlowdownDeadline = { 'cutZone1', 'deadline', nil, 10 },
+    practiceCutPenalty = { 'cutZone1', 'practice', 1, 'SLOW DOWN' }, practiceCutPenaltyParam = { 'cutZone1', 'practice', 2, 0 },
+    qualifyCutPenalty = { 'cutZone1', 'qualify', 1, 'SLOW DOWN' }, qualifyCutPenaltyParam = { 'cutZone1', 'qualify', 2, 0 },
+    raceCutPenalty = { 'cutZone1', 'race', 1, 'SLOW DOWN' }, raceCutPenaltyParam = { 'cutZone1', 'race', 2, 0 },
+    cutZone2Start = { 'cutZone2', 'start', nil, 0.81 }, cutZone2End = { 'cutZone2', 'end', nil, 0.91 },
+    cutZone2MaxWheelsOut = { 'cutZone2', 'maxWheelsOut', nil, 3 }, cutZone2SlowdownMaxGas = { 'cutZone2', 'maxGas', nil, 0.1 },
+    cutZone2GainTolerance = { 'cutZone2', 'gainTolerance', nil, 6 }, cutZone2SlowdownDeadline = { 'cutZone2', 'deadline', nil, 18 },
+    practiceCutZone2Penalty = { 'cutZone2', 'practice', 1, 'SLOW DOWN' }, practiceCutZone2PenaltyParam = { 'cutZone2', 'practice', 2, 9 },
+    qualifyCutZone2Penalty = { 'cutZone2', 'qualify', 1, 'SLOW DOWN' }, qualifyCutZone2PenaltyParam = { 'cutZone2', 'qualify', 2, 9 },
+    raceCutZone2Penalty = { 'cutZone2', 'race', 1, 'SLOW DOWN' }, raceCutZone2PenaltyParam = { 'cutZone2', 'race', 2, 9 },
+    practiceSlowdownUnpaidPenalty = { 'slowdown', 'practiceUnpaid', nil, 'DT' },
+    qualifySlowdownUnpaidPenalty = { 'slowdown', 'qualifyUnpaid', nil, 'DT' },
+    raceSlowdownUnpaidPenalty = { 'slowdown', 'raceUnpaid', nil, 'DT' },
+    cutSpinAngle = { 'slowdown', 'spinAngle', nil, 90 },
   }
-end
-local function bySession(practice, qualify, race)
-  return {
-    [ac.SessionType.Practice] = practice,
-    [ac.SessionType.Qualify] = qualify,
-    [ac.SessionType.Race] = race,
-  }
-end
-local function structKey(key, defaults)
-  local out = {}
-  for k, v in pairs(defaults) do out[k] = v end
-  for item in tostring(cfg[key] or ''):gmatch('[^|]+') do
-    local k, v = item:match('^%s*([%w_]+)%s*:%s*(.-)%s*$')
-    if k and out[k] ~= nil then
-      out[k] = type(out[k]) == 'number' and (tonumber(v) or out[k]) or v:upper()
-    else
-      ac.log('race-control: key ' .. key .. ': field not known: ' .. item:match('^%s*(.-)%s*$'))
-    end
+  local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
+    pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
+  local FIELDS = { kmr = { points = 1, ratingDsq = 1 },
+    stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
+  for _, m in pairs(OLD) do
+    if THEMES[m[1]] then FIELDS[m[1]] = FIELDS[m[1]] or {}; FIELDS[m[1]][m[2]] = 1 end
   end
-  return out
-end
-local STOP_AND_GO = structKey('stopAndGo', { mode = 'HOLD', secondsPerDT = 30, maxDT = 7, deadlineLaps = 1,
-  returnSeconds = 0 })
-local TOW_RULE = { mode = 'TOW', towSeconds = 120, repairFactor = 1.5 }
-local REPAIR_FORMULA = structKey('repairFormula', { baseSeconds = 180, weightEngine = 1.0, weightSuspension = 0.5,
-  weightBody = 0.25 })
-local SCREEN_SCALE = structKey('screenScale', { exponent = 0.45, max = 1.5 })
-local TYRE_LIFE = structKey('tyreLife', { ok = 70, worn = 30 })
-local TYRE_TEMP = structKey('tyreTemp', { edge = 98 })
-local WRONG_WAY = structKey('wrongWay', { maxMeters = 30, penalty = 'DSQ', showMeters = 2, angle = 90 })
-local DAMAGE = structKey('damage', { toeBent = 10, toeBroken = 20, camberBent = 10, camberBroken = 20, bodyRepair = 150,
-  powertrainRepair = 45,
-  maxPunctured = 2, repairLaps = 2, beyondTowSeconds = 180, dsqTowSeconds = 180, settleSeconds = 1 })
-local function makeZone(category, startPos, endPos, maxWheelsOut, rules, deadline, maxGas, gainTolerance)
-  local s = tonumber(startPos) or 0
-  local e = tonumber(endPos) or 0
-  return {
-    category = category,
-    enabled = s ~= e,
-    startPos = s,
-    endPos = e,
-    maxWheelsOut = math.floor(tonumber(maxWheelsOut) or 4),
-    rules = rules,
-    deadline = tonumber(deadline) or 0,
-    maxGas = tonumber(maxGas) or 0,
-    gainTolerance = tonumber(gainTolerance) or 6,
+  local raw = {}
+  local function theme(key)
+    if raw[key] == nil then
+      local text = tostring(cfg[key] or '')
+      if not text:match('%S') then
+        raw[key] = false
+      else
+        local t = {}
+        for item in text:gmatch('[^|]+') do
+          local k, v = item:match('^%s*([%w_]+)%s*:%s*(.-)%s*$')
+          if k and FIELDS[key] and FIELDS[key][k] then t[k] = v
+          elseif key ~= 'stopAndGo' then ac.log('race-control: key ' .. key .. ': field not known: ' .. item:match('^%s*(.-)%s*$')) end
+        end
+        raw[key] = t
+      end
+    end
+    return raw[key] or nil
+  end
+  local oldUsed = {}
+  local function K(old)
+    local m = OLD[old]
+    local t = m and THEMES[m[1]] and theme(m[1])
+    if t then
+      local v = t[m[2]]
+      if v == nil then return m[1] == 'stopAndGo' and cfg[old] or m[4] end
+      if m[3] then v = (v .. '/'):match(string.rep('[^/]*/', m[3] - 1) .. '([^/]*)/') or '' end
+      if v == '' and type(m[4]) == 'number' and m[3] then return m[4] end
+      return v
+    end
+    if m and THEMES[m[1]] and tostring(cfg[old] or '') ~= tostring(m[4]) and not oldUsed[m[1]] then
+      oldUsed[m[1]] = true
+      ac.log('race-control: old keys of ' .. m[1] .. ' in use (theme key ' .. m[1] .. ' not on the server)')
+    end
+    return cfg[old]
+  end
+  local function rule(penalty, param)
+    return {
+      penalty = string.upper(tostring(penalty)),
+      param = math.floor(tonumber(param) or -1),
+    }
+  end
+  local function bySession(practice, qualify, race)
+    return {
+      [ac.SessionType.Practice] = practice,
+      [ac.SessionType.Qualify] = qualify,
+      [ac.SessionType.Race] = race,
+    }
+  end
+  local function structKey(key, defaults)
+    local out = {}
+    for k, v in pairs(defaults) do out[k] = v end
+    for item in tostring(cfg[key] or ''):gmatch('[^|]+') do
+      local k, v = item:match('^%s*([%w_]+)%s*:%s*(.-)%s*$')
+      if k and out[k] ~= nil then
+        out[k] = type(out[k]) == 'number' and (tonumber(v) or out[k]) or v:upper()
+      else
+        ac.log('race-control: key ' .. key .. ': field not known: ' .. item:match('^%s*(.-)%s*$'))
+      end
+    end
+    return out
+  end
+  local function makeZone(category, startPos, endPos, maxWheelsOut, rules, deadline, maxGas, gainTolerance)
+    local s = tonumber(startPos) or 0
+    local e = tonumber(endPos) or 0
+    return {
+      category = category,
+      enabled = s ~= e,
+      startPos = s,
+      endPos = e,
+      maxWheelsOut = math.floor(tonumber(maxWheelsOut) or 4),
+      rules = rules,
+      deadline = tonumber(deadline) or 0,
+      maxGas = tonumber(maxGas) or 0,
+      gainTolerance = tonumber(gainTolerance) or 6,
+    }
+  end
+  local STOP_AND_GO = structKey('stopAndGo', { mode = 'HOLD', secondsPerDT = 30, maxDT = 7, deadlineLaps = 1,
+    returnSeconds = 0, holdShort = 45, holdLong = 90 })
+  local TOW_RULE = { mode = 'TOW', towSeconds = 120, repairFactor = 1.5 }
+  local REPAIR_FORMULA = structKey('repairFormula', { baseSeconds = 180, weightEngine = 1.0, weightSuspension = 0.5,
+    weightBody = 0.25 })
+  local DAMAGE = structKey('damage', { toeBent = 10, toeBroken = 20, camberBent = 10, camberBroken = 20, bodyRepair = 150,
+    powertrainRepair = 45, maxPunctured = 2, repairLaps = 2, beyondTowSeconds = 180, dsqTowSeconds = 180, settleSeconds = 1 })
+  local clean = function(v) return (tostring(v or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')) end
+  local kmrTheme = theme('kmr')
+  local kmrPoints = kmrTheme and { limit = tonumber(kmrTheme.points) or 100 } or structKey('kmrPoints', { limit = 100 })
+  local kmrRating
+  if kmrTheme then
+    kmrRating = { dsqAt = tonumber(kmrTheme.ratingDsq) or 0, on = tostring(kmrTheme.ratingDsq or ''):match('%S') ~= nil }
+  else
+    kmrRating = structKey('kmrRating', { dsqAt = 0 })
+    kmrRating.on = tostring(cfg.kmrRating or ''):match('%S') ~= nil
+  end
+  local c = {
+    mode = string.upper(tostring(K('penaltyMode'))),
+    raceControlSteamID = tostring(K('raceControlSteamID') or ''),
+    announce = tonumber(K('announce')) == 1,
+    holdShort = tonumber(K('holdShortSeconds')) or 45,
+    holdLong = tonumber(K('holdLongSeconds')) or 90,
+    sg = STOP_AND_GO.mode == 'SG',
+    sgSecondsPerDT = STOP_AND_GO.secondsPerDT,
+    sgMaxDT = STOP_AND_GO.maxDT,
+    sgDeadlineLaps = STOP_AND_GO.deadlineLaps,
+    sgReturnSeconds = STOP_AND_GO.returnSeconds,
+    wrongDriver = tonumber(K('wrongDriverSeconds')),
+    dsqBlackFlagLaps = math.max(math.floor(tonumber(K('dsqBlackFlagLaps')) or 3), 1),
+    pitStopOrder = tostring(K('pitStopOrder') or 'F<TR>'),
+    pitStopAuto = string.upper(tostring(K('pitStopMode') or 'AUTO')) ~= 'MANUAL',
+    beyondTowSeconds = DAMAGE.beyondTowSeconds,
+    dsqTowSeconds = DAMAGE.dsqTowSeconds,
+    swap = bySession(tonumber(K('practiceDriverSwap')) == 1, tonumber(K('qualifyDriverSwap')) == 1,
+      tonumber(K('raceDriverSwap')) == 1),
+    swapMinSeconds = tonumber(K('driverSwapMinSeconds')) or 120,
+    swapRequired = tonumber(K('driverSwapRequired')) and math.floor(tonumber(K('driverSwapRequired'))) or nil,
+    cutSpinAngle = tonumber(K('cutSpinAngle')) or 90,
+    pitSpeedLimit = tonumber(K('pitSpeedLimit')) or 60,
+    pitSpeedTolerance = tonumber(K('pitSpeedTolerance')) or 2,
+    pitWindowStart = tonumber(K('pitWindowStartMinutes')) or 0,
+    pitStopsEnabled = tonumber(K('pitStopsEnabled')) == 1,
+    pitStopsRequired = math.floor(tonumber(K('pitStopsRequired')) or 0),
+    pitWindowEnd = tonumber(K('pitWindowEndMinutes')) or 0,
+    pitSpeedDeadlineLaps = math.floor(tonumber(K('pitSpeedDeadlineLaps')) or 1),
+    code80Freeze = tonumber(K('code80FreezeDeadlines')) == 1,
+    dataCheck = tonumber(K('dataCheck')) ~= 0,
+    screenScale = structKey('screenScale', { exponent = 0.45, max = 1.5 }),
+    tyreLife = structKey('tyreLife', { ok = 70, worn = 30 }),
+    tyreTemp = structKey('tyreTemp', { edge = 98 }),
+    wrongWay = structKey('wrongWay', { maxMeters = 30, penalty = 'DSQ', showMeters = 2, angle = 90 }),
+    flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
+      greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30,
+      redOverSeconds = 10, redNoLineSG = 120, yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
+    restart = structKey('restart', { gridDelay = 5, gridSeconds = 30, lights = 5, stepSeconds = 1, releaseLight = 3,
+      randomMin = 0.2, randomMax = 3, jumpMeters = 0.5, jumpLaps = 2, screenLightsFrom = 22 }),
+    driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
+    kmrPoints = kmrPoints,
+    kmrRating = kmrRating,
+    lobbyPos = structKey('lobbyPos', { x = -1, y = -1 }),
+    eventName = tostring(K('eventName') or ''),
+    kmrStatsUrl = clean(K('kmrStatsUrl')),
+    baseUrl = clean(K('baseUrl')),
+    gameHud = (function()
+      local v = tostring(K('gameHud') or ''):lower():gsub('%s', '')
+      return (v == 'show' or v == 'hideall') and v or 'hide'
+    end)(),
+    screens = structKey('screens', { autoSeconds = 5, closeGap = 2.5, noticeSeconds = 3, serverNoticeSeconds = 5,
+      messageSeconds = 5, pitBoxSeconds = 5, indicatorSeconds = 2, buttonSeconds = 10, controlSeconds = 3 }),
+    cockpit = { force = tonumber(K('forceCockpit')) == 1, camera = tonumber(K('cockpitCameraMode')) or 0,
+      interval = tonumber(K('cockpitCheckInterval')) or 0.05, exempt = tostring(K('cockpitExemptSteamIDs') or '') },
+    tow = bySession(
+      structKey('practiceTow', { mode = 'RESET', towSeconds = 0, repairFactor = 0, clearDsq = 1 }),
+      structKey('qualifyTow', TOW_RULE),
+      structKey('raceTow', TOW_RULE)),
+    repair = {
+      base = REPAIR_FORMULA.baseSeconds,
+      wEngine = REPAIR_FORMULA.weightEngine,
+      wSuspension = REPAIR_FORMULA.weightSuspension,
+      wBody = REPAIR_FORMULA.weightBody,
+    },
+    damage = {
+      toeBent = DAMAGE.toeBent,
+      toeBroken = DAMAGE.toeBroken,
+      camberBent = DAMAGE.camberBent,
+      camberBroken = DAMAGE.camberBroken,
+      bodyRepair = DAMAGE.bodyRepair,
+      powertrainRepair = DAMAGE.powertrainRepair,
+      maxPunctured = DAMAGE.maxPunctured,
+      repairLaps = DAMAGE.repairLaps,
+      settleSeconds = DAMAGE.settleSeconds,
+    },
+    pit = {
+      closedSeconds = bySession(
+        tonumber(K('practiceClosedSeconds')) or 0,
+        tonumber(K('qualifyClosedSeconds')) or 0,
+        tonumber(K('raceClosedSeconds')) or 0),
+      rules = bySession(rule(K('practicePenalty'), -1), rule(K('qualifyPenalty'), -1), rule(K('racePenalty'), -1)),
+    },
+    cutZones = {
+      makeZone('SD1', K('cutZoneStart'), K('cutZoneEnd'), K('cutMaxWheelsOut'),
+        bySession(
+          rule(K('practiceCutPenalty'), K('practiceCutPenaltyParam')),
+          rule(K('qualifyCutPenalty'), K('qualifyCutPenaltyParam')),
+          rule(K('raceCutPenalty'), K('raceCutPenaltyParam'))),
+        K('cutSlowdownDeadline'), K('cutSlowdownMaxGas'), K('cutGainTolerance')),
+      makeZone('SD2', K('cutZone2Start'), K('cutZone2End'), K('cutZone2MaxWheelsOut'),
+        bySession(
+          rule(K('practiceCutZone2Penalty'), K('practiceCutZone2PenaltyParam')),
+          rule(K('qualifyCutZone2Penalty'), K('qualifyCutZone2PenaltyParam')),
+          rule(K('raceCutZone2Penalty'), K('raceCutZone2PenaltyParam'))),
+        K('cutZone2SlowdownDeadline'), K('cutZone2SlowdownMaxGas'), K('cutZone2GainTolerance')),
+    },
+    unpaid = bySession(rule(K('practiceSlowdownUnpaidPenalty'), 0), rule(K('qualifySlowdownUnpaidPenalty'), 0),
+      rule(K('raceSlowdownUnpaidPenalty'), 0)),
   }
-end
-local config = {
-  mode = string.upper(tostring(cfg.penaltyMode)),
-  raceControlSteamID = tostring(cfg.raceControlSteamID),
-  announce = tonumber(cfg.announce) == 1,
-  holdShort = tonumber(cfg.holdShortSeconds) or 45,
-  holdLong = tonumber(cfg.holdLongSeconds) or 90,
-  sg = STOP_AND_GO.mode == 'SG',
-  sgSecondsPerDT = STOP_AND_GO.secondsPerDT,
-  sgMaxDT = STOP_AND_GO.maxDT,
-  sgDeadlineLaps = STOP_AND_GO.deadlineLaps,
-  sgReturnSeconds = STOP_AND_GO.returnSeconds,
-  wrongDriver = tonumber(cfg.wrongDriverSeconds),
-  dsqBlackFlagLaps = math.max(math.floor(tonumber(cfg.dsqBlackFlagLaps) or 3), 1),
-  pitStopOrder = tostring(cfg.pitStopOrder or 'F<TR>'),
-  pitStopAuto = string.upper(tostring(cfg.pitStopMode or 'AUTO')) ~= 'MANUAL',
-  beyondTowSeconds = DAMAGE.beyondTowSeconds,
-  dsqTowSeconds = DAMAGE.dsqTowSeconds,
-  swap = bySession(tonumber(cfg.practiceDriverSwap) == 1, tonumber(cfg.qualifyDriverSwap) == 1,
-    tonumber(cfg.raceDriverSwap) == 1),
-  swapMinSeconds = tonumber(cfg.driverSwapMinSeconds) or 120,
-  swapRequired = tonumber(cfg.driverSwapRequired) and math.floor(tonumber(cfg.driverSwapRequired)) or nil,
-  cutSpinAngle = tonumber(cfg.cutSpinAngle) or 90,
-  pitSpeedLimit = tonumber(cfg.pitSpeedLimit) or 60,
-  pitSpeedTolerance = tonumber(cfg.pitSpeedTolerance) or 2,
-  pitWindowStart = tonumber(cfg.pitWindowStartMinutes) or 0,
-  pitStopsEnabled = tonumber(cfg.pitStopsEnabled) == 1,
-  pitStopsRequired = math.floor(tonumber(cfg.pitStopsRequired) or 0),
-  pitWindowEnd = tonumber(cfg.pitWindowEndMinutes) or 0,
-  pitSpeedDeadlineLaps = math.floor(tonumber(cfg.pitSpeedDeadlineLaps) or 1),
-  code80Freeze = tonumber(cfg.code80FreezeDeadlines) == 1,
-  dataCheck = tonumber(cfg.dataCheck) ~= 0,
-  screenScale = SCREEN_SCALE,
-  tyreLife = TYRE_LIFE,
-  tyreTemp = TYRE_TEMP,
-  wrongWay = WRONG_WAY,
-  flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
-    greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30, redOverSeconds = 10, redNoLineSG = 120,
-    yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
-  restart = structKey('restart', { gridDelay = 5, gridSeconds = 30, lights = 5, stepSeconds = 1, releaseLight = 3,
-    randomMin = 0.2, randomMax = 3, jumpMeters = 0.5, jumpLaps = 2, screenLightsFrom = 22 }),
-  driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
-  kmrPoints = structKey('kmrPoints', { limit = 100 }),
-  lobbyPos = structKey('lobbyPos', { x = -1, y = -1 }),
-  eventName = tostring(cfg.eventName or ''),
-  kmrStatsUrl = (tostring(cfg.kmrStatsUrl or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')),
-  baseUrl = (tostring(cfg.baseUrl or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('/+$', '')),
-  gameHud = (function()
-    local v = tostring(cfg.gameHud or ''):lower():gsub('%s', '')
-    return (v == 'show' or v == 'hideall') and v or 'hide'
-  end)(),
-  kmrRating = (function()
-    local r = structKey('kmrRating', { dsqAt = 0 })
-    r.on = tostring(cfg.kmrRating or ''):match('%S') ~= nil
-    return r
-  end)(),
-  screens = structKey('screens', { autoSeconds = 5, closeGap = 2.5, noticeSeconds = 3, serverNoticeSeconds = 5,
-    messageSeconds = 5, pitBoxSeconds = 5, indicatorSeconds = 2, buttonSeconds = 10, controlSeconds = 3 }),
-  tow = bySession(
-    structKey('practiceTow', { mode = 'RESET', towSeconds = 0, repairFactor = 0, clearDsq = 1 }),
-    structKey('qualifyTow', TOW_RULE),
-    structKey('raceTow', TOW_RULE)),
-  repair = {
-    base = REPAIR_FORMULA.baseSeconds,
-    wEngine = REPAIR_FORMULA.weightEngine,
-    wSuspension = REPAIR_FORMULA.weightSuspension,
-    wBody = REPAIR_FORMULA.weightBody,
-  },
-  damage = {
-    toeBent = DAMAGE.toeBent,
-    toeBroken = DAMAGE.toeBroken,
-    camberBent = DAMAGE.camberBent,
-    camberBroken = DAMAGE.camberBroken,
-    bodyRepair = DAMAGE.bodyRepair,
-    powertrainRepair = DAMAGE.powertrainRepair,
-    maxPunctured = DAMAGE.maxPunctured,
-    repairLaps = DAMAGE.repairLaps,
-    settleSeconds = DAMAGE.settleSeconds,
-  },
-  pit = {
-    closedSeconds = bySession(
-      tonumber(cfg.practiceClosedSeconds) or 0,
-      tonumber(cfg.qualifyClosedSeconds) or 0,
-      tonumber(cfg.raceClosedSeconds) or 0),
-    rules = bySession(
-      rule(cfg.practicePenalty, cfg.practicePenaltyParam),
-      rule(cfg.qualifyPenalty, cfg.qualifyPenaltyParam),
-      rule(cfg.racePenalty, cfg.racePenaltyParam)),
-  },
-  cutZones = {
-    makeZone('SD1', cfg.cutZoneStart, cfg.cutZoneEnd, cfg.cutMaxWheelsOut,
-      bySession(
-        rule(cfg.practiceCutPenalty, cfg.practiceCutPenaltyParam),
-        rule(cfg.qualifyCutPenalty, cfg.qualifyCutPenaltyParam),
-        rule(cfg.raceCutPenalty, cfg.raceCutPenaltyParam)),
-      cfg.cutSlowdownDeadline, cfg.cutSlowdownMaxGas, cfg.cutGainTolerance),
-    makeZone('SD2', cfg.cutZone2Start, cfg.cutZone2End, cfg.cutZone2MaxWheelsOut,
-      bySession(
-        rule(cfg.practiceCutZone2Penalty, cfg.practiceCutZone2PenaltyParam),
-        rule(cfg.qualifyCutZone2Penalty, cfg.qualifyCutZone2PenaltyParam),
-        rule(cfg.raceCutZone2Penalty, cfg.raceCutZone2PenaltyParam)),
-      cfg.cutZone2SlowdownDeadline, cfg.cutZone2SlowdownMaxGas, cfg.cutZone2GainTolerance),
-  },
-  unpaid = bySession(
-    rule(cfg.practiceSlowdownUnpaidPenalty, cfg.practiceSlowdownUnpaidParam),
-    rule(cfg.qualifySlowdownUnpaidPenalty, cfg.qualifySlowdownUnpaidParam),
-    rule(cfg.raceSlowdownUnpaidPenalty, cfg.raceSlowdownUnpaidParam)),
-}
+  c.staffSteamIDs = tostring(K('staffSteamIDs') or '')
+  c.broadcastSteamIDs = tostring(K('broadcastSteamIDs') or '')
+  c.themesOnServer = {}
+  for k in pairs(THEMES) do if theme(k) then c.themesOnServer[#c.themesOnServer + 1] = k end end
+  table.sort(c.themesOnServer)
+  function c.inForce()
+    local byTheme = {}
+    for old, m in pairs(OLD) do
+      byTheme[m[1]] = byTheme[m[1]] or {}
+      local v = K(old)
+      if old:match('Penalty$') or old:match('Unpaid') or old == 'pitStopMode' or old == 'penaltyMode' then v = tostring(v):upper() end
+      if type(m[4]) == 'number' and tonumber(v) then v = tonumber(v) end
+      byTheme[m[1]][#byTheme[m[1]] + 1] = old .. '=' .. tostring(v)
+    end
+    local lines = {}
+    for name, list in pairs(byTheme) do
+      table.sort(list)
+      lines[#lines + 1] = name .. ': ' .. table.concat(list, ' ')
+    end
+    table.sort(lines)
+    lines[#lines + 1] = string.format('kmr: points=%s ratingDsq=%s', tostring(kmrPoints.limit), kmrRating.on and tostring(kmrRating.dsqAt) or '-')
+    return lines
+  end
+  return c
+end)()
 function config.swapOn() return config.swap[ac.getSim().raceSessionType] == true end
 config.isDirector = config.raceControlSteamID ~= '' and ac.getUserSteamID() == config.raceControlSteamID
 do
   local me = tostring(ac.getUserSteamID() or '')
   local function listed(keyText)
-    for id in tostring(keyText or ''):gmatch('[^|]+') do
+    for id in tostring(keyText or ''):gmatch('[^|/]+') do
       if me ~= '' and id:match('^%s*(.-)%s*$') == me then return true end
     end
     return false
   end
-  config.role = config.isDirector and 'director' or (listed(cfg.staffSteamIDs) and 'staff')
-    or (listed(cfg.broadcastSteamIDs) and 'broadcast') or nil
+  config.role = config.isDirector and 'director' or (listed(config.staffSteamIDs) and 'staff')
+    or (listed(config.broadcastSteamIDs) and 'broadcast') or nil
   config.canCommand = config.role == 'director' or config.role == 'staff'
 end
 config.isRaceControl = config.mode == 'KMR' and config.isDirector
@@ -802,6 +912,8 @@ ac.log('race-control: section=' .. tostring(__cfgSection__)
 for _, key in ipairs({ 'screenScale', 'tyreLife', 'tyreTemp', 'wrongWay', 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage' }) do
   ac.log('race-control: key ' .. key .. ' = ' .. tostring(cfg[key]))
 end
+ac.log('race-control: theme keys on the server: ' .. (#config.themesOnServer > 0 and table.concat(config.themesOnServer, ' ') or 'none (old keys)'))
+for _, line in ipairs(config.inForce()) do ac.log('race-control: in force ' .. line) end
 ac.log('race-control: stopAndGo mode in force: ' .. (config.sg and 'SG' or 'HOLD'))
 if math.abs((tonumber(sim.pitsSpeedLimit) or 0) - config.pitSpeedLimit) > 0.5 then
   ac.log(string.format('race-control: WARNING pitSpeedLimit %d differs from the server pit limiter (SPEED_KMH) %d',
@@ -972,8 +1084,9 @@ function CarRead.trackAngle(car, x, z)
   return math.deg(math.acos(math.min(math.max(d * len / TRACK_PROBE_M, -1), 1)))
 end
 end
-local function mmss(seconds)
+local function mmss(seconds, fixed)
   local s = math.max(math.floor(seconds + 0.5), 0)
+  if fixed then return string.format('%02d:%02d', math.min(math.floor(s / 60), 99), s % 60) end
   return string.format('%d:%02d', math.floor(s / 60), s % 60)
 end
 local function driverTag()
@@ -6001,10 +6114,6 @@ local function itemText(it)
   return string.format('%s - Drive-through - %s', itemPriority(it), TEXTS.reason[it.cat] or it.cat)
 end
 local BORDER_RED = rgbm(1, 0.3, 0.3, 1)
-local function mmss2(seconds)
-  local v = math.max(math.floor(seconds + 0.5), 0)
-  return string.format('%02d:%02d', math.min(math.floor(v / 60), 99), v % 60)
-end
 local Panel = {}
 RecordSync.restorers.swap = function(body)
   local before = state.swap.count
@@ -6019,7 +6128,7 @@ function Panel.cellPit()
   local t = PitStops.windowTime()
   if t < s then return nil end
   if state.pit.done then return { value = TEXTS.pitDone, color = 'dim' } end
-  if t <= e then return { value = string.format(TEXTS.pitOpen, mmss2((e - t) / 1000)), color = 'yellow' } end
+  if t <= e then return { value = string.format(TEXTS.pitOpen, mmss((e - t) / 1000, true)), color = 'yellow' } end
   return { value = TEXTS.pitMissed, color = 'red' }
 end
 function Panel.cellSwap()
@@ -10533,15 +10642,15 @@ function script.drawUI(exclusive)
   Drag.finish(w, h)
 end
 local CarControls = {
-  enabled = tonumber(cfg.forceCockpit) == 1,
-  mode = tonumber(cfg.cockpitCameraMode) or 0,
-  interval = tonumber(cfg.cockpitCheckInterval) or 0.05,
+  enabled = config.cockpit.force,
+  mode = config.cockpit.camera,
+  interval = config.cockpit.interval,
   exempt = false,
   timer = 0,
 }
 do
   local me = tostring(ac.getUserSteamID() or '')
-  for id in tostring(cfg.cockpitExemptSteamIDs or ''):gmatch('[^|]+') do
+  for id in config.cockpit.exempt:gmatch('[^|/]+') do
     if id:match('^%s*(.-)%s*$') == me and me ~= '' then CarControls.exempt = true end
   end
 end
