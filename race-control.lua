@@ -385,7 +385,7 @@ local TEXTS = {
   dirFailed = 'Failed: %s', dirSent = 'Sent: %s - waiting for the KMR', dirAnswer = 'KMR: %s',
   dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT', dirFuel = 'FUEL',
   setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', text = 'Text', app = 'App' },
-  setFontSample = 'RACE CONTROL  P3  Slow down', setTextMin = 'Small text at least', setTextMinOff = 'Off', setPreset = 'Preset',
+  setFontSample = 'RACE CONTROL  P3  Slow down', setFontMissing = 'not installed (app Race Control fonts folder)', setTextMin = 'Small text at least', setTextMinOff = 'Off', setPreset = 'Preset',
   setPresets = { verbose = 'Verbose', race = 'Race', minimal = 'Minimal', custom = 'Custom' }, setAlways = 'always - on the Race Control panel',
   setAreas = { rc = 'Race Control, flags, driver swap, race director', limits = 'Track limits and invalid laps',
     damage = 'Collisions and damage', points = 'Points and rating (KMR)', warnings = 'Behaviour warnings',
@@ -7047,20 +7047,36 @@ end
 local FONT_TITLE = 'Segoe UI;Weight=Bold'
 local FONT_TEXT = 'Segoe UI;Weight=SemiBold'
 local FONT_MONO = 'Consolas'
-Desktop.text = { id = 'segoe', min = 0, minPx = 0, sets = {
-  { id = 'segoe', name = 'Segoe UI', title = 'Segoe UI;Weight=Bold', text = 'Segoe UI;Weight=SemiBold', mono = 'Consolas' },
-  { id = 'segoe-system', name = 'Segoe UI (system)', title = 'Segoe UI:@System;Weight=Bold',
-    text = 'Segoe UI:@System;Weight=SemiBold', mono = 'Consolas:@System' },
-  { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
-    text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
-  { id = 'segoe-variable', name = 'Segoe UI Variable', title = 'Segoe UI Variable Display:@System;Weight=Bold',
-    text = 'Segoe UI Variable Text:@System;Weight=SemiBold', mono = 'Cascadia Mono:@System' },
-  { id = 'arial', name = 'Arial', title = 'Arial:@System;Weight=Bold', text = 'Arial:@System',
-    mono = 'Courier New:@System;Weight=Bold' },
-} }
+do
+  local root = ''
+  if ac.getFolder and ac.FolderID and ac.FolderID.Root then
+    local ok, dir = pcall(ac.getFolder, ac.FolderID.Root)
+    if ok and dir then root = tostring(dir) .. '/' end
+  end
+  local function file(name) return root .. 'apps/lua/race-control/fonts/' .. name .. '.ttf' end
+  Desktop.text = { id = 'segoe', min = 0, minPx = 0, sets = {
+    { id = 'segoe', name = 'Segoe UI', title = 'Segoe UI;Weight=Bold', text = 'Segoe UI;Weight=SemiBold', mono = 'Consolas' },
+    { id = '12h', name = '12h Curitiba', title = file('oswald-600'), text = file('raleway-600'), mono = file('roboto-mono-500'),
+      files = { 'oswald-600', 'raleway-600', 'roboto-mono-500' } },
+    { id = 'titillium', name = 'Titillium Web', title = file('titillium-web-700'), text = file('titillium-web-600'),
+      mono = file('roboto-mono-500'), files = { 'titillium-web-700', 'titillium-web-600', 'roboto-mono-500' } },
+    { id = 'barlow', name = 'Barlow', title = file('barlow-condensed-600'), text = file('barlow-600'),
+      mono = file('roboto-mono-500'), files = { 'barlow-condensed-600', 'barlow-600', 'roboto-mono-500' } },
+    { id = 'rajdhani', name = 'Rajdhani', title = file('rajdhani-700'), text = file('rajdhani-600'),
+      mono = file('roboto-mono-500'), files = { 'rajdhani-700', 'rajdhani-600', 'roboto-mono-500' } },
+    { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
+      text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
+  } }
+  for _, f in ipairs(Desktop.text.sets) do
+    f.ready = true
+    for _, n in ipairs(f.files or {}) do
+      if not (io.fileExists and io.fileExists(file(n))) then f.ready = false end
+    end
+  end
+end
 function Desktop.textApply(id, min)
   for _, f in ipairs(Desktop.text.sets) do
-    if f.id == id then
+    if f.id == id and f.ready then
       FONT_TITLE, FONT_TEXT, FONT_MONO = f.title, f.text, f.mono
       Desktop.text.id = id
     end
@@ -9085,8 +9101,13 @@ local drawDesktopUI = (function()
     elseif Settings.tab == 'text' then
       for _, f in ipairs(Desktop.text.sets) do
         local on = Desktop.text.id == f.id
-        tick(vec2(x0, y), on, s)
+        tick(vec2(x0, y), on, s, not f.ready)
         drawText(f.name, FONT_TEXT, 10 * s, vec2(x0 + 16 * s, y), on and COLOR_TITLE or COLOR_DIM)
+        if not f.ready then
+          drawText(TEXTS.setFontMissing, FONT_MONO, 9 * s, vec2(x0 + 150 * s, y + 1 * s), COLOR_OFF)
+          y = y + 18 * s
+          goto nextFont
+        end
         ui.pushDWriteFont(f.title)
         ui.dwriteDrawText(TEXTS.setFontSample, 12 * s, vec2(math.floor(x0 + 150 * s), math.floor(y - 1 * s)), COLOR_TITLE)
         ui.popDWriteFont()
@@ -9095,6 +9116,7 @@ local drawDesktopUI = (function()
         ui.popDWriteFont()
         Drag.clickable(vec2(x0, y), vec2(p2.x - 14 * s, y + 14 * s), function() Desktop.textApply(f.id) end)
         y = y + 18 * s
+        ::nextFont::
       end
       y = y + 6 * s
       drawText(TEXTS.setTextMin, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
