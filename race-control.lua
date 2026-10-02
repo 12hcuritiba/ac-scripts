@@ -843,6 +843,7 @@ local state = {
     cooldown = 0,
   },
   rcOut = {},
+  lapOut = {},
   swap = {
     prevInPit = nil,
     stopT = nil,
@@ -1420,22 +1421,29 @@ do
   end
   local LINES_MAX = 30
   function B.update()
-    if not on() or B.busy or state.ui.clock < B.nextT or (next(B.queue) == nil and #state.rcOut == 0) then return end
+    if not on() or B.busy or state.ui.clock < B.nextT or (next(B.queue) == nil and #state.rcOut == 0 and #state.lapOut == 0) then
+      return
+    end
     local sent, parts = B.queue, {}
     B.queue = {}
     for _, text in pairs(sent) do parts[#parts + 1] = jsonStr(text) end
     local lines, lineParts = {}, {}
     while #lines < LINES_MAX and #state.rcOut > 0 do lines[#lines + 1] = table.remove(state.rcOut, 1) end
     for _, l in ipairs(lines) do lineParts[#lineParts + 1] = jsonStr(l) end
+    local lapLines, lapParts = {}, {}
+    while #lapLines < LINES_MAX and #state.lapOut > 0 do lapLines[#lapLines + 1] = table.remove(state.lapOut, 1) end
+    for _, l in ipairs(lapLines) do lapParts[#lapParts + 1] = jsonStr(l) end
     B.busy, B.nextT = true, state.ui.clock + BASE_GAP
     local body = '{"key":' .. jsonStr(Record.key()) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '')
-      .. ',"records":[' .. table.concat(parts, ',') .. '],"lines":[' .. table.concat(lineParts, ',') .. ']}'
+      .. ',"records":[' .. table.concat(parts, ',') .. '],"lines":[' .. table.concat(lineParts, ',') .. '],"laps":['
+      .. table.concat(lapParts, ',') .. ']}'
     web.request('POST', config.baseUrl .. '/v1/batch', { ['Content-Type'] = 'application/json' }, body,
       function(err, res)
         B.busy = false
         if err or not res or (tonumber(res.status) or 0) >= 300 then
           for list, text in pairs(sent) do if B.queue[list] == nil then B.queue[list] = text end end
           for i = #lines, 1, -1 do table.insert(state.rcOut, 1, lines[i]) end
+          for i = #lapLines, 1, -1 do table.insert(state.lapOut, 1, lapLines[i]) end
           if not B.failLogged then
             B.failLogged = true
             ac.log('race-control: base online not reached (' .. tostring(err or (res and res.status)) .. '): kept to send again')
@@ -5971,6 +5979,20 @@ do
         driver = tostring(ac.getDriverName(0) or ''):gsub('[,;|]', ' ') }
       if #laps > MAX_LAPS then table.remove(laps, 1) end
       lapsSave()
+      if config.baseUrl ~= '' then
+        local life, vkm = {}, {}
+        for w = 0, 3 do
+          local lf = CarRead.tyreLife(car, w, state.tyreLineKm[w] or 0)
+          life[#life + 1] = lf and string.format('%.0f', lf) or '-'
+          vkm[#vkm + 1] = string.format('%.2f', state.tyreLineKm[w] or 0)
+        end
+        local l = laps[#laps]
+        state.lapOut[#state.lapOut + 1] = string.format('L1|%d|%d|%d|%d|%s|%.2f|%.3f|%s|%s|%.1f|%.1f|%.0f|%s', l.lap, l.ms,
+          l.valid and 1 or 0, l.pit and 1 or 0, table.concat(l.s, '/'), CarRead.num(car.fuel), CarRead.num(car.fuelPerLap),
+          table.concat(life, ','), table.concat(vkm, ','), CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature),
+          CarRead.num(sim.roadGrip) * 100, l.driver)
+        if #state.lapOut > 200 then table.remove(state.lapOut, 1) end
+      end
       state.lapCut = false
     end
     stintUpdate(car)
