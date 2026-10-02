@@ -369,7 +369,7 @@ local TEXTS = {
   edIndicator = 'DESKTOP %d / %d - %s',
   menuButtons = 'Buttons', navTitle = 'BUTTONS', navOwn = 'RECORDED BY THE TOOL', navCsp = 'CSP CONTROLS',
   navNextScreen = 'Next screen', navPrevScreen = 'Previous screen', navNextDesktop = 'Next desktop',
-  navPrevDesktop = 'Previous desktop', navShowPanel = 'Show panel (5 s)', navTitleBars = 'Title bars (delta, telemetry)', navSet = 'Set', navClear = 'Clear', navPress = 'Press a button... %d s',
+  navPrevDesktop = 'Previous desktop', navShowPanel = 'Show panel (5 s)', navSet = 'Set', navClear = 'Clear', navPress = 'Press a button... %d s',
   navInUseAc = 'in use by the AC: %s - choose another', navInUseOwn = 'in use by %s of this tool - choose another',
   navButton = '%s - button %d', navPov = '%s - D-pad %d deg', navGamepad = 'Gamepad %d - %s', navKey = 'Key %s',
   navDeviceOff = 'device off',
@@ -6538,15 +6538,21 @@ do
   Desktop.SCREENS = SCREENS
   local function button(name) return ac.ControlButton('amxracing.race-control/' .. name) end
   local NAV = { nextScreen = button('Next screen'), prevScreen = button('Previous screen'),
-    nextDesktop = button('Next desktop'), prevDesktop = button('Previous desktop'), showPanel = button('Show panel'),
-    titleBars = button('Title bars') }
+    nextDesktop = button('Next desktop'), prevDesktop = button('Previous desktop'), showPanel = button('Show panel') }
   Desktop.panelUntil = 0
   local TITLE_KEY = 'rc.titleBars'
   Desktop.TITLE_HIDE = { delta = true, telemetry = true }
-  Desktop.titleHidden = tostring(ac.storage[TITLE_KEY] or '') == '1'
-  function Desktop.toggleTitles()
-    Desktop.titleHidden = not Desktop.titleHidden
-    ac.storage[TITLE_KEY] = Desktop.titleHidden and '1' or '0'
+  Desktop.titleHidden = {}
+  for g in tostring(ac.storage[TITLE_KEY] or ''):gmatch('[^,]+') do
+    if Desktop.TITLE_HIDE[g] then Desktop.titleHidden[g] = true end
+  end
+  function Desktop.toggleTitle(g)
+    if not Desktop.TITLE_HIDE[g] then return end
+    Desktop.titleHidden[g] = not Desktop.titleHidden[g] or nil
+    local list = {}
+    for name in pairs(Desktop.TITLE_HIDE) do if Desktop.titleHidden[name] then list[#list + 1] = name end end
+    table.sort(list)
+    ac.storage[TITLE_KEY] = table.concat(list, ',')
   end
   Desktop.NAV = NAV
   local function defaults()
@@ -7006,7 +7012,6 @@ do
     if nav and (NAV.showPanel:pressed() or bindPressed('showPanel')) then
       Desktop.panelUntil = state.ui.clock + config.screens.autoSeconds
     end
-    if nav and (NAV.titleBars:pressed() or bindPressed('titleBars')) then Desktop.toggleTitles() end
     if car.isInPitlane and Desktop.wasInPit == false then Desktop.focus, Desktop.focusByNav = 'pitbox', false end
     Desktop.wasInPit = car.isInPitlane
     local g = Desktop.focus
@@ -7257,6 +7262,10 @@ do
           { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
       end
+    end
+    if Desktop.TITLE_HIDE[group] then
+      row[#row + 1] = { ui.Icons.AppWindow, Desktop.titleHidden[group] and ICON_ON or ICON_COLOR,
+        function() Desktop.toggleTitle(group) end }
     end
     row[#row + 1] = { MODE_ICON[Drag.mode(group)], ICON_COLOR, 'mode:' .. group }
     row[#row + 1] = { ui.Icons.Pin, pins[group] and ICON_ON or ICON_COLOR, 'pin:' .. group }
@@ -8230,7 +8239,7 @@ local drawRaceScreens = (function()
     end
     local p2 = vec2(p1.x + bw, p1.y + bh)
     Drag.group = g
-    if Desktop.titleHidden and Desktop.TITLE_HIDE[g] and not Drag.hovered(g) then
+    if Desktop.titleHidden[g] and not Drag.hovered(g) then
       local top = vec2(p1.x, p1.y + 20 * s)
       drawPanel(top, p2, Desktop.focus == g and BORDER_YELLOW or BORDER_BASE, s)
       return top, p2, p1.y + 26 * s, true
@@ -9422,7 +9431,7 @@ local drawDesktopUI = (function()
   end
   local NAV_ROWS = { { 'nextScreen', TEXTS.navNextScreen }, { 'prevScreen', TEXTS.navPrevScreen },
     { 'nextDesktop', TEXTS.navNextDesktop }, { 'prevDesktop', TEXTS.navPrevDesktop },
-    { 'showPanel', TEXTS.navShowPanel }, { 'titleBars', TEXTS.navTitleBars }, { 'up', TEXTS.navUp }, { 'down', TEXTS.navDown }, { 'left', TEXTS.navLeft }, { 'right', TEXTS.navRight } }
+    { 'showPanel', TEXTS.navShowPanel }, { 'up', TEXTS.navUp }, { 'down', TEXTS.navDown }, { 'left', TEXTS.navLeft }, { 'right', TEXTS.navRight } }
   local function buttonsScreen(w, h, s)
     local rows, ownW, cspW = {}, textWidth(TEXTS.navOwn, FONT_TITLE, 9 * s), textWidth(TEXTS.navCsp, FONT_TITLE, 9 * s)
     for _, r in ipairs(NAV_ROWS) do
