@@ -316,9 +316,6 @@ local TEXTS = {
     K11 = 'Slowing under VSC', K12 = 'Overtaking under VSC', K13 = 'Cut line', K14 = 'Blue flags ignored',
     K15 = 'Rejoining the track at high speed',
   },
-  pitDsq = "You've been disqualified for leaving the pit lane with the session closed.",
-  dtDsq = "You've been disqualified for not serving the drive-through.",
-  dsqGame = "You've been disqualified - %s.",
   dsqBlackFlag = 'Black flag',
   dsqDtReason = 'Drive-through not served',
   wrongWayDsq = 'Driving the wrong way',
@@ -406,7 +403,7 @@ local TEXTS = {
   dirLightsRed = 'LIGHTS RED', dirLightsGreen = 'LIGHTS GREEN', dirLightsAuto = 'LIGHTS AUTO',
   redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET MONEY', dirStats = 'RESET STATS', dirNoSg = 'NO S&G', dirNoDsq = 'NO DSQ',
   dirKmrLine = 'KMR  points %s / %d  -  safety %s  -  %s  -  infractions %s (%s / 100 km)',
-  dirKmrCrashes = 'crashes %s (%s / 100 km)', dirBalRes = 'ballast %.0f kg  restrictor %.0f', dirKmrLaps = '  -  laps %d best %s', dirKmrNoStats = 'stats: none yet (not driven enough)',
+  dirPrompt = 'Prompt', dirPromptSent = 'Sent: %s', dirKmrCrashes = 'crashes %s (%s / 100 km)', dirBalRes = 'ballast %.0f kg  restrictor %.0f', dirKmrLaps = '  -  laps %d best %s', dirKmrNoStats = 'stats: none yet (not driven enough)',
   dirKmrNone = 'KMR  no numbers from this driver yet',
   dirPenNone = 'Penalties  none', dirPenTitle = 'Penalties  ', dirPenDt = '%s DT%d', dirPenSg = 'S&G %d s', dirPenDsq = 'DSQ',
   dirPenUnknown = 'Penalties  no list from this driver yet',
@@ -432,6 +429,8 @@ local TEXTS = {
     weather = 'Weather', map = 'Track map', telemetry = 'Telemetry' },
   scrTelemetry = 'TELEMETRY',
   teleChannels = { thr = 'THR', brk = 'BRK', clu = 'CLU', str = 'STR', spd = 'SPD', gear = 'GEAR', glat = 'G LAT', glon = 'G LON' },
+  teleShort = { thr = 'T', brk = 'B', clu = 'C', str = 'S', spd = 'V', gear = 'G', glat = 'X', glon = 'Z' },
+  scrTelemetryShort = 'TEL',
   scrClassSel = '< CLASS: %s >', scrLapsCar = 'LAPS - CAR #%s', scrLapsMore = 'MORE', scrLapsLess = 'LESS',
   scrCompare = 'COMPARE', scrDriverSel = '< DRIVER: %s >', scrStintShort = 'ST %d', scrMap = 'TRACK MAP', scrNoMap = 'No map of this track',
   scrMapLegend = { 'yellow you - blue lap ahead - beige lap down', 'grey pit - red stopped' },
@@ -680,7 +679,7 @@ local config = (function()
     screenScale = structKey('screenScale', { exponent = 0.45, max = 1.5 }),
     tyreLife = structKey('tyreLife', { ok = 70, worn = 30 }),
     tyreTemp = structKey('tyreTemp', { edge = 98 }),
-    wrongWay = structKey('wrongWay', { maxMeters = 30, penalty = 'DSQ', showMeters = 2, angle = 90 }),
+    wrongWay = structKey('wrongWay', { maxMeters = 60, penalty = 'DSQ', showMeters = 2, angle = 110 }),
     flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
       greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30,
       redOverSeconds = 10, redNoLineSG = 120, yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
@@ -2117,6 +2116,11 @@ do
   end
   function Audit.num(v)
     return (v == math.floor(v)) and string.format('%d', v) or (string.format('%.2f', v):gsub('0+$', ''))
+  end
+  function Audit.per100(n, rate)
+    if Audit.noStats then return TEXTS.scrKmrNone end
+    if n == nil then return '-' end
+    return rate and string.format('%d - %.2f / 100 km', n, rate) or tostring(n)
   end
   Audit.allow = function(area) return true end
   function Audit.add(src, text, window, area)
@@ -6394,6 +6398,8 @@ do
     'weather', 'map', 'telemetry' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local STORAGE_KEY = 'rc.desktops'
+  local OFF_KEY = 'rc.desktopsOff'
+  Desktop.off = {}
   Desktop.SCREENS = SCREENS
   local function button(name) return ac.ControlButton('12hcuritiba.race-control/' .. name) end
   local NAV = { nextScreen = button('Next screen'), prevScreen = button('Previous screen'),
@@ -6491,10 +6497,33 @@ do
     e.mode = mode
     Desktop.save()
   end
-  function Desktop.remove(d, g) Desktop.place[d][g] = nil; Desktop.save() end
+  local function offSave()
+    local parts = {}
+    for d, list in pairs(Desktop.off) do
+      for g, e in pairs(list) do parts[#parts + 1] = string.format('%s:%s:%d:%d', tostring(d), g, math.floor(e.x), math.floor(e.y)) end
+    end
+    ac.storage[OFF_KEY] = table.concat(parts, ';')
+  end
+  for d, g, x, y in tostring(ac.storage[OFF_KEY] or ''):gmatch('([%w]+):(%a+):(%-?%d+):(%-?%d+)') do
+    local key = tonumber(d) or d
+    Desktop.off[key] = Desktop.off[key] or {}
+    Desktop.off[key][g] = { x = tonumber(x), y = tonumber(y) }
+  end
+  function Desktop.remove(d, g)
+    local e = Desktop.place[d][g]
+    if e then
+      Desktop.off[d] = Desktop.off[d] or {}
+      Desktop.off[d][g] = { x = e.x, y = e.y }
+      offSave()
+    end
+    Desktop.place[d][g] = nil
+    Desktop.save()
+  end
   function Desktop.toggle(d, g)
     local list = Desktop.place[d]
-    if list[g] then list[g] = nil else list[g] = { x = 0, y = 0, mode = 'visible' } end
+    if list[g] then Desktop.remove(d, g) return end
+    local was = Desktop.off[d] and Desktop.off[d][g]
+    list[g] = { x = was and was.x or 0, y = was and was.y or 0, mode = 'visible' }
     Desktop.save()
   end
   function Desktop.pinAll(d, g)
@@ -6517,8 +6546,10 @@ do
   end
   function Desktop.deleteDesktop(d)
     if type(d) ~= 'number' or Desktop.count <= 1 then return end
-    for i = d, Desktop.count - 1 do Desktop.place[i] = Desktop.place[i + 1] end
+    for i = d, Desktop.count - 1 do Desktop.place[i] = Desktop.place[i + 1]; Desktop.off[i] = Desktop.off[i + 1] end
     Desktop.place[Desktop.count] = nil
+    Desktop.off[Desktop.count] = nil
+    offSave()
     Desktop.count = Desktop.count - 1
     Desktop.current = math.min(Desktop.current, Desktop.count)
     Desktop.editDesk = math.min(d, Desktop.count)
@@ -7210,23 +7241,33 @@ do
     if ok and dir then root = tostring(dir) .. '/' end
   end
   local function file(name) return root .. 'apps/lua/race-control/fonts/' .. name .. '.ttf' end
+  local function font(family, name, style)
+    return family .. ':apps/lua/race-control/fonts/' .. name .. '.ttf' .. (style or '')
+  end
+  local MONO = font('Roboto Mono', 'roboto-mono-500')
   Desktop.text = { id = 'segoe', min = 0, minPx = 0, sets = {
     { id = 'segoe', name = 'Segoe UI', title = 'Segoe UI;Weight=Bold', text = 'Segoe UI;Weight=SemiBold', mono = 'Consolas' },
-    { id = '12h', name = '12h Curitiba', title = file('oswald-600'), text = file('raleway-600'), mono = file('roboto-mono-500'),
-      files = { 'oswald-600', 'raleway-600', 'roboto-mono-500' } },
-    { id = 'titillium', name = 'Titillium Web', title = file('titillium-web-700'), text = file('titillium-web-600'),
-      mono = file('roboto-mono-500'), files = { 'titillium-web-700', 'titillium-web-600', 'roboto-mono-500' } },
-    { id = 'barlow', name = 'Barlow', title = file('barlow-condensed-600'), text = file('barlow-600'),
-      mono = file('roboto-mono-500'), files = { 'barlow-condensed-600', 'barlow-600', 'roboto-mono-500' } },
-    { id = 'rajdhani', name = 'Rajdhani', title = file('rajdhani-700'), text = file('rajdhani-600'),
-      mono = file('roboto-mono-500'), files = { 'rajdhani-700', 'rajdhani-600', 'roboto-mono-500' } },
+    { id = '12h', name = '12h Curitiba', title = font('Oswald', 'oswald-600'), text = font('Raleway Thin', 'raleway-600'),
+      mono = MONO, files = { 'oswald-600', 'raleway-600', 'roboto-mono-500' } },
+    { id = 'titillium', name = 'Titillium Web', title = font('Titillium Web', 'titillium-web-700', ';Weight=Bold'),
+      text = font('Titillium Web SemiBold', 'titillium-web-600'), mono = MONO,
+      files = { 'titillium-web-700', 'titillium-web-600', 'roboto-mono-500' } },
+    { id = 'barlow', name = 'Barlow', title = font('Barlow Condensed SemiBold', 'barlow-condensed-600'),
+      text = font('Barlow SemiBold', 'barlow-600'), mono = MONO, files = { 'barlow-condensed-600', 'barlow-600', 'roboto-mono-500' } },
+    { id = 'rajdhani', name = 'Rajdhani', title = font('Rajdhani', 'rajdhani-700', ';Weight=Bold'),
+      text = font('Rajdhani SemiBold', 'rajdhani-600'), mono = MONO, files = { 'rajdhani-700', 'rajdhani-600', 'roboto-mono-500' } },
     { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
       text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
   } }
   for _, f in ipairs(Desktop.text.sets) do
     f.ready = true
+    local missing = {}
     for _, n in ipairs(f.files or {}) do
-      if not (io.fileExists and io.fileExists(file(n))) then f.ready = false end
+      if not (io.fileExists and io.fileExists(file(n))) then f.ready = false; missing[#missing + 1] = n end
+    end
+    if f.files then
+      ac.log(string.format('race-control: font %s %s (%s) title=%s', f.id, f.ready and 'found' or 'missing',
+        #missing > 0 and table.concat(missing, ' ') or file(f.files[1]), f.title))
     end
   end
 end
@@ -8664,19 +8705,14 @@ local drawRaceScreens = (function()
     local kmr = Audit.points and string.format('%d / %d', Audit.points, config.kmrPoints.limit) or '-'
     local rt = config.kmrRating
     local rating = Audit.rating and Audit.num(Audit.rating) or '-'
-    local function per100(n, rate)
-      if Audit.noStats then return TEXTS.scrKmrNone end
-      if n == nil then return '-' end
-      return rate and string.format('%d - %.2f / 100 km', n, rate) or tostring(n)
-    end
     for _, l in ipairs({
       { TEXTS.scrTyres, string.format('%d laps%s', state.tyreLaps[0] or 0, life and string.format(' - %d%%', math.floor(life)) or '') },
       { TEXTS.scrTrack, string.format('%s - grip %d%%', wet and 'WET' or 'DRY', math.floor(CarRead.num(sim.roadGrip) * 100)) },
       { TEXTS.scrPending, pen and pen.value or '-', pen and ORANGE },
       { TEXTS.scrKmr, kmr, Audit.points and Audit.points >= config.kmrPoints.limit * 0.8 and RED or nil },
       { TEXTS.scrKmrRating, rating, rt.on and Audit.rating and Audit.rating <= rt.dsqAt and RED or nil },
-      { TEXTS.scrKmrCrashes, per100(Audit.crashes, Audit.crashRate) },
-      { TEXTS.scrKmrInfr, per100(Audit.infractions, Audit.infractionRate) },
+      { TEXTS.scrKmrCrashes, Audit.per100(Audit.crashes, Audit.crashRate) },
+      { TEXTS.scrKmrInfr, Audit.per100(Audit.infractions, Audit.infractionRate) },
       { TEXTS.scrKmrKm, Audit.km and string.format('%.1f km', Audit.km) or '-' } }) do
       row(p1, y, s, { { l[1], 14, COLOR_DIM, false, FONT_TEXT }, { l[2], 286, l[3] or COLOR_TITLE, true } })
       y = y + ROW * s
@@ -8718,22 +8754,38 @@ local drawRaceScreens = (function()
     Tele.n = math.min(Tele.n + 1, TELE_MAX)
   end
   Desktop.teleSample = teleSample
+  local teleSmall = tostring(ac.storage['rc.telemetrySmall'] or '') == '1'
   local function telemetryScreen(car, w, h, s)
-    local GH = 92
-    local p1, p2, y = frame('telemetry', w, h, s, (GH + 6) / ROW, TEXTS.scrTelemetry, nil)
-    local x = p2.x - 14 * s
+    local small = teleSmall
+    local GH = small and 40 or 92
+    local fs = small and 7.5 or 8.5
+    local p1, p2, y = frame('telemetry', w, h, s, (GH + 6) / ROW, small and TEXTS.scrTelemetryShort or TEXTS.scrTelemetry, nil,
+      small and 270 or nil)
+    local x = p2.x - (small and 8 or 14) * s
+    local pad = small and 2 or 3
+    local function chip(t, on, color, fn)
+      local tw = textWidth(t, FONT_MONO, fs * s)
+      local a, b = vec2(x - tw - 2 * pad * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
+      if on then ui.drawRectFilled(a, b, color, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
+      drawText(t, FONT_MONO, fs * s, vec2(a.x + pad * s, a.y + 1 * s), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
+      Drag.clickable(a, b, fn)
+      x = a.x - (small and 2 or 4) * s
+    end
     for i = #TELE_ORDER, 1, -1 do
       local k = TELE_ORDER[i]
-      local t = TEXTS.teleChannels[k]
-      local tw = textWidth(t, FONT_MONO, 8.5 * s)
-      local a, b = vec2(x - tw - 6 * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
-      if TELE_ON[k] then ui.drawRectFilled(a, b, TELE_COLOR[k], 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
-      drawText(t, FONT_MONO, 8.5 * s, vec2(a.x + 3 * s, a.y + 1 * s), TELE_ON[k] and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
-      Drag.clickable(a, b, function() TELE_ON[k] = not TELE_ON[k]; teleSave() end)
-      x = a.x - 4 * s
+      chip(small and TEXTS.teleShort[k] or TEXTS.teleChannels[k], TELE_ON[k], TELE_COLOR[k],
+        function() TELE_ON[k] = not TELE_ON[k]; teleSave() end)
     end
-    local gx1, gy1 = p1.x + 14 * s, y + 2 * s
-    local gx2, gy2 = p2.x - 196 * s, y + (GH - 2) * s
+    x = x - (small and 3 or 6) * s
+    chip(small and '+' or '-', false, nil, function()
+      teleSmall = not teleSmall
+      ac.storage['rc.telemetrySmall'] = teleSmall and '1' or '0'
+    end)
+    local barW, barGap = (small and 6 or 14) * s, (small and 9 or 22) * s
+    local r = (GH / 2 - (small and 3 or 6)) * s
+    local right = (small and 8 or 14) * s + 2 * r + (small and 6 or 10) * s + 3 * barGap + (small and 4 or 0) * s
+    local gx1, gy1 = p1.x + (small and 8 or 14) * s, y + 2 * s
+    local gx2, gy2 = p2.x - right, y + (GH - 2) * s
     ui.drawRectFilled(vec2(gx1, gy1), vec2(gx2, gy2), rgbm(1, 1, 1, 0.04), 2 * s)
     for q = 1, 3 do
       local ly = gy2 - (gy2 - gy1) * q / 4
@@ -8748,34 +8800,36 @@ local drawRaceScreens = (function()
             local px_ = gx1 + (gx2 - gx1) * (i - 1) / (TELE_MAX - 1) + (gx2 - gx1) * (TELE_MAX - n) / (TELE_MAX - 1)
             ui.pathLineTo(vec2(px_, gy2 - (gy2 - gy1) * (v and v[k] or 0)))
           end
-          ui.pathStroke(TELE_COLOR[k], false, 1.6 * s)
+          ui.pathStroke(TELE_COLOR[k], false, (small and 1.2 or 1.6) * s)
         end
       end
     end
     local last = Tele.buf[Tele.at] or {}
-    local bx = gx2 + 14 * s
+    local bx = gx2 + (small and 6 or 14) * s
     for _, k in ipairs({ 'clu', 'brk', 'thr' }) do
       local val = math.max(0, math.min(1, last[k] or 0))
-      local a, b = vec2(bx, gy1 + 12 * s), vec2(bx + 14 * s, gy2)
+      local a, b = vec2(bx, gy1 + (small and 0 or 12) * s), vec2(bx + barW, gy2)
       ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.08), 2 * s)
       ui.drawRectFilled(vec2(a.x, b.y - (b.y - a.y) * val), b, TELE_COLOR[k], 2 * s)
-      drawText(string.format('%d', math.floor(val * 100 + 0.5)), FONT_MONO, 8 * s, vec2(a.x, gy1), COLOR_DIM)
-      bx = bx + 22 * s
+      if not small then drawText(string.format('%d', math.floor(val * 100 + 0.5)), FONT_MONO, 8 * s, vec2(a.x, gy1), COLOR_DIM) end
+      bx = bx + barGap
     end
-    local r = (GH / 2 - 6) * s
-    local c = vec2(p2.x - 14 * s - r - 10 * s, (gy1 + gy2) / 2)
-    ui.drawCircle(c, r, rgbm(1, 1, 1, 0.85), 40, 5 * s)
+    local c = vec2(p2.x - (small and 8 or 14) * s - r - (small and 2 or 10) * s, (gy1 + gy2) / 2)
+    ui.drawCircle(c, r, rgbm(1, 1, 1, 0.85), 40, (small and 2.5 or 5) * s)
     local ang = math.rad(CarRead.num(car.steer)) - math.pi / 2
-    local m1 = vec2(c.x + math.cos(ang) * (r - 6 * s), c.y + math.sin(ang) * (r - 6 * s))
-    local m2 = vec2(c.x + math.cos(ang) * (r + 3 * s), c.y + math.sin(ang) * (r + 3 * s))
-    ui.drawLine(m1, m2, TELE_COLOR.brk, 5 * s)
+    local m1 = vec2(c.x + math.cos(ang) * (r - (small and 3 or 6) * s), c.y + math.sin(ang) * (r - (small and 3 or 6) * s))
+    local m2 = vec2(c.x + math.cos(ang) * (r + (small and 1.5 or 3) * s), c.y + math.sin(ang) * (r + (small and 1.5 or 3) * s))
+    ui.drawLine(m1, m2, TELE_COLOR.brk, (small and 2.5 or 5) * s)
     local gear = math.floor(CarRead.num(car.gear))
     local gt = gear < 0 and 'R' or gear == 0 and 'N' or tostring(gear)
-    local gw = textWidth(gt, FONT_TITLE, 30 * s)
-    drawText(gt, FONT_TITLE, 30 * s, vec2(c.x - gw / 2, c.y - 17 * s), COLOR_TITLE)
-    local st = string.format('%d km/h', math.floor(CarRead.num(car.speedKmh) + 0.5))
-    local sw = textWidth(st, FONT_MONO, 9 * s)
-    drawText(st, FONT_MONO, 9 * s, vec2(c.x - sw / 2, c.y - r + 8 * s), COLOR_DIM)
+    local gsz = (small and 13 or 30) * s
+    local gw = textWidth(gt, FONT_TITLE, gsz)
+    drawText(gt, FONT_TITLE, gsz, vec2(c.x - gw / 2, c.y - gsz * (small and 0.9 or 0.57)), COLOR_TITLE)
+    local kmh = math.floor(CarRead.num(car.speedKmh) + 0.5)
+    local st = small and tostring(kmh) or string.format('%d km/h', kmh)
+    local ssz = (small and 6.5 or 9) * s
+    local sw = textWidth(st, FONT_MONO, ssz)
+    drawText(st, FONT_MONO, ssz, vec2(c.x - sw / 2, small and (c.y + 1 * s) or (c.y - r + 8 * s)), COLOR_DIM)
     Drag.icons('telemetry', p1, p2, s)
   end
   return function(car, w, h, s)
@@ -8795,10 +8849,6 @@ end)()
 local drawDesktopUI = (function()
   local W = 660
   local CANVAS_W = 422
-  local RECT = { pitbox = { 1397, 837, 288, 195 }, setup = { 48, 772, 474, 260 }, status = { 1701, 718, 171, 314 },
-    race = { 48, 110, 300, 190 }, laps = { 48, 420, 330, 160 }, standings = { 745, 560, 430, 180 },
-    relative = { 1572, 380, 300, 180 }, laptime = { 1612, 640, 260, 150 }, delta = { 830, 860, 260, 70 },
-    event = { 770, 200, 380, 160 }, weather = { 48, 620, 300, 110 }, map = { 1572, 110, 300, 240 } }
   local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local drag = nil
@@ -8930,14 +8980,6 @@ local drawDesktopUI = (function()
     local k = h / 1080
     local cs = CANVAS_W * s / w
     local function toCanvas(px, py) return vec2(c1.x + px * cs, c1.y + py * cs) end
-    local function area(g, e)
-      local r = Drag.lastRects[g]
-      if r then return r.min, r.max, r.base end
-      local t = RECT[g]
-      local base = vec2(t[1] * k, t[2] * k)
-      local a = vec2(base.x + e.x * k, base.y + e.y * k)
-      return a, vec2(a.x + t[3] * k, a.y + t[4] * k), base
-    end
     local pr = Drag.lastRects.panel
     local pa = pr and toCanvas(pr.min.x, pr.min.y) or toCanvas(w / 2 - 260 * k, h * 0.18)
     local pb = pr and toCanvas(pr.max.x, pr.min.y + 66 * k) or toCanvas(w / 2 + 260 * k, h * 0.18 + 66 * k)
@@ -8960,8 +9002,9 @@ local drawDesktopUI = (function()
     if Desktop.place[desk] then lists[#lists + 1] = { Desktop.place[desk], false } end
     for _, L in ipairs(lists) do
       for g, e in pairs(L[1]) do
-        if RECT[g] then
-          local rmin, rmax, base = area(g, e)
+        local r = Drag.lastRects[g]
+        if r then
+          local rmin, rmax, base = r.min, r.max, r.base
           local a, b = toCanvas(rmin.x, rmin.y), toCanvas(rmax.x, rmax.y)
           local size = vec2(rmax.x - rmin.x, rmax.y - rmin.y)
           b = vec2(math.max(b.x, a.x + 44 * s), math.max(b.y, a.y + 22 * s))
@@ -9777,6 +9820,39 @@ local drawDesktopUI = (function()
     end
     ui.popClipRect()
   end
+  local function kmrLine(e, c)
+    local k = Audit.kmrOf(e.i) or {}
+    local we = Direction.web.byName[tostring(ac.getDriverName(e.i) or '')]
+    local function nv(x) return x and Audit.num(x) or nil end
+    local rate = function(x) return x and string.format('%.2f', x) or nil end
+    local safety = nv(k.rating) or (we and we.money)
+    local crashes, crRate = nv(k.crashes), rate(k.crashRate)
+    if not crashes and we then crashes, crRate = we.crashes and tostring(we.crashes), we.crRate end
+    local infr, infrRate = nv(k.infractions), rate(k.infractionRate)
+    if not infr and we then infr, infrRate = we.infr and tostring(we.infr), we.infrRate end
+    local crashText = (not crashes and k.noStats) and TEXTS.dirKmrNoStats
+      or string.format(TEXTS.dirKmrCrashes, crashes or '-', crRate or '-')
+    local kline = TEXTS.dirKmrNone
+    if k.points or safety or crashes or infr or k.noStats then
+      kline = string.format(TEXTS.dirKmrLine, nv(k.points) or '-', config.kmrPoints.limit, safety or '-', crashText,
+        infr or '-', infrRate or '-')
+      if we then
+        local laps, best = webLaps(we, ac.getCarID and ac.getCarID(e.i) or nil)
+        kline = kline .. string.format(TEXTS.dirKmrLaps, laps, best)
+      end
+    end
+    kline = string.format(TEXTS.dirBalRes, CarRead.num(c.ballast), CarRead.num(c.restrictor)) .. '  -  ' .. kline
+    return kline
+  end
+  local function fitLines(text, size, width)
+    local out, cur = {}, ''
+    for piece in (tostring(text) .. '  -  '):gmatch('(.-)  %-  ') do
+      local try = cur == '' and piece or (cur .. '  -  ' .. piece)
+      if cur ~= '' and textWidth(try, FONT_MONO, size) > width then out[#out + 1] = cur; cur = piece else cur = try end
+    end
+    if cur ~= '' or #out == 0 then out[#out + 1] = cur end
+    return out
+  end
   local function penaltyLine(i, c)
     local items, dsq
     if i == 0 then
@@ -9812,6 +9888,10 @@ local drawDesktopUI = (function()
       Direction.statusT, Direction.guidJob = state.ui.clock, nil
     end
     local W5, H5 = cmd and 940 or 560, 30 + 16 + (cmd and (22 + 22 + 22 + 22) or 0) + 18 + 16 + #cars * 44 + 22
+    for _, e in ipairs(cars) do
+      local n = #fitLines((penaltyLine(e.i, e.c)), 8.5 * s, (W5 - 74) * s) + #fitLines(kmrLine(e, e.c), 8.5 * s, (W5 - 74) * s)
+      H5 = H5 + math.max(n - 2, 0) * 12
+    end
     local p1, p2 = windowAt('redflag', W5, H5, w, h, s, true)
     Drag.group = nil
     Drag.modal = { p1, p2 }
@@ -9846,6 +9926,22 @@ local drawDesktopUI = (function()
             Direction.status, Direction.statusT, Direction.statusColor = TEXTS.dirLoginSent, state.ui.clock, PANEL_COLORS.yellow
             ac.log('race-control: race direction: KMR login sent')
           end
+        end
+      end
+      do
+        local px = x0 + 340 * s
+        drawText(TEXTS.dirPrompt, FONT_TEXT, 10 * s, vec2(px, y), COLOR_TITLE)
+        local fx = px + textWidth(TEXTS.dirPrompt, FONT_TEXT, 10 * s) + 8 * s
+        local enter
+        Direction.prompt, enter = ownField('prompt', vec2(fx, y - 2 * s), vec2(p2.x - 14 * s, y + 13 * s),
+          Direction.prompt or '', false, s)
+        if enter and (Direction.prompt or ''):match('%S') then
+          queueCommand(Direction.prompt)
+          local shown = Direction.prompt:lower():find('login', 1, true) and (Direction.prompt:match('^(.-login)') .. ' ***') or Direction.prompt
+          ac.log('race-control: race direction: prompt sent: ' .. shown)
+          Direction.status, Direction.statusT, Direction.statusColor = string.format(TEXTS.dirPromptSent, shown),
+            state.ui.clock, PANEL_COLORS.yellow
+          Direction.prompt = ''
         end
       end
       if Direction.waitLogin and state.ui.clock - Direction.statusT >= 5 then
@@ -9978,31 +10074,13 @@ local drawDesktopUI = (function()
         confirmChip(TEXTS.dirStats, 'stats' .. slot, vec2(ax, y - 1 * s), s, nil, function()
           releaseDriver('driver_reset_driving_stats', name, 'reset stats') end)
       end
-      local k = Audit.kmrOf(e.i) or {}
-      local we = Direction.web.byName[tostring(ac.getDriverName(e.i) or '')]
-      local function nv(x) return x and Audit.num(x) or nil end
-      local rate = function(x) return x and string.format('%.2f', x) or nil end
-      local safety = nv(k.rating) or (we and we.money)
-      local crashes, crRate = nv(k.crashes), rate(k.crashRate)
-      if not crashes and we then crashes, crRate = we.crashes and tostring(we.crashes), we.crRate end
-      local infr, infrRate = nv(k.infractions), rate(k.infractionRate)
-      if not infr and we then infr, infrRate = we.infr and tostring(we.infr), we.infrRate end
-      local crashText = (not crashes and k.noStats) and TEXTS.dirKmrNoStats
-        or string.format(TEXTS.dirKmrCrashes, crashes or '-', crRate or '-')
-      local kline = TEXTS.dirKmrNone
-      if k.points or safety or crashes or infr or k.noStats then
-        kline = string.format(TEXTS.dirKmrLine, nv(k.points) or '-', config.kmrPoints.limit, safety or '-', crashText,
-          infr or '-', infrRate or '-')
-        if we then
-          local laps, best = webLaps(we, ac.getCarID and ac.getCarID(e.i) or nil)
-          kline = kline .. string.format(TEXTS.dirKmrLaps, laps, best)
-        end
-      end
-      kline = string.format(TEXTS.dirBalRes, CarRead.num(c.ballast), CarRead.num(c.restrictor)) .. '  -  ' .. kline
+      local kline = kmrLine(e, c)
       local pen, penColor = penaltyLine(e.i, c)
-      drawText(pen, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 16 * s), penColor)
-      drawText(kline, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 28 * s), COLOR_DIM)
-      y = y + 44 * s
+      local lw = p2.x - p1.x - 74 * s
+      local ly = y + 16 * s
+      for _, t in ipairs(fitLines(pen, 8.5 * s, lw)) do drawText(t, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, ly), penColor); ly = ly + 12 * s end
+      for _, t in ipairs(fitLines(kline, 8.5 * s, lw)) do drawText(t, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, ly), COLOR_DIM); ly = ly + 12 * s end
+      y = math.max(y + 44 * s, ly + 4 * s)
     end
     drawText(string.format(TEXTS.redCount, inPits, #cars, over), FONT_MONO, 9 * s, vec2(x0, y + 2 * s), COLOR_DIM)
     if cmd and Direction.listOpen then driversList(w, h, s, p1, p2) end
@@ -10034,10 +10112,8 @@ local drawDesktopUI = (function()
       { TEXTS.scrPending, pen and pen.value or '-' },
       { TEXTS.lobbyKmr, string.format('%s / %d - %s', Audit.points and tostring(Audit.points) or '-', config.kmrPoints.limit,
         Audit.rating and Audit.num(Audit.rating) or '-') },
-      { TEXTS.scrKmrCrashes, Audit.noStats and TEXTS.scrKmrNone or (Audit.crashes and (Audit.crashRate
-        and string.format('%d - %.2f / 100 km', Audit.crashes, Audit.crashRate) or tostring(Audit.crashes)) or '-') },
-      { TEXTS.scrKmrInfr, Audit.noStats and TEXTS.scrKmrNone or (Audit.infractions and (Audit.infractionRate
-        and string.format('%d - %.2f / 100 km', Audit.infractions, Audit.infractionRate) or tostring(Audit.infractions)) or '-') },
+      { TEXTS.scrKmrCrashes, Audit.per100(Audit.crashes, Audit.crashRate) },
+      { TEXTS.scrKmrInfr, Audit.per100(Audit.infractions, Audit.infractionRate) },
       { TEXTS.scrKmrKm, Audit.km and string.format('%.1f km', Audit.km) or '-' },
       { TEXTS.lobbyWeather, string.format('%.0f / %.0f C', CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature)) },
     }
@@ -10232,30 +10308,6 @@ function script.drawUI(exclusive)
   local size = ac.getUI().windowSize
   local w = size.x
   local h = size.y
-  local gameFlag = state.list.dsqStage == 1
-  local dsqReason = state.list.dsqReason
-  local dsqText = gameFlag and config.gameHud == 'show' and (state.pitDsqActive and TEXTS.pitDsq
-    or (dsqReason == TEXTS.dsqDtReason and TEXTS.dtDsq)
-    or string.format(TEXTS.dsqGame, dsqReason or TEXTS.dsqBlackFlag)) or nil
-  if dsqText then
-    local scale = h / 1080
-    local fontSize = 20 * math.min(math.max(scale ^ 0.3, 1), 1.3)
-    ui.pushDWriteFont('Segoe UI;Weight=Bold')
-    local textSize = ui.measureDWriteText(dsqText, fontSize)
-    if textSize.x > w * 0.6 then
-      fontSize = fontSize * w * 0.6 / textSize.x
-      textSize = ui.measureDWriteText(dsqText, fontSize)
-    end
-    local pos = vec2(w * 0.5 - textSize.x * 0.5, h * 0.5 + 7 * scale - textSize.y * 0.5)
-    local outline = rgbm(0.1, 0, 0, 1)
-    local o = 1.5 * scale
-    ui.dwriteDrawText(dsqText, fontSize, pos + vec2(-o, 0), outline)
-    ui.dwriteDrawText(dsqText, fontSize, pos + vec2(o, 0), outline)
-    ui.dwriteDrawText(dsqText, fontSize, pos + vec2(0, -o), outline)
-    ui.dwriteDrawText(dsqText, fontSize, pos + vec2(0, o), outline)
-    ui.dwriteDrawText(dsqText, fontSize, pos, rgbm(0.9, 0, 0, 1))
-    ui.popDWriteFont()
-  end
   local s = math.min(math.max((h / 1080) ^ 0.3, 1), 1.3)
   Desktop.text.minPx = Desktop.text.min * s
   local cellW, fixedW = {}, 0
@@ -10375,7 +10427,7 @@ function script.drawUI(exclusive)
     return p2.y + gap
   end
   local dlTop = state.list
-  if stackOn and dlTop.dsq > 0 and (dlTop.dsqStage ~= 1 or config.gameHud ~= 'show') then
+  if stackOn and dlTop.dsq > 0 then
     local p2 = vec2(x + boxW, ySd + sdH)
     drawFlagBox(vec2(x, ySd), p2, s, BORDER_RED, nil, TEXTS.dsqTitle, BORDER_RED, dlTop.dsqReason,
       dlTop.dsqStage == 1 and TEXTS.dsqOut or dlTop.dsqStage == 2 and TEXTS.dsqTow or TEXTS.dsqStop, nil, BORDER_RED)
