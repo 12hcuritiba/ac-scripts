@@ -419,7 +419,10 @@ local TEXTS = {
   dirLeft = 'Left the server', dirGuidAsk = 'Asking the KMR the GUID of %s',
   dirGuidNone = 'The KMR gave no GUID for %s (the name is case sensitive)', dirGuidGot = 'GUID of %s: %s',
   dirNoRed = 'No red flag nor VSC on', redKmrOn = 'KMR admin: logged in', redKmrOff = 'KMR admin: type /kmr login <password> in the chat',
-  redPlace = 'pit place', redLane = 'pit lane', redTrack = 'track', redCount = 'In the pits %d / %d - over the limit %d',
+  redPlace = 'pit place', redLane = 'pit lane', redTrack = 'track',
+  where = { menu = 'MENU (ESC)', box = 'BOX (LOBBY)', pit = 'PIT', pitlane = 'PIT LANE', grid = 'GRID', stopped = 'STOPPED',
+    track = 'TRACK' }, redCount = 'In the pits %d / %d - over the limit %d',
+  scrPerf = 'PERFORMANCE', perfRows = { fps = 'FPS', cpu = 'CPU', gpu = 'GPU' },
   scrCockpit = 'COCKPIT', cockpitNoApp = 'app not running', cockpitMore = '+ ALL', cockpitAudio = 'VOLUME - EVERY CHANNEL',
   cockpitRows = { ffb = 'Force feedback', y = 'Seat up / down', x = 'Seat left / right', pitch = 'Pitch up / down',
     fov = 'Field of view', ['vol.main'] = 'Volume (master)' },
@@ -443,10 +446,10 @@ local TEXTS = {
   lobbyTitle = 'RACING CONTROL', lobbyStops = 'Stops', lobbyKmr = 'KMR points / rating', lobbyWeather = 'Air / track',
   lobbyMessages = 'MESSAGES', lobbyWindow = 'Racing Control - lobby',
   scrShare = 'RACING ROOM', shareOn = 'GAME SCREEN SHARED', shareOff = 'GAME SCREEN NOT SHARED', shareHint = '< off   on >',
-  rrRoom = '%s - %s', rrNone = 'Not connected - no voice and video', rrOther = 'Open on another computer - no voice and video',
+  rrRoom = '%s - %s', rrNone = 'Not connected - no voice/video', rrOther = 'On another PC - no voice/video',
   rrOffline = 'Base of the event not answering', shareAsking = 'Asking the Racing Room...', shareSent = 'Asked - the Racing Room is opening the capture',
   shareNoRoom = 'Racing Room not in a room - open a room there', shareNoAnswer = 'The Racing Room did not share the game screen',
-  shareFailed = 'Not shared: %s', rrNoRoom = 'Open, not in a room - no voice and video', rrWait = 'Checking...',
+  shareFailed = 'Not shared: %s', rrNoRoom = 'Not in a room - no voice/video', rrWait = 'Checking...',
   rrAreas = { pitwall = 'Pitwall', anteroom = 'Anteroom', control = 'Control room', individual = 'Individual room', workshop = 'Workshop' },
   lobbyRc = 'RACING CONTROL', lobbyAccount = 'Account', lobbyRegistration = 'Registration', lobbyBase = 'Base of the event',
   lobbyApp = 'Racing Control app', lobbyRoom = 'Racing Room', lobbyShare = 'Game screen', lobbyOk = 'ok', lobbyMissing = 'missing: %s',
@@ -463,7 +466,7 @@ local TEXTS = {
   edChoose = 'Click a screen to choose it and drag it to its place',
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
-    weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit' },
+    weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit', perf = 'Performance' },
   scrTelemetry = 'TELEMETRY',
   teleChannels = { thr = 'THR', brk = 'BRK', clu = 'CLU', str = 'STR', spd = 'SPD', gear = 'GEAR', glat = 'G LAT', glon = 'G LON' },
   teleShort = { thr = 'T', brk = 'B', clu = 'C', str = 'S', spd = 'V', gear = 'G', glat = 'X', glon = 'Z' },
@@ -1250,13 +1253,14 @@ do
     mnOpen = ac.StructItem.uint8(),
   }, function(sender, msg)
     if not sender or sender.index == 0 then return end
-    Connection.menu[sender.index] = { open = msg.mnOpen == 1, t = state.ui.clock }
+    Connection.menu[sender.index] = { open = msg.mnOpen > 0, box = msg.mnOpen == 2, t = state.ui.clock }
   end, nil, nil, { processPostponed = true })
-  local ownOpen = false
-  local function ownMenu(open)
-    if open == ownOpen then return end
-    ownOpen = open
-    local msg = { mnOpen = open and 1 or 0 }
+  local ownOpen = 0
+  local function ownMenu(code)
+    if code == ownOpen then return end
+    ownOpen = code
+    local open = code > 0
+    local msg = { mnOpen = code }
     if not sendMenu(msg) then OnlineQueue.push(sendMenu, msg, nil) end
     ac.log('race-control: menu of the game ' .. (open and 'opened' or 'closed') .. ' (told to the other clients)')
   end
@@ -1342,7 +1346,7 @@ do
   end)
   function Connection.update()
     local mode = Connection.hudMode
-    ownMenu(sim.isInMainMenu == true or mode == 'pause' or mode == 'menu' or ac.isKeyDown(27) == true)
+    ownMenu((sim.isInMainMenu == true or mode == 'menu') and 2 or (mode == 'pause' or ac.isKeyDown(27) == true) and 1 or 0)
     local now = state.ui.clock
     for i = 1, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
@@ -1373,6 +1377,15 @@ do
         e.seenT = now
       end
     end
+  end
+  function Connection.where(i, c)
+    local m = Connection.menu[i]
+    if m and m.open then return m.box and 'box' or 'menu' end
+    if c.isInPit then return 'pit' end
+    if c.isInPitlane then return 'pitlane' end
+    if sim.raceSessionType == ac.SessionType.Race and not sim.isSessionStarted then return 'grid' end
+    if CarRead.num(c.speedKmh) < 5 then return 'stopped' end
+    return 'track'
   end
   function Connection.gone()
     local out = {}
@@ -6836,7 +6849,7 @@ local Desktop = { current = 1, count = 1, pitOn = true, place = {}, focus = nil,
   indicatorUntil = 0, drawnOrder = {}, wasInPit = nil }
 do
   local SCREENS = { 'pitbox', 'setup', 'status', 'race', 'laps', 'standings', 'relative', 'laptime', 'delta', 'event',
-    'weather', 'map', 'telemetry', 'share', 'cockpit' }
+    'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local STORAGE_KEY = 'rc.desktops'
   local OFF_KEY = 'rc.desktopsOff'
@@ -6847,7 +6860,7 @@ do
     nextDesktop = button('Next desktop'), prevDesktop = button('Previous desktop'), showPanel = button('Show panel') }
   Desktop.panelUntil = 0
   local TITLE_KEY = 'rc.titleBars'
-  Desktop.TITLE_HIDE = { delta = true, telemetry = true }
+  Desktop.TITLE_HIDE = { delta = true, telemetry = true, map = true, weather = true, share = true, perf = true }
   Desktop.titleHidden = {}
   for g in tostring(ac.storage[TITLE_KEY] or ''):gmatch('[^,]+') do
     if Desktop.TITLE_HIDE[g] then Desktop.titleHidden[g] = true end
@@ -7500,7 +7513,7 @@ local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
     'event', 'weather', 'map', 'telemetry', 'share', 'cockpit' }
-  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden' }
+  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden' }
   local MODES = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
   local ICON_SIZE, ICON_GAP = 12, 3
@@ -7576,7 +7589,7 @@ do
           { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
           { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.Weather, 'weather' },
           { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' }, { ui.Icons.VideoCamera, 'share' },
-          { ui.Icons.SteeringWheel, 'cockpit' } }) do
+          { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
       end
     end
@@ -8529,7 +8542,7 @@ local drawRaceScreens = (function()
   local FS = 10
   local PLACE = { relative = { 1572, 380, 300 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 430 }, event = { 770, 200, 380 },
-    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 } }
+    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 260 } }
   local filter = Desktop.filter
   local function lapTime(ms)
     if not ms or ms <= 0 then return '-' end
@@ -9304,7 +9317,7 @@ local drawRaceScreens = (function()
   local TELE_ORDER = { 'thr', 'brk', 'clu', 'str', 'spd', 'gear', 'glat', 'glon' }
   local TELE_COLOR = { thr = rgbm(0.16, 1, 0, 1), brk = rgbm(1, 0.16, 0, 1), clu = rgbm(0.16, 0.6, 1, 1),
     str = rgbm(0.9, 0.9, 0.9, 1), spd = rgbm(1, 0.6, 0.1, 1), gear = rgbm(0.6, 0.6, 0.6, 1),
-    glat = rgbm(1, 0.9, 0, 1), glon = rgbm(0.6, 0.3, 1, 1) }
+    glat = rgbm(1, 0.9, 0, 1), glon = rgbm(0.6, 0.3, 1, 1), ffb = rgbm(1, 0.54, 0.11, 1) }
   local TELE_ON = { thr = true, brk = true, clu = true, str = true }
   do
     local kept = tostring(ac.storage['rc.telemetry'] or '')
@@ -9329,7 +9342,8 @@ local drawRaceScreens = (function()
       str = 0.5 + 0.5 * math.max(-1, math.min(1, CarRead.num(car.steer) / lock)),
       spd = math.min(CarRead.num(car.speedKmh) / 320, 1), gear = math.max(0, math.min(CarRead.num(car.gear), 8)) / 8,
       glat = 0.5 + 0.5 * math.max(-1, math.min(1, (acc and CarRead.num(acc.x) or 0) / 3)),
-      glon = 0.5 + 0.5 * math.max(-1, math.min(1, (acc and CarRead.num(acc.z) or 0) / 3)) }
+      glon = 0.5 + 0.5 * math.max(-1, math.min(1, (acc and CarRead.num(acc.z) or 0) / 3)),
+      ffb = math.min(math.abs(CarRead.num(car.ffbFinal)), 1) }
     Tele.at = Tele.at % TELE_MAX + 1
     Tele.buf[Tele.at] = v
     Tele.n = math.min(Tele.n + 1, TELE_MAX)
@@ -9364,7 +9378,7 @@ local drawRaceScreens = (function()
     end)
     local barW, barGap = (small and 6 or 14) * s, (small and 9 or 22) * s
     local r = (GH / 2 - (small and 3 or 6)) * s
-    local right = (small and 8 or 14) * s + 2 * r + (small and 6 or 10) * s + 3 * barGap + (small and 4 or 0) * s
+    local right = (small and 8 or 14) * s + 2 * r + (small and 6 or 10) * s + 4 * barGap + (small and 4 or 0) * s
     local gx1, gy1 = p1.x + (small and 8 or 14) * s, y + 2 * s
     local gx2, gy2 = p2.x - right, y + (GH - 2) * s
     ui.drawRectFilled(vec2(gx1, gy1), vec2(gx2, gy2), rgbm(1, 1, 1, 0.04), 2 * s)
@@ -9387,7 +9401,7 @@ local drawRaceScreens = (function()
     end
     local last = Tele.buf[Tele.at] or {}
     local bx = gx2 + (small and 6 or 14) * s
-    for _, k in ipairs({ 'clu', 'brk', 'thr' }) do
+    for _, k in ipairs({ 'clu', 'brk', 'thr', 'ffb' }) do
       local val = math.max(0, math.min(1, last[k] or 0))
       local a, b = vec2(bx, gy1 + (small and 0 or 12) * s), vec2(bx + barW, gy2)
       ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.08), 2 * s)
@@ -9412,6 +9426,37 @@ local drawRaceScreens = (function()
     local sw = textWidth(st, FONT_MONO, ssz)
     drawText(st, FONT_MONO, ssz, vec2(c.x - sw / 2, small and (c.y + 1 * s) or (c.y - r + 8 * s)), COLOR_DIM)
     Drag.icons('telemetry', p1, p2, s)
+  end
+  local Perf = { fps = 0, cpu = 0, gpu = 0, top = 60 }
+  local function perfScreen(car, w, h, s)
+    local p1, p2, y = frame('perf', w, h, s, 3, TEXTS.scrPerf, nil)
+    local fps = CarRead.num(sim.fps)
+    local cap = CarRead.num(sim.fpsCapped)
+    local gpuMs = 0
+    if ac.getPerformanceCPUAndGPUTime then
+      local ok, _, g = pcall(ac.getPerformanceCPUAndGPUTime)
+      if ok then gpuMs = CarRead.num(g) end
+    end
+    local k = math.min(math.max(state.ui.clock - (Perf.t or -1e9), 0) * 2, 1)
+    Perf.t = state.ui.clock
+    Perf.fps = Perf.fps + (fps - Perf.fps) * k
+    Perf.cpu = Perf.cpu + (CarRead.num(sim.cpuOccupancy) - Perf.cpu) * k
+    Perf.gpu = Perf.gpu + ((fps > 0 and gpuMs * fps / 10 or 0) - Perf.gpu) * k
+    Perf.top = cap > 0 and cap or math.max(Perf.top, fps)
+    local rows = {
+      { TEXTS.perfRows.fps, Perf.fps / math.max(Perf.top, 1), string.format('%.0f', Perf.fps) },
+      { TEXTS.perfRows.cpu, Perf.cpu / 100, string.format('%.0f%%', Perf.cpu) },
+      { TEXTS.perfRows.gpu, Perf.gpu / 100, string.format('%.0f%%', Perf.gpu) },
+    }
+    for _, r in ipairs(rows) do
+      drawText(r[1], FONT_MONO, FS * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+      local a, b = vec2(p1.x + 50 * s, y + 3 * s), vec2(p2.x - 60 * s, y + 10 * s)
+      ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.08), 2 * s)
+      ui.drawRectFilled(a, vec2(a.x + (b.x - a.x) * math.max(0, math.min(1, r[2])), b.y), BORDER_BLUE, 2 * s)
+      drawTextRight(r[3], FONT_MONO, FS * s, p2.x - 14 * s, y, COLOR_TITLE)
+      y = y + ROW * s
+    end
+    Drag.icons('perf', p1, p2, s)
   end
   local function shareScreen(car, w, h, s)
     local Rr = RecordSync.base.rr
@@ -9449,6 +9494,11 @@ local drawRaceScreens = (function()
     Drag.clickable(a, b, function() RecordSync.base.rrShare(not on) end)
     drawText(on and TEXTS.shareOn or TEXTS.shareOff, FONT_TITLE, 10 * s, vec2(b.x + 10 * s, y), on and GREEN or COLOR_DIM)
     local room, level = RecordSync.base.rrRoom()
+    local roomW = p2.x - 14 * s - (b.x + 10 * s)
+    if textWidth(room, FONT_TEXT, 9 * s) > roomW then
+      while #room > 1 and textWidth(room .. '...', FONT_TEXT, 9 * s) > roomW do room = room:sub(1, -2) end
+      room = room .. '...'
+    end
     drawText(room, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + 13 * s), ({ ok = COLOR_TITLE, warn = YELLOW, bad = RED })[level] or COLOR_DIM)
     for i, line in ipairs(lines) do
       drawText(line, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + (13 + 13 * i) * s), ({ warn = YELLOW, bad = RED })[askLevel] or COLOR_DIM)
@@ -9531,6 +9581,7 @@ local drawRaceScreens = (function()
     if shown('telemetry', false) then telemetryScreen(car, w, h, s) end
     if shown('share', car.isInPitlane) then shareScreen(car, w, h, s) end
     if shown('cockpit', car.isInPitlane) then cockpitScreen(car, w, h, s) end
+    if shown('perf', false) then perfScreen(car, w, h, s) end
   end
 end)()
 local KmrEvents = (function()
@@ -10938,6 +10989,8 @@ local drawDesktopUI = (function()
     ui.drawCircleFilled(c, 6 * s, rgbm(col.r, col.g, col.b, 0.12 + 0.3 * pulse), 16)
     ui.drawCircleFilled(c, 3.5 * s, rgbm(col.r, col.g, col.b, 0.55 + 0.45 * pulse), 16)
   end
+  local WHERE_COLOR = { menu = PANEL_COLORS.red, box = COLOR_DIM, pit = PANEL_COLORS.green, pitlane = PANEL_COLORS.yellow,
+    grid = COLOR_TITLE, stopped = PANEL_COLORS.red, track = COLOR_TITLE }
   local function dataCells(i, c)
     local lvl, avg, dev, stalled = Connection.level(i)
     local ping = CarRead.num(c.ping)
@@ -10950,6 +11003,7 @@ local drawDesktopUI = (function()
       { TEXTS.connLap .. lapTimeText(c.lapTimeMs), COLOR_DIM },
       { string.format(TEXTS.connSector, CarRead.num(c.currentSector) + 1), COLOR_DIM },
       { string.format(TEXTS.connSpline, CarRead.num(c.splinePosition)), COLOR_DIM },
+      { TEXTS.where[Connection.where(i, c)], WHERE_COLOR[Connection.where(i, c)] },
       { ping > 0 and string.format(TEXTS.connPing, ping) or TEXTS.connPingNone, ping > Connection.PING_WARN and col or COLOR_DIM },
       { conn, col },
     }, lvl
