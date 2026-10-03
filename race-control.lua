@@ -7518,7 +7518,7 @@ Desktop.commands = {
 local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
-    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit' }
+    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf' }
   local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden' }
   local MODES = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
@@ -7673,8 +7673,8 @@ do
         end
         setOff(a.group, vec2(nx / k, ny / k))
       else
-        save(a.group)
         active = nil
+        pcall(save, a.group)
       end
       ui.setMouseCursor(ui.MouseCursor.ResizeAll)
       ui.captureMouse(true)
@@ -8548,7 +8548,7 @@ local drawRaceScreens = (function()
   local FS = 10
   local PLACE = { relative = { 1572, 380, 300 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 430 }, event = { 770, 200, 380 },
-    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 260 } }
+    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 } }
   local filter = Desktop.filter
   local function lapTime(ms)
     if not ms or ms <= 0 then return '-' end
@@ -9455,11 +9455,11 @@ local drawRaceScreens = (function()
       { TEXTS.perfRows.gpu, Perf.gpu / 100, string.format('%.0f%%', Perf.gpu) },
     }
     for _, r in ipairs(rows) do
-      drawText(r[1], FONT_MONO, FS * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
-      local a, b = vec2(p1.x + 50 * s, y + 3 * s), vec2(p2.x - 60 * s, y + 10 * s)
+      drawText(r[1], FONT_MONO, FS * s, vec2(p1.x + 8 * s, y), COLOR_DIM)
+      local a, b = vec2(p1.x + 34 * s, y + 3 * s), vec2(p2.x - 42 * s, y + 10 * s)
       ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.08), 2 * s)
       ui.drawRectFilled(a, vec2(a.x + (b.x - a.x) * math.max(0, math.min(1, r[2])), b.y), BORDER_BLUE, 2 * s)
-      drawTextRight(r[3], FONT_MONO, FS * s, p2.x - 14 * s, y, COLOR_TITLE)
+      drawTextRight(r[3], FONT_MONO, FS * s, p2.x - 8 * s, y, COLOR_TITLE)
       y = y + ROW * s
     end
     Drag.icons('perf', p1, p2, s)
