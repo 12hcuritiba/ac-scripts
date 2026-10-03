@@ -473,7 +473,9 @@ local TEXTS = {
   scrClassSel = '< CLASS: %s >', scrLapsCar = 'LAPS - CAR #%s', scrLapsMore = 'MORE', scrLapsLess = 'LESS',
   scrCompare = 'COMPARE', scrDriverSel = '< DRIVER: %s >', scrStintShort = 'ST %d', scrMap = 'TRACK MAP', scrNoMap = 'No map of this track',
   scrMapLegend = { 'yellow you - blue lap ahead - beige lap down', 'grey pit - red stopped' },
-  scrWeather = 'WEATHER', scrWeatherModes = { forecast = 'FORECAST', map = 'MAP' },
+  scrWeather = 'WEATHER', scrWeatherModes = { forecast = 'FORECAST', map = 'RADAR' }, scrRadarTrack = 'TRACK', scrRadarWide = '20 KM', scrRadarBig = '+', scrRadarSmall = '-',
+  scrRadarPrec = 'PRECIPITATION', scrRadarLight = 'light', scrRadarHeavy = 'heavy', scrRadarExtreme = 'extreme', scrRadarClouds = 'clouds: white = light, grey = heavy',
+  scrRadarLoop = '%s - 1 hour at 6 frames per second', scrRadarNoTrack = 'No AI spline on this track',
   scrWeatherAnim = 'forecast hour by hour', scrWeatherStatic = 'no forecast',
   scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
   scrEvent = 'EVENT', scrEventInfo = 'event info', evStops = 'Pit stops required', evSwaps = 'Driver swaps required',
@@ -8949,10 +8951,251 @@ local drawRaceScreens = (function()
     if name:find('Rain') or name:find('Drizzle') or name:find('Thunder') or name:find('Snow') or name:find('Sleet') then return 0.9 end
     return 0.5
   end
+  local Radar = { geo = nil, rain = nil, cloud = nil, loop = nil, cells = nil, cellsT = -1, DOM = 60000, NORTH = 3 }
+  Radar.STOPS = { { 0, 120, 215, 240 }, { 0.30, 40, 120, 230 }, { 0.55, 250, 220, 40 }, { 0.78, 240, 120, 40 }, { 1, 170, 60, 220 } }
+  function Radar.pcolor(v)
+    v = math.min(math.max(v, 0), 1)
+    local S = Radar.STOPS
+    for i = 1, #S - 1 do
+      local a, b = S[i], S[i + 1]
+      if v <= b[1] then
+        local u = (v - a[1]) / (b[1] - a[1])
+        return a[2] + (b[2] - a[2]) * u, a[3] + (b[3] - a[3]) * u, a[4] + (b[4] - a[4]) * u
+      end
+    end
+    return S[#S][2], S[#S][3], S[#S][4]
+  end
+  function Radar.geometry()
+    if Radar.geo ~= nil then return Radar.geo or nil end
+    Radar.geo = false
+    if not ac.hasTrackSpline or not ac.hasTrackSpline() then return nil end
+    local N = 360
+    local P, W = {}, {}
+    for i = 0, N - 1 do
+      local okP, q = pcall(ac.trackProgressToWorldCoordinate, i / N)
+      local okW, sd = pcall(ac.getTrackAISplineSides, i / N)
+      if not okP or not q then return nil end
+      P[i + 1] = { q.x, q.z }
+      W[i + 1] = okW and sd and { sd.x, sd.y } or { 6, 6 }
+    end
+    local hd = {}
+    for i = 1, N do local a, b = P[i], P[i % N + 1]; hd[i] = math.atan2(b[2] - a[2], b[1] - a[1]) end
+    local function diff(a, b) local d = (a - b) % (2 * math.pi); if d > math.pi then d = d - 2 * math.pi end; return math.abs(d) end
+    local best, bi = 0, 1
+    for i = 1, N do
+      local len = 0
+      while len < N - 1 and diff(hd[(i + len - 1) % N + 1], hd[i]) < math.rad(5) do len = len + 1 end
+      if len > best then best, bi = len, i end
+    end
+    local A, B = P[bi], P[(bi + best - 1) % N + 1]
+    local rot = math.pi / 2 - math.atan2(B[2] - A[2], B[1] - A[1])
+    local function turned(r)
+      local c, s = math.cos(r), math.sin(r)
+      local Q = {}
+      for i = 1, N do Q[i] = { P[i][1] * c - P[i][2] * s, P[i][1] * s + P[i][2] * c } end
+      return Q
+    end
+    local Q = turned(rot)
+    local sx, rx, ns, nr = 0, 0, 0, 0
+    for i = 1, N do
+      local inS = ((i - bi) % N) < best
+      if inS then sx, ns = sx + Q[i][1], ns + 1 else rx, nr = rx + Q[i][1], nr + 1 end
+    end
+    if nr > 0 and ns > 0 and rx / nr > sx / ns then rot = rot + math.pi end
+    rot = rot - math.rad(Radar.NORTH)
+    Q = turned(rot)
+    local x0, x1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
+    for i = 1, N do x0 = math.min(x0, Q[i][1]); x1 = math.max(x1, Q[i][1]); z0 = math.min(z0, Q[i][2]); z1 = math.max(z1, Q[i][2]) end
+    local cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
+    local L, R = {}, {}
+    for i = 1, N do
+      Q[i][1], Q[i][2] = Q[i][1] - cx, Q[i][2] - cz
+    end
+    for i = 1, N do
+      local a, b = Q[(i - 2) % N + 1], Q[i % N + 1]
+      local dx, dz = b[1] - a[1], b[2] - a[2]
+      local len = math.sqrt(dx * dx + dz * dz) + 1e-9
+      local nx, nz = -dz / len, dx / len
+      L[i] = { Q[i][1] + nx * W[i][1], Q[i][2] + nz * W[i][1] }
+      R[i] = { Q[i][1] - nx * W[i][2], Q[i][2] - nz * W[i][2] }
+    end
+    Radar.geo = { Q = Q, L = L, R = R }
+    return Radar.geo
+  end
+  function Radar.pattern()
+    if Radar.rain then return end
+    local seed = 12
+    local function rnd() seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 end
+    Radar.rain, Radar.cloud = {}, {}
+    for i = 1, 260 do local w = 0.3 + rnd() * 1.3; Radar.rain[i] = { rnd() * Radar.DOM, rnd() * Radar.DOM, 600 + rnd() * 2900, w * w } end
+    for i = 1, 220 do Radar.cloud[i] = { rnd() * Radar.DOM, rnd() * Radar.DOM, 2500 + rnd() * 4500, 0.4 + rnd() * 0.6 } end
+  end
+  function Radar.sky(name)
+    local n = tostring(name or ''):lower()
+    if n:find('thunder') or n:find('heavy') then return 1, 0.9 end
+    if n:find('rain') and n:find('light') then return 0.92, 0.7 end
+    if n:find('rain') then return 0.95, 0.8 end
+    if n:find('drizzle') then return 0.85, 0.6 end
+    if n:find('overcast') then return 0.9, 0.45 end
+    if n:find('broken') then return 0.7, 0.35 end
+    if n:find('scattered') then return 0.45, 0.2 end
+    if n:find('few') then return 0.2, 0.1 end
+    if n:find('clear') then return 0, 0 end
+    return 0.5, 0.3
+  end
+  function Radar.slots(fc)
+    local out = {}
+    for _, f in ipairs(fc or {}) do
+      local h, m = tostring(f.time or ''):match('^(%d+):(%d+)$')
+      if h then
+        local cov, grey = Radar.sky(f.sky or f.type)
+        local w = tostring(f.wind or '')
+        local v1, v2 = w:match('(%d+%.?%d*)%s*%-%s*(%d+%.?%d*)%s*m/s')
+        local dir = tonumber(w:match('at%s*(%d+)')) or 0
+        out[#out + 1] = { minute = tonumber(h) * 60 + tonumber(m), name = f.sky or f.type or '', cov = cov, grey = grey, rain = CarRead.num(f.rain),
+          vmin = tonumber(v1) or 0, vmax = tonumber(v2) or tonumber(v1) or 0, dir = dir }
+      end
+    end
+    table.sort(out, function(a, b) return a.minute < b.minute end)
+    if #out == 0 then
+      local name
+      for k, v in pairs(ac.WeatherType or {}) do if v == sim.weatherType then name = k end end
+      local cov, grey = Radar.sky(name and name:gsub('(%l)(%u)', '%1 %2') or '')
+      local v = CarRead.num(sim.windSpeedKmh) / 3.6
+      out[1] = { minute = 0, name = name or '-', cov = cov, grey = grey, rain = CarRead.num(sim.rainIntensity) * 100, vmin = v, vmax = v,
+        dir = CarRead.num(sim.windDirectionDeg) % 360 }
+    end
+    return out
+  end
+  function Radar.at(slots, minute)
+    local s = slots[1]
+    for _, x in ipairs(slots) do if x.minute <= minute then s = x end end
+    return s
+  end
+  function Radar.hour(slots)
+    local m0 = math.floor(CarRead.num(sim.timeHours) * 60 + CarRead.num(sim.timeMinutes))
+    local L = Radar.loop
+    if L and L.m0 == m0 and L.slots == slots then return L end
+    L = { m0 = m0, slots = slots, off = {} }
+    local ox, oy = 0, 0
+    for k = 0, 59 do
+      L.off[k] = { ox, oy }
+      local s = Radar.at(slots, m0 + k)
+      local v, b = (s.vmin + s.vmax) / 2, math.rad(s.dir + 180)
+      ox, oy = ox + math.sin(b) * v * 60, oy - math.cos(b) * v * 60
+    end
+    Radar.loop = L
+    return L
+  end
+  function Radar.near(cells, half, ox, oy)
+    local D, out = Radar.DOM, {}
+    for _, c in ipairs(cells) do
+      local x = (c[1] + ox + D / 2) % D - D / 2
+      local y = (c[2] + oy + D / 2) % D - D / 2
+      if math.abs(x) < half + 3 * c[3] and math.abs(y) < half + 3 * c[3] then out[#out + 1] = { x, y, c[3] * c[3], c[4] } end
+    end
+    return out
+  end
+  function Radar.frame(s, off, half, G)
+    Radar.pattern()
+    local clouds = Radar.near(Radar.cloud, half, off[1], off[2])
+    local rains = Radar.near(Radar.rain, half, off[1] * 1.1, off[2] * 1.1)
+    local cells = {}
+    local step = 2 * half / G
+    for gy = 0, G - 1 do
+      for gx = 0, G - 1 do
+        local X, Y = -half + (gx + 0.5) * step, -half + (gy + 0.5) * step
+        local cf, rf = 0, 0
+        for _, c in ipairs(clouds) do local dx, dy = X - c[1], Y - c[2]; cf = cf + c[4] * math.exp(-(dx * dx + dy * dy) / c[3]) end
+        for _, c in ipairs(rains) do local dx, dy = X - c[1], Y - c[2]; rf = rf + c[4] * math.exp(-(dx * dx + dy * dy) / c[3]) end
+        local r, g, b = 9, 13, 18
+        local cm = math.min(math.max((cf - (1.9 - s.cov * 1.3)) * 1.6, 0), 1) * (0.30 + 0.30 * s.grey)
+        local shade = 235 - 110 * s.grey
+        r, g, b = r + (shade - r) * cm, g + (shade - g) * cm, b + (shade - b) * cm
+        if s.rain > 0 then
+          local pm = math.min(math.max((rf - (1.6 - s.rain / 40)) * 3, 0), 1) * 0.85
+          if pm > 0 then
+            local pr, pg, pb = Radar.pcolor((s.rain / 100) * 1.2 * rf / 2)
+            r, g, b = r + (pr - r) * pm, g + (pg - g) * pm, b + (pb - b) * pm
+          end
+        end
+        cells[gy * G + gx + 1] = rgbm(r / 255, g / 255, b / 255, 1)
+      end
+    end
+    return cells
+  end
+  local COMPASS = { 'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW' }
+  function Radar.draw(a, side, s, fc, big)
+    local zoom = filter.radarZoom or 'track'
+    local half = zoom == 'track' and 900 or 10000
+    local slots = Radar.slots(fc)
+    local L = Radar.hour(slots)
+    local k = math.floor(state.ui.clock * 6) % 60
+    local minute = L.m0 + k
+    local sl = Radar.at(slots, minute)
+    local G = big and 48 or 36
+    local key = zoom .. '|' .. G .. '|' .. minute .. '|' .. L.m0
+    if Radar.cellsT ~= key then Radar.cells, Radar.cellsT = Radar.frame(sl, L.off[k], half, G), key end
+    local b = vec2(a.x + side, a.y + side)
+    ui.pushClipRect(a, b, true)
+    local cs = side / G
+    for gy = 0, G - 1 do
+      for gx = 0, G - 1 do
+        ui.drawRectFilled(vec2(a.x + gx * cs, a.y + gy * cs), vec2(a.x + (gx + 1) * cs + 0.5, a.y + (gy + 1) * cs + 0.5), Radar.cells[gy * G + gx + 1])
+      end
+    end
+    local c = vec2(a.x + side / 2, a.y + side / 2)
+    local kk = side / (2 * half)
+    if big then
+      local stepM = zoom == 'track' and 250 or 2500
+      local r = stepM
+      while r < half * 1.5 do
+        ui.drawCircle(c, r * kk, rgbm(0.27, 0.35, 0.39, 1), 48, 1)
+        if r % (stepM * 2) == 0 and r * kk < side / 2 - 8 * s then
+          drawText(string.format('%g km', r / 1000), FONT_MONO, 8 * s, vec2(c.x + r * kk * 0.707 + 2 * s, c.y - r * kk * 0.707 - 11 * s), rgbm(0.51, 0.59, 0.63, 1))
+        end
+        r = r + stepM
+      end
+      ui.drawSimpleLine(vec2(c.x, a.y), vec2(c.x, b.y), rgbm(0.18, 0.24, 0.27, 1), 1)
+      ui.drawSimpleLine(vec2(a.x, c.y), vec2(b.x, c.y), rgbm(0.18, 0.24, 0.27, 1), 1)
+    end
+    local geo = Radar.geometry()
+    if geo then
+      local function sp(q) return vec2(c.x + q[1] * kk, c.y + q[2] * kk) end
+      local lines = zoom == 'track' and { geo.L, geo.R } or { geo.Q }
+      for _, list in ipairs(lines) do
+        for i = 1, #list do ui.pathLineTo(sp(list[i])) end
+        ui.pathStroke(rgbm(1, 1, 1, 1), true, (zoom == 'track' and 1.2 or 1.6) * s)
+      end
+    else
+      drawText(TEXTS.scrRadarNoTrack, FONT_MONO, 9 * s, vec2(a.x + 8 * s, a.y + 8 * s), COLOR_OFF)
+    end
+    drawText('N', FONT_TITLE, 10 * s, vec2(b.x - 13 * s, a.y + 3 * s), rgbm(1, 1, 1, 1))
+    ui.drawTriangleFilled(vec2(b.x - 9 * s, a.y + 16 * s), vec2(b.x - 13 * s, a.y + 25 * s), vec2(b.x - 5 * s, a.y + 25 * s), rgbm(1, 1, 1, 1))
+    if big then
+      local w = vec2(a.x + 20 * s, b.y - 20 * s)
+      local bb = math.rad(sl.dir)
+      ui.drawCircle(w, 13 * s, rgbm(0.8, 0.8, 0.8, 1), 24, 1)
+      local e = vec2(w.x - 10 * s * math.sin(bb), w.y + 10 * s * math.cos(bb))
+      ui.drawSimpleLine(vec2(w.x + 10 * s * math.sin(bb), w.y - 10 * s * math.cos(bb)), e, rgbm(1, 1, 1, 1), 2 * s)
+      ui.drawCircleFilled(e, 2.5 * s, rgbm(1, 1, 1, 1), 8)
+      drawText(string.format('%s %.0f-%.0f km/h', COMPASS[math.floor(((sl.dir % 360) + 11.25) / 22.5) % 16 + 1], sl.vmin * 3.6, sl.vmax * 3.6),
+        FONT_MONO, 9 * s, vec2(w.x + 18 * s, w.y - 6 * s), rgbm(1, 1, 1, 1))
+    else
+      drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 9 * s, vec2(a.x + 5 * s, b.y - 14 * s), YELLOW)
+      local x1, x2 = a.x + 46 * s, b.x - 6 * s
+      ui.drawRect(vec2(x1, b.y - 9 * s), vec2(x2, b.y - 5 * s), rgbm(0.35, 0.35, 0.35, 1))
+      ui.drawRectFilled(vec2(x1, b.y - 9 * s), vec2(x1 + (x2 - x1) * k / 59, b.y - 5 * s), YELLOW)
+    end
+    ui.popClipRect()
+    ui.drawRect(a, b, big and rgbm(0.27, 0.3, 0.35, 1) or rgbm(0.16, 0.43, 0.9, 1))
+    return minute, sl
+  end
   local function weatherScreen(car, w, h, s)
     local mode = filter.weather or 'forecast'
     local fc = Weather.forecast or RecordSync.base.forecast.list or {}
-    local rows = mode == 'map' and 16 or (7 + (#fc > 0 and (#fc + 2) or 0))
+    local big = filter.radarBig ~= false
+    local rows = mode == 'map' and (big and 30 or 21.5) or (7 + (#fc > 0 and (#fc + 2) or 0))
     local p1, p2, y = frame('weather', w, h, s, rows, TEXTS.scrWeather, nil)
     local off = nil
     if ac.getTimeZoneOffset then off = CarRead.num(ac.getTimeZoneOffset())
@@ -8984,27 +9227,41 @@ local drawRaceScreens = (function()
     local okC, cs = pcall(ac.getConditionsSet)
     local nowName = weatherName(sim.weatherType)
     if mode == 'map' then
-      local toScreen, o, k, m = drawMap(vec2(p1.x + 10 * s, y), vec2(p2.x - 10 * s, p2.y - 18 * s))
-      if not toScreen then
-        drawText(TEXTS.scrNoMap, FONT_MONO, 9 * s, vec2(p1.x + 14 * s, y), COLOR_OFF)
-      elseif #fc > 0 then
-        local cv = cover(nowName)
-        local rain = math.min(CarRead.num(sim.rainIntensity) * 2, 1)
-        local cw, ch = m.w * k / 8, m.h * k / 6
-        for gx = 0, 7 do
-          for gy = 0, 5 do
-            local seed = ((gx * 7 + gy * 13) % 10) / 10
-            if seed < cv then
-              local c = vec2(o.x + (gx + 0.5) * cw, o.y + (gy + 0.5) * ch)
-              ui.drawCircleFilled(c, math.min(cw, ch) * 0.7, rain > 0 and rgbm(0.45, 0.55, 0.8, 0.25 + 0.3 * rain)
-                or rgbm(0.85, 0.87, 0.9, 0.22), 16)
-            end
-          end
-        end
+      local side = p2.x - p1.x - 20 * s
+      local zx = p1.x + 10 * s
+      for _, z in ipairs({ { 'track', TEXTS.scrRadarTrack }, { 'wide', TEXTS.scrRadarWide } }) do
+        local tw = textWidth(z[2], FONT_MONO, 9 * s)
+        local za, zb = vec2(zx, y), vec2(zx + tw + 8 * s, y + 13 * s)
+        local on = (filter.radarZoom or 'track') == z[1]
+        if on then ui.drawRectFilled(za, zb, YELLOW, 2 * s) else ui.drawRect(za, zb, rgbm(1, 1, 1, 0.3), 2 * s) end
+        drawText(z[2], FONT_MONO, 9 * s, vec2(za.x + 4 * s, za.y + 1 * s), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
+        Drag.clickable(za, zb, function() filter.radarZoom = z[1] end)
+        zx = zb.x + 4 * s
       end
-      if toScreen then ui.drawCircleFilled(toScreen(car.position), 5 * s, YELLOW, 12) end
-      drawText(#fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic, FONT_MONO, 8.5 * s, vec2(p1.x + 14 * s, p2.y - 15 * s),
-        COLOR_DIM)
+      local st = big and TEXTS.scrRadarSmall or TEXTS.scrRadarBig
+      local sw = textWidth(st, FONT_MONO, 9 * s)
+      local sa, sb = vec2(p2.x - 10 * s - sw - 8 * s, y), vec2(p2.x - 10 * s, y + 13 * s)
+      ui.drawRect(sa, sb, rgbm(1, 1, 1, 0.3), 2 * s)
+      drawText(st, FONT_MONO, 9 * s, vec2(sa.x + 4 * s, sa.y + 1 * s), COLOR_DIM)
+      Drag.clickable(sa, sb, function() filter.radarBig = not big end)
+      local minute, sl = Radar.draw(vec2(p1.x + 10 * s, y + 18 * s), side, s, fc, big)
+      if big then
+        drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 10 * s, vec2(zx + 6 * s, y), YELLOW)
+        drawText(tostring(sl.name), FONT_MONO, 9 * s, vec2(zx + 46 * s, y + 1 * s), COLOR_TITLE)
+        local ly = y + 18 * s + side + 8 * s
+        drawText(TEXTS.scrRadarPrec, FONT_MONO, 8.5 * s, vec2(p1.x + 14 * s, ly), COLOR_DIM)
+        local bx1, bx2 = p1.x + 100 * s, p2.x - 14 * s
+        local n = 64
+        for i = 0, n - 1 do
+          local r, g, b = Radar.pcolor(i / (n - 1))
+          ui.drawRectFilled(vec2(bx1 + (bx2 - bx1) * i / n, ly + 2 * s), vec2(bx1 + (bx2 - bx1) * (i + 1) / n + 0.5, ly + 9 * s), rgbm(r / 255, g / 255, b / 255, 1))
+        end
+        drawText(TEXTS.scrRadarLight, FONT_MONO, 8 * s, vec2(bx1, ly + 11 * s), COLOR_DIM)
+        drawText(TEXTS.scrRadarHeavy, FONT_MONO, 8 * s, vec2(bx1 + (bx2 - bx1) * 0.55 - 12 * s, ly + 11 * s), COLOR_DIM)
+        drawTextRight(TEXTS.scrRadarExtreme, FONT_MONO, 8 * s, bx2, ly + 11 * s, COLOR_DIM)
+        drawText(TEXTS.scrRadarClouds, FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 25 * s), COLOR_DIM)
+        drawText(string.format(TEXTS.scrRadarLoop, #fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic), FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 37 * s), COLOR_DIM)
+      end
     else
       local kmhW = CarRead.num(sim.windSpeedKmh)
       local lines = {
