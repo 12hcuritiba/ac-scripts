@@ -380,7 +380,7 @@ local TEXTS = {
   dirLogin = 'KMR admin login', dirLoginSent = 'Login sent - waiting for the KMR', dirLoginOk = 'KMR admin: logged in',
   dirNoAnswer = 'No answer from the KMR in 5 s - login or command failed',
   dirFailed = 'Failed: %s', dirSent = 'Sent: %s - waiting for the KMR', dirAnswer = 'KMR: %s',
-  dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT', dirFuel = 'FUEL',
+  dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT', dirFuel = 'FUEL', dirMenu = 'MENU 5 MIN',
   setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', text = 'Text', app = 'App', room = 'Racing Room' },
   setFontSample = 'RACING CONTROL  P3  Slow down', setFontMissing = 'not installed', setTextMin = 'Small text at least', setTextMinOff = 'Off', setPreset = 'Preset',
   setPresets = { verbose = 'Verbose', race = 'Race', minimal = 'Minimal', custom = 'Custom' }, setAlways = 'always - on the Racing Control panel',
@@ -436,7 +436,7 @@ local TEXTS = {
   connOutNoStop = 'driver out away from the pit place', connSwapTime = 'swap time %s / %s',
   connBackSame = 'same driver back after %s (swap time %s)', connBackOther = 'new driver in after %s (swap time %s)',
   connInTime = 'within the swap time', connLate = 'after the swap time',
-  connCause = { pitPlace = 'left at the pit place', menu = 'ESC / menu - left on purpose', lost = 'connection lost',
+  connCause = { pitPlace = 'left at the pit place', menu = 'ESC / menu - left the session', lost = 'connection lost',
     pingHigh = 'kicked by the KMR - high ping', pingUnstable = 'kicked by the KMR - unstable ping', kick = 'kicked',
     unknown = 'left - no menu seen, connection fine' },
   connGoneTitle = 'LEFT THE SERVER', connLeft = 'left', connTitle = 'Connection', connLog = '%s left the server - %s',
@@ -530,6 +530,7 @@ local TEXTS = {
   realNameOffline = 'Registration not confirmed - the base of the event does not answer - wait for it before the session starts',
   redTowDeferred = 'Tow under the red flag: the tow and repair time starts at the restart',
   redNoLineSG = 'Pit entry with the red flag not received at the line', redFuelUnlocked = 'Fuel unlocked by Racing Control',
+  menuFree = 'Game menu free for %d min - adjust and get ready', menuFreeOff = 'Game menu closed again',
   redFlagNoPitDsq = 'Not in the pits at the restart after the red flag',
   flagChequered = 'CHEQUERED FLAG', flagChequeredMine = 'Session over for you', flagChequeredPos = 'P%d - %d laps',
   flagTimeOver = 'SESSION TIME OVER', flagRaceOver = 'RACE OVER', flagFinishLap = 'Finish your lap - the chequered flag is at the line',
@@ -1298,6 +1299,15 @@ do
     if stalled or (full and avg > PING_KICK) or (full and dev > DEV_KICK) then return 'bad', avg, dev, stalled end
     if (e.ping or 0) > PING_WARN then return 'warn', avg, dev, false end
     return 'ok', avg, dev, false
+  end
+  local HEAT_FROM = 80
+  function Connection.heat(i)
+    local lvl, avg, dev = Connection.level(i)
+    if lvl == 'bad' then return 1 end
+    local e = Connection.cars[i]
+    local p = math.max(e and e.ping or 0, avg or 0)
+    local h = math.max((p - HEAT_FROM) / (PING_KICK - HEAT_FROM), (dev or 0) / DEV_KICK)
+    return math.min(math.max(h, 0), 1)
   end
   local function causeOf(i, e)
     local k = Connection.kicks[e.name]
@@ -4994,6 +5004,8 @@ end
 local RcCommand = {}
 do
   local LOCK_MAX_SECONDS = 86400
+  local MENU_FREE_MINUTES = 5
+  local MENU_MAX_MINUTES = 60
   local function isMine(id)
     if #id >= 17 then return id == tostring(ac.getUserSteamID() or '') end
     return tonumber(id) == ac.getCar(0).sessionID
@@ -5065,6 +5077,12 @@ do
     elseif what == 'FUEL' then
       state.redFuelOk = true
       done(TEXTS.redFuelUnlocked, why)
+    elseif what == 'MENU' then
+      local minutes = value ~= '' and tonumber(value) or MENU_FREE_MINUTES
+      if not minutes or minutes < 0 then return false end
+      minutes = math.min(minutes, MENU_MAX_MINUTES)
+      state.menuFreeUntil = minutes > 0 and state.ui.clock + minutes * 60 or nil
+      done(minutes > 0 and string.format(TEXTS.menuFree, minutes) or TEXTS.menuFreeOff, why)
     elseif what == 'LOCK' then
       local seconds = tonumber(value)
       if not seconds or seconds <= 0 then return false end
@@ -7795,13 +7813,15 @@ local function drawLedLight(c, r, color, lit, s)
   ui.drawCircleFilled(c, r + 1.5 * s, rgbm(0.02, 0.02, 0.025, 1), 32)
   ui.drawCircle(c, r + 1.5 * s, rgbm(0.28, 0.28, 0.3, 1), 32, 1 * s)
   if lit then ui.drawCircleFilled(c, r, rgbm(color.r, color.g, color.b, 0.18), 32) end
-  local pitch = r / 4.5
-  local dot = pitch * 0.3
-  local n = math.ceil(r / pitch)
+  local pitch = r / 3.6
+  local dot = pitch * 0.36
+  local m = math.floor((r - pitch * 0.55) / pitch)
+  local cut = m * m + 1.01
+  local n = m + 1
   for iy = -n, n do
     for ix = -n, n do
       local dx, dy = ix * pitch, iy * pitch
-      if dx * dx + dy * dy <= (r - pitch * 0.45) ^ 2 then
+      if ix * ix + iy * iy <= cut then
         local p = vec2(c.x + dx, c.y + dy)
         if lit then
           ui.drawCircleFilled(p, dot * 1.9, rgbm(color.r, color.g, color.b, 0.25), 8)
@@ -10884,6 +10904,14 @@ local drawDesktopUI = (function()
     sec = math.max(math.floor(sec or 0), 0)
     return string.format('%d:%02d', math.floor(sec / 60), sec % 60)
   end
+  local function connLight(c, s, heat)
+    local g = heat < 0.5 and 1 or 1 - (heat - 0.5) * 2
+    local r = heat < 0.5 and heat * 2 or 1
+    local col = rgbm(0.15 + 0.85 * r, 0.85 * g, 0.2 * (1 - heat), 1)
+    local pulse = 0.5 + 0.5 * math.sin(2 * math.pi * (0.6 + 1.8 * heat) * state.ui.clock)
+    ui.drawCircleFilled(c, 6 * s, rgbm(col.r, col.g, col.b, 0.12 + 0.3 * pulse), 16)
+    ui.drawCircleFilled(c, 3.5 * s, rgbm(col.r, col.g, col.b, 0.55 + 0.45 * pulse), 16)
+  end
   local function dataCells(i, c)
     local lvl, avg, dev, stalled = Connection.level(i)
     local ping = CarRead.num(c.ping)
@@ -11148,6 +11176,7 @@ local drawDesktopUI = (function()
       local fast = not c.isInPitlane and kmh > config.flags.redSpeedKmh
       if fast then over = over + 1 end
       drawText('#' .. tostring(ac.getDriverNumber(e.i) or e.i), FONT_MONO, 9.5 * s, vec2(x0, y), COLOR_TITLE)
+      connLight(vec2(p1.x + 50 * s, y + 6.5 * s), s, Connection.heat(e.i))
       local carName = tostring(ac.getDriverName(e.i) or '')
       drawText(carName, FONT_TEXT, 9.5 * s, vec2(p1.x + 60 * s, y), Direction.target == carName and PANEL_COLORS.yellow or COLOR_TITLE)
       if cmd then Drag.clickable(vec2(x0, y - 1 * s), vec2(p1.x + 205 * s, y + 13 * s), function() Direction.target = carName end) end
@@ -11176,6 +11205,8 @@ local drawDesktopUI = (function()
           sendKmr('admin_say RC RELAX ' .. slot .. ' DSQ', 'relax DSQ ' .. name) end)
         ax = confirmChip(TEXTS.dirFuel, 'fuel' .. slot, vec2(ax, y - 1 * s), s, nil, function()
           sendKmr('admin_say RC FUEL ' .. slot, 'fuel unlocked ' .. name) end)
+        ax = confirmChip(TEXTS.dirMenu, 'menu' .. slot, vec2(ax, y - 1 * s), s, nil, function()
+          sendKmr('admin_say RC MENU ' .. slot, 'menu free ' .. name) end)
         ax = confirmChip(TEXTS.dirMoney, 'money' .. slot, vec2(ax, y - 1 * s), s, nil, function()
           releaseDriver('driver_reset_money', name, 'reset money') end)
         confirmChip(TEXTS.dirStats, 'stats' .. slot, vec2(ax, y - 1 * s), s, nil, function()
@@ -11384,7 +11415,8 @@ local drawDesktopUI = (function()
           lobby(size.x, size.y, sm)
           return
         end
-        if mode ~= 'game' or config.gameHud == 'show' then return end
+        local free = state.menuFreeUntil and state.ui.clock < state.menuFreeUntil
+        if mode ~= 'game' or config.gameHud == 'show' or free then return end
         script.drawUI(true)
         Desktop.hudDrawn = true
         return config.gameHud == 'hideall' and true or 'apps'
@@ -11476,6 +11508,7 @@ local drawDesktopUI = (function()
       ax = confirmChip(TEXTS.dirToPit, 'mpit' .. slot, vec2(ax, y), s, nil, function() sendKmr('admin_say RC TELEPORT ' .. slot, 'to the pits ' .. name) end)
       ax = confirmChip('DSQ', 'mdsq' .. slot, vec2(ax, y), s, PANEL_COLORS.red, function() sendKmr('admin_say RC DSQ ' .. slot, 'DSQ ' .. name) end)
       ax = confirmChip(TEXTS.dirNoDsq, 'mnodsq' .. slot, vec2(ax, y), s, nil, function() sendKmr('admin_say RC RELAX ' .. slot .. ' DSQ', 'relax DSQ ' .. name) end)
+      ax = confirmChip(TEXTS.dirMenu, 'mmenu' .. slot, vec2(ax, y), s, nil, function() sendKmr('admin_say RC MENU ' .. slot, 'menu free ' .. name) end)
       confirmChip('KICK', 'mkick' .. slot, vec2(ax, y), s, PANEL_COLORS.red, function() sendKmr('player_kick ' .. slot, 'kick ' .. name) end)
     end
     if Direction.status and state.ui.clock - Direction.statusT < 5 then
@@ -11617,10 +11650,10 @@ function script.drawUI(exclusive)
     drawFlagBox(vec2(x, yTop), p2, s, border, nil,
       flag.title, col, flag.line1, flag.line2, flag.kind, flag.alert and BORDER_RED or nil)
     if flag.kind == 'red' or flag.lights then
-      local r = 10.5 * s
+      local r = 6.5 * s
       local lit = flag.kind == 'red' and rgbm(1, 0.1, 0.08, 1) or rgbm(0.15, 1, 0.3, 1)
       for i = 1, 5 do
-        local c = vec2(p2.x - 14 * s - r - (5 - i) * (2 * r + 5 * s), (yTop + p2.y) / 2)
+        local c = vec2(p2.x - 10 * s - r - (5 - i) * (2 * r + 3.5 * s), (yTop + p2.y) / 2)
         drawLedLight(c, r, lit, true, s)
       end
     end
