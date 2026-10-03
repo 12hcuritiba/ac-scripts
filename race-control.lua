@@ -1769,6 +1769,32 @@ do
         W.value = { ms = tonumber(ms), s = sec }
       end)
   end
+  local FORECAST_GAP = 60
+  B.forecast = { list = nil, race = nil, session = nil, nextT = 0, busy = false, index = nil }
+  function B.forecastUpdate()
+    local F = B.forecast
+    local index = sim.currentSessionIndex or 0
+    if F.index ~= index then F.index, F.list, F.nextT = index, nil, 0 end
+    if not on() or F.busy or state.ui.clock < F.nextT then return end
+    F.busy, F.nextT = true, state.ui.clock + FORECAST_GAP
+    web.request('GET', config.baseUrl .. '/v1/forecast?session=' .. index, nil, nil, function(err, res)
+      F.busy = false
+      if err or not res or tonumber(res.status) ~= 200 or F.index ~= index then return end
+      local body = tostring(res.body or '')
+      local race, session = body:match('^OK|([^|\n]*)|([^|\n]*)')
+      if not race then F.list, F.race, F.session = nil, nil, nil return end
+      local list = {}
+      for line in body:gmatch('[^\n]+') do
+        local f = {}
+        for v in (line .. '|'):gmatch('([^|]*)|') do f[#f + 1] = v end
+        if #f >= 9 and f[1]:match('^%d+:%d+$') then
+          list[#list + 1] = { time = f[1], type = f[2], sky = f[3]:gsub('%s*%(Sol%)', ''), wind = f[4], road = tonumber(f[5]),
+            air = tonumber(f[6]), rain = tonumber(f[7]), wet = tonumber(f[8]), water = tonumber(f[9]) }
+        end
+      end
+      F.list, F.race, F.session = list, race, session
+    end)
+  end
   local RR_GAP = 5
   B.rr = { state = 'unknown', nextT = 0, busy = false, garage = '', area = '', screen = false, game = false, logged = nil, err = '',
     source = tostring(ac.storage['rc.share.source'] or 'game'), layout = tostring(ac.storage['rc.share.layout'] or 'single') }
@@ -8863,7 +8889,7 @@ local drawRaceScreens = (function()
   end
   local function weatherScreen(car, w, h, s)
     local mode = filter.weather or 'forecast'
-    local fc = Weather.forecast or {}
+    local fc = Weather.forecast or RecordSync.base.forecast.list or {}
     local rows = mode == 'map' and 16 or (7 + (#fc > 0 and (#fc + 2) or 0))
     local p1, p2, y = frame('weather', w, h, s, rows, TEXTS.scrWeather, nil)
     local off = nil
@@ -12044,6 +12070,7 @@ function script.update(dt)
   RecordSync.update()
   RecordSync.base.update()
   RecordSync.base.bestUpdate()
+  RecordSync.base.forecastUpdate()
   RecordSync.base.rrUpdate()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
     state.hold = nil
