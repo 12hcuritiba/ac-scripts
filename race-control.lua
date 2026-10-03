@@ -1238,6 +1238,49 @@ do
     if q.send(q.msg, false, q.target) then table.remove(OnlineQueue.items, 1) end
   end
 end
+local WebQueue = { items = {}, running = {} }
+do
+  local MAX = 2
+  local STALL = 45
+  local function count()
+    local n = 0
+    for _ in pairs(WebQueue.running) do n = n + 1 end
+    return n
+  end
+  local function pump()
+    local now = state.ui.clock
+    for item, t in pairs(WebQueue.running) do
+      if now - t > STALL then
+        WebQueue.running[item] = nil
+        ac.log('race-control: web request without answer for ' .. STALL .. ' s, place freed: ' .. tostring(item.url))
+      end
+    end
+    while count() < MAX and #WebQueue.items > 0 do
+      local q = table.remove(WebQueue.items, 1)
+      WebQueue.running[q] = now
+      local done = false
+      local function finish(err, res)
+        if done then return end
+        done = true
+        WebQueue.running[q] = nil
+        if q.cb then q.cb(err, res) end
+      end
+      local ok, err = pcall(web.request, q.method, q.url, q.headers, q.body, finish)
+      if not ok then finish(tostring(err), nil) end
+    end
+  end
+  function WebQueue.request(method, url, headers, body, cb, first)
+    if not web or not web.request then
+      if cb then cb('web not available', nil) end
+      return
+    end
+    local item = { method = method, url = url, headers = headers, body = body, cb = cb }
+    if first then table.insert(WebQueue.items, 1, item) else WebQueue.items[#WebQueue.items + 1] = item end
+    pump()
+  end
+  WebQueue.update = pump
+  OnlineQueue.web = WebQueue
+end
 local Connection = { cars = {}, menu = {}, kicks = {}, hudMode = nil }
 do
   local PING_WARN = 250
@@ -1638,7 +1681,7 @@ do
     local body = '{"key":' .. jsonStr(Record.key()) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '')
       .. ',"records":[' .. table.concat(parts, ',') .. '],"lines":[' .. table.concat(lineParts, ',') .. '],"laps":['
       .. table.concat(lapParts, ',') .. ']}'
-    web.request('POST', config.baseUrl .. '/v1/batch', { ['Content-Type'] = 'application/json' }, body,
+    WebQueue.request('POST', config.baseUrl .. '/v1/batch', { ['Content-Type'] = 'application/json' }, body,
       function(err, res)
         B.busy = false
         if err or not res or (tonumber(res.status) or 0) >= 300 then
@@ -1659,7 +1702,7 @@ do
     if not on() then return end
     local key = Record.key()
     local function ask(path, apply)
-      web.request('GET', config.baseUrl .. path .. '?key=' .. urlEncode(key), nil, nil, function(err, res)
+      WebQueue.request('GET', config.baseUrl .. path .. '?key=' .. urlEncode(key), nil, nil, function(err, res)
         if err or not res or tonumber(res.status) ~= 200 then
           ac.log('race-control: base online ' .. path .. ' not read (' .. tostring(err or (res and res.status)) .. ')')
           return
@@ -1688,7 +1731,7 @@ do
   B.name = { status = nil, nextT = 0, busy = false, lockT = -1e9, told = nil, failLogged = false, offline = false, alertDue = nil }
   local function sendAlert(text)
     local body = '{"kind":"base_offline","steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"text":' .. jsonStr(text) .. '}'
-    web.request('POST', config.baseUrl .. '/v1/alert', { ['Content-Type'] = 'application/json' }, body, function(err, res)
+    WebQueue.request('POST', config.baseUrl .. '/v1/alert', { ['Content-Type'] = 'application/json' }, body, function(err, res)
       if not err and res and tonumber(res.status) == 200 then B.name.alertDue = nil end
     end)
   end
@@ -1702,7 +1745,7 @@ do
     local N = B.name
     if not N.busy and N.status ~= 'ok' and state.ui.clock >= N.nextT then
       N.busy, N.nextT = true, state.ui.clock + NAME_GAP
-      web.request('GET', config.baseUrl .. '/v1/name?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
+      WebQueue.request('GET', config.baseUrl .. '/v1/name?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
         N.busy = false
         if err or not res or tonumber(res.status) ~= 200 then
           N.offline = true
@@ -1771,7 +1814,7 @@ do
     local W = B.best
     if not on() or W.busy or state.ui.clock < W.nextT then return end
     W.busy, W.nextT = true, state.ui.clock + BEST_GAP
-    web.request('GET', config.baseUrl .. '/v1/best?track=' .. urlEncode(B.trackKey()) .. '&car=' .. urlEncode(B.carKey()), nil, nil,
+    WebQueue.request('GET', config.baseUrl .. '/v1/best?track=' .. urlEncode(B.trackKey()) .. '&car=' .. urlEncode(B.carKey()), nil, nil,
       function(err, res)
         W.busy = false
         if err or not res or tonumber(res.status) ~= 200 then return end
@@ -1790,7 +1833,7 @@ do
     if F.index ~= index then F.index, F.list, F.nextT = index, nil, 0 end
     if not on() or F.busy or state.ui.clock < F.nextT then return end
     F.busy, F.nextT = true, state.ui.clock + FORECAST_GAP
-    web.request('GET', config.baseUrl .. '/v1/forecast?session=' .. index, nil, nil, function(err, res)
+    WebQueue.request('GET', config.baseUrl .. '/v1/forecast?session=' .. index, nil, nil, function(err, res)
       F.busy = false
       if err or not res or tonumber(res.status) ~= 200 or F.index ~= index then return end
       local body = tostring(res.body or '')
@@ -1820,7 +1863,7 @@ do
     local R = B.rr
     if not on() or R.busy or state.ui.clock < R.nextT then return end
     R.busy, R.nextT = true, state.ui.clock + RR_GAP
-    web.request('GET', config.baseUrl .. '/v1/rr?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
+    WebQueue.request('GET', config.baseUrl .. '/v1/rr?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
       R.busy = false
       if err or not res or tonumber(res.status) ~= 200 then R.state = 'offline'
       else
@@ -1857,7 +1900,7 @@ do
       .. ',"source":' .. jsonStr(R.source) .. ',"layout":' .. jsonStr(R.layout) .. '}'
     R.asked, R.answer, R.askedT = share, 'wait', state.ui.clock
     ac.log('race-control: game screen ' .. (share and 'on' or 'off') .. ' asked to the Racing Room (' .. R.source .. ', ' .. R.layout .. ')')
-    web.request('POST', config.baseUrl .. '/v1/rr/share', { ['Content-Type'] = 'application/json' }, body, function(err, res)
+    WebQueue.request('POST', config.baseUrl .. '/v1/rr/share', { ['Content-Type'] = 'application/json' }, body, function(err, res)
       R.answer = (not err and res and tostring(res.body or '')) or 'offline'
       ac.log('race-control: game screen ask answered: ' .. R.answer)
       R.nextT = 0
@@ -9634,7 +9677,9 @@ local KmrEvents = (function()
   end
   local function send(text)
     if not io.sid or not web or not web.request then return end
-    web.request('POST', base() .. '&sid=' .. io.sid, { ['Content-Type'] = 'text/plain;charset=UTF-8' }, (#text) .. ':' .. text, function() end)
+    WebQueue.request('POST', base() .. '&sid=' .. io.sid, { ['Content-Type'] = 'text/plain;charset=UTF-8' }, (#text) .. ':' .. text, function(err)
+      if err then ac.log('race-control: KMR race control ask not sent: ' .. tostring(err)) end
+    end, true)
   end
   local function onEvent(name, data)
     if name == 'race.control.set.events' and type(data) == 'table' then
@@ -9670,7 +9715,7 @@ local KmrEvents = (function()
     if not base() or not web or not web.request or not JSON or io.busy or state.ui.clock < io.retryT then return end
     io.busy = true
     local url = base() .. (io.sid and ('&sid=' .. io.sid) or '')
-    web.request('GET', url, nil, nil, function(err, res)
+    WebQueue.request('GET', url, nil, nil, function(err, res)
       if err or not res or (tonumber(res.status) or 200) >= 400 then fail(err or (res and res.status)); return end
       local had = io.sid
       handle(res.body)
@@ -9917,7 +9962,7 @@ local KmrEvents = (function()
   return M
 end)()
 local drawDesktopUI = (function()
-  local W = 660
+  local W = 780
   local CANVAS_W = 422
   local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
@@ -10021,7 +10066,8 @@ local drawDesktopUI = (function()
   end
   local function editor(w, h, s)
     local canvasH = CANVAS_W * h / w
-    local H = canvasH + (Desktop.pitOn and 96 or 110)
+    local listRows = math.ceil(#Desktop.SCREENS / 2)
+    local H = math.max(canvasH + (Desktop.pitOn and 96 or 110), 47 + 15 + listRows * 18 + 12)
     local p1, p2 = windowAt('editor', W, H, w, h, s)
     Drag.group = nil
     Drag.modal = { p1, p2 }
@@ -10129,14 +10175,21 @@ local drawDesktopUI = (function()
     local lx, ly = c2.x + 12 * s, c1.y
     drawText(TEXTS.edScreens, FONT_TITLE, 10 * s, vec2(lx, ly), COLOR_DIM)
     ly = ly + 15 * s
-    for _, g in ipairs(Desktop.SCREENS) do
+    local colGap = 6 * s
+    local colW = (p2.x - 14 * s - lx - colGap) / 2
+    for i, g in ipairs(Desktop.SCREENS) do
+      local col, row = math.floor((i - 1) / listRows), (i - 1) % listRows
       local on = Desktop.place[desk] and Desktop.place[desk][g] or Desktop.place.all[g]
-      local a, b = vec2(lx, ly), vec2(p2.x - 14 * s, ly + 15 * s)
+      local a = vec2(lx + col * (colW + colGap), ly + row * 18 * s)
+      local b = vec2(a.x + colW, a.y + 15 * s)
       ui.drawRect(a, b, on and PANEL_COLORS.yellow or rgbm(1, 1, 1, 0.2), 3 * s)
+      local wtext = where(g)
+      local ww = textWidth(wtext, FONT_MONO, 8.5 * s)
+      ui.pushClipRect(a, vec2(b.x - ww - 8 * s, b.y))
       drawText(TEXTS.screenNames[g] or g, FONT_TEXT, 8.5 * s, vec2(a.x + 5 * s, a.y + 1.5 * s), COLOR_TITLE)
-      drawTextRight(where(g), FONT_MONO, 8.5 * s, b.x - 5 * s, a.y + 1.5 * s, on and PANEL_COLORS.yellow or COLOR_DIM)
+      ui.popClipRect()
+      drawTextRight(wtext, FONT_MONO, 8.5 * s, b.x - 5 * s, a.y + 1.5 * s, on and PANEL_COLORS.yellow or COLOR_DIM)
       Drag.clickable(a, b, function() Desktop.toggle(desk, g) end)
-      ly = ly + 18 * s
     end
     local by = c2.y + 8 * s
     local bx = c1.x
@@ -10755,7 +10808,7 @@ local drawDesktopUI = (function()
   end
   local function webFetch(page, acc)
     local url = config.kmrStatsUrl .. '/?drivers=true&page=' .. page
-    web.get(url, function(err, res)
+    WebQueue.request('GET', url, nil, nil, function(err, res)
       local data = not err and res and res.body and JSON.parse(res.body)
       if type(data) ~= 'table' or type(data.rank) ~= 'table' then
         Direction.web.busy, Direction.web.err = false, tostring(err or 'no data')
@@ -12126,6 +12179,7 @@ function script.update(dt)
   Diag.update(car)
   CarRead.updateMotion(car)
   OnlineQueue.update()
+  OnlineQueue.web.update()
   Connection.update()
   RecordSync.update()
   RecordSync.base.update()
