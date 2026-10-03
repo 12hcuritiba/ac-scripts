@@ -2553,8 +2553,13 @@ do
     return rate and string.format('%d - %.2f / 100 km', n, rate) or tostring(n)
   end
   Audit.allow = function(area) return true end
+  function Audit.blank(text)
+    local t = tostring(text or ''):gsub('[%c]', ''):gsub('\194\160', ''):gsub('\226\128[\139-\143]', '')
+      :gsub('\226\129\160', ''):gsub('\239\187\191', '')
+    return t:match('^%s*$') ~= nil
+  end
   function Audit.add(src, text, window, area)
-    if tostring(text or ''):match('^%s*$') then return end
+    if Audit.blank(text) then return end
     Audit.items[#Audit.items + 1] = { t = serverTimeMs(), src = src, text = tostring(text), area = area }
     if #Audit.items > MAX_ITEMS then table.remove(Audit.items, 1) end
     if window and (area == nil or area == 'rc') then
@@ -2568,6 +2573,7 @@ do
   function Audit.current()
     local w = Audit.window[1]
     if not w then return nil end
+    if Audit.blank(w.text) then table.remove(Audit.window, 1) return Audit.current() end
     w.untilT = w.untilT or (state.ui.clock + config.screens.messageSeconds)
     if state.ui.clock >= w.untilT then
       table.remove(Audit.window, 1)
@@ -2904,7 +2910,7 @@ do
     ac.onMessage(function(title, description)
       local t, d = tostring(title or ''), tostring(description or '')
       local text = d ~= '' and (t ~= '' and (t .. ' - ' .. d) or d) or t
-      if text:match('^%s*$') then return end
+      if Audit.blank(text) then return end
       for _, k in ipairs(LOG_ONLY) do
         if t == k then
           ac.log('race-control: game message (log only): ' .. text)
@@ -2918,7 +2924,7 @@ end
 ac.onChatMessage(function(message, senderCarIndex)
   if type(message) ~= 'string' then return false end
   local server = fromServer(senderCarIndex)
-  if server and message:match('^%s*$') then return true end
+  if server and Audit.blank(message) then return true end
   local low = message:lower()
   if server then Connection.chat(message) end
   if message:sub(1, #TEXTS.rcPrefix) ~= TEXTS.rcPrefix and (hasAny(low, DICT.kmr.driveThrough)
@@ -3032,7 +3038,7 @@ ac.onChatMessage(function(message, senderCarIndex)
     end
     return true
   end
-  if Audit.allow('chat') and senderCarIndex and senderCarIndex > 0 and not message:match('^%s*$') then
+  if Audit.allow('chat') and senderCarIndex and senderCarIndex > 0 and not Audit.blank(message) then
     Audit.window = { { src = tostring(ac.getDriverName(senderCarIndex) or 'CHAT'), text = message } }
   end
   return false
@@ -8168,7 +8174,7 @@ local drawStatus
         if r[1] then m.labelW = math.max(m.labelW, textWidth(r[1], FONT_TEXT, fs)) end
         if r[2] then m.axisW = math.max(m.axisW, textWidth(r[2], FONT_MONO, fs)) end
         for _, v in ipairs(r[3]) do
-          local tw = textWidth(tostring(v), FONT_MONO, fs)
+          local tw = textWidth(tostring(v) .. '0', FONT_MONO, fs)
           m.valueW = math.max(m.valueW, #r[3] == 1 and (tw - (cols - 1) * m.gapV - m.pairGap) / cols or tw)
         end
       end
