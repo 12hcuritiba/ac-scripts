@@ -418,7 +418,9 @@ local TEXTS = {
   lobbyMessages = 'MESSAGES', lobbyWindow = 'Racing Control - lobby',
   scrShare = 'RACING ROOM', shareOn = 'GAME SCREEN SHARED', shareOff = 'GAME SCREEN NOT SHARED', shareHint = '< off   on >',
   rrRoom = '%s - %s', rrNone = 'Not connected - no voice and video', rrOther = 'Open on another computer - no voice and video',
-  rrOffline = 'Base of the event not answering', rrNoRoom = 'Open, not in a room - no voice and video', rrWait = 'Checking...',
+  rrOffline = 'Base of the event not answering', shareAsking = 'Asking the Racing Room...', shareSent = 'Asked - the Racing Room is opening the capture',
+  shareNoRoom = 'Racing Room not in a room - open a room there', shareNoAnswer = 'The Racing Room did not share the game screen',
+  shareFailed = 'Not shared: %s', rrNoRoom = 'Open, not in a room - no voice and video', rrWait = 'Checking...',
   rrAreas = { pitwall = 'Pitwall', anteroom = 'Anteroom', control = 'Control room', individual = 'Individual room', workshop = 'Workshop' },
   lobbyRc = 'RACING CONTROL', lobbyAccount = 'Account', lobbyRegistration = 'Registration', lobbyBase = 'Base of the event',
   lobbyApp = 'Racing Control app', lobbyRoom = 'Racing Room', lobbyShare = 'Game screen', lobbyOk = 'ok', lobbyMissing = 'missing: %s',
@@ -1589,7 +1591,7 @@ do
       end)
   end
   local RR_GAP = 5
-  B.rr = { state = 'unknown', nextT = 0, busy = false, garage = '', area = '', screen = false, game = false, logged = nil,
+  B.rr = { state = 'unknown', nextT = 0, busy = false, garage = '', area = '', screen = false, game = false, logged = nil, err = '',
     source = tostring(ac.storage['rc.share.source'] or 'game'), layout = tostring(ac.storage['rc.share.layout'] or 'single') }
   function B.rrSet(source, layout)
     local R = B.rr
@@ -1608,14 +1610,16 @@ do
         local garage, area, screen, game = body:match('^OK|([^|]*)|([^|]*)|(%d)|(%d)')
         if garage then
           R.state, R.garage, R.area, R.screen, R.game = 'on', garage, area, screen == '1', game == '1'
+          R.err = body:match('^OK|[^|]*|[^|]*|%d|%d|([^\r\n]*)') or ''
         else
-          R.state, R.screen, R.game = body:find('^OTHER') and 'other' or 'none', false, false
+          R.state, R.screen, R.game, R.err = body:find('^OTHER') and 'other' or 'none', false, false, ''
         end
       end
-      local now = R.state .. '|' .. R.garage .. '|' .. R.area .. '|' .. tostring(R.game)
+      local now = R.state .. '|' .. R.garage .. '|' .. R.area .. '|' .. tostring(R.game) .. '|' .. R.err
       if R.logged ~= now then
         R.logged = now
-        ac.log('race-control: Racing Room ' .. R.state .. (R.state == 'on' and (' - ' .. R.garage .. ' / ' .. R.area .. (R.game and ' - game screen shared' or '')) or ''))
+        ac.log('race-control: Racing Room ' .. R.state .. (R.state == 'on' and (' - ' .. R.garage .. ' / ' .. R.area .. (R.game and ' - game screen shared' or '')
+          .. (R.err ~= '' and (' - game screen failed: ' .. R.err) or '')) or ''))
       end
     end)
   end
@@ -1633,12 +1637,25 @@ do
     if not on() then return end
     local body = '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"share":' .. (share and 'true' or 'false')
       .. ',"source":' .. jsonStr(R.source) .. ',"layout":' .. jsonStr(R.layout) .. '}'
-    R.asked = share
+    R.asked, R.answer, R.askedT = share, 'wait', state.ui.clock
     ac.log('race-control: game screen ' .. (share and 'on' or 'off') .. ' asked to the Racing Room (' .. R.source .. ', ' .. R.layout .. ')')
     web.request('POST', config.baseUrl .. '/v1/rr/share', { ['Content-Type'] = 'application/json' }, body, function(err, res)
       R.answer = (not err and res and tostring(res.body or '')) or 'offline'
+      ac.log('race-control: game screen ask answered: ' .. R.answer)
       R.nextT = 0
     end)
+  end
+  function B.rrAsk()
+    local R = B.rr
+    if R.err ~= '' then return string.format(TEXTS.shareFailed, R.err), 'bad' end
+    if R.asked == nil then return nil end
+    if R.answer == 'wait' then return TEXTS.shareAsking, 'dim' end
+    if R.answer == 'OTHER' then return TEXTS.rrOther, 'warn' end
+    if R.answer == 'NONE' then return TEXTS.shareNoRoom, 'warn' end
+    if R.answer == 'offline' then return TEXTS.rrOffline, 'bad' end
+    if R.asked ~= R.game and state.ui.clock - (R.askedT or 0) < 20 then return TEXTS.shareSent, 'dim' end
+    if R.asked ~= R.game then return TEXTS.shareNoAnswer, 'warn' end
+    return nil
   end
   local publish = Record.onSave
   Record.onSave = function(list, seq, text)
@@ -9159,17 +9176,44 @@ local drawRaceScreens = (function()
   end
   local function shareScreen(car, w, h, s)
     local Rr = RecordSync.base.rr
-    local p1, p2, y = frame('share', w, h, s, 2, TEXTS.scrShare, TEXTS.shareHint)
+    local ask, askLevel = RecordSync.base.rrAsk()
+    local lines = {}
+    if ask then
+      local maxW = (PLACE.share[3] - 70) * s
+      local cur = ''
+      for word in ask:gmatch('%S+') do
+        local try = cur == '' and word or (cur .. ' ' .. word)
+        if textWidth(try, FONT_TEXT, 9 * s) <= maxW or cur == '' then cur = try
+        else lines[#lines + 1] = cur; cur = word end
+      end
+      if cur ~= '' then lines[#lines + 1] = cur end
+      if #lines > 2 then
+        lines[2] = lines[2] .. ' ' .. table.concat(lines, ' ', 3)
+        for i = #lines, 3, -1 do lines[i] = nil end
+        while #lines[2] > 1 and textWidth(lines[2] .. '...', FONT_TEXT, 9 * s) > maxW do lines[2] = lines[2]:sub(1, -2) end
+        lines[2] = lines[2] .. '...'
+      end
+    end
+    local p1, p2, y, noTitle = frame('share', w, h, s, 2 + #lines, TEXTS.scrShare, TEXTS.shareHint)
+    if not noTitle then
+      local hw = textWidth(TEXTS.shareHint, FONT_MONO, 11 * s)
+      local hx = p2.x - 14 * s - hw
+      Drag.clickable(vec2(hx, p1.y + 2 * s), vec2(hx + hw / 2, p1.y + 19 * s), function() RecordSync.base.rrShare(false) end)
+      Drag.clickable(vec2(hx + hw / 2, p1.y + 2 * s), vec2(hx + hw, p1.y + 19 * s), function() RecordSync.base.rrShare(true) end)
+    end
     local isz = 22 * s
     local a = vec2(p1.x + 14 * s, y)
     local b = vec2(a.x + isz, a.y + isz)
     local on = Rr.game
     ui.drawRectFilled(a, b, on and rgbm(0.2, 0.6, 0.3, 0.9) or rgbm(1, 1, 1, 0.08), 3 * s)
     ui.drawIcon(ui.Icons.VideoCamera, vec2(a.x + 3 * s, a.y + 3 * s), vec2(b.x - 3 * s, b.y - 3 * s), on and COLOR_TITLE or COLOR_DIM)
-    if Rr.state == 'on' and Rr.area ~= '' then Drag.clickable(a, b, function() RecordSync.base.rrShare(not on) end) end
+    Drag.clickable(a, b, function() RecordSync.base.rrShare(not on) end)
     drawText(on and TEXTS.shareOn or TEXTS.shareOff, FONT_TITLE, 10 * s, vec2(b.x + 10 * s, y), on and GREEN or COLOR_DIM)
     local room, level = RecordSync.base.rrRoom()
     drawText(room, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + 13 * s), ({ ok = COLOR_TITLE, warn = YELLOW, bad = RED })[level] or COLOR_DIM)
+    for i, line in ipairs(lines) do
+      drawText(line, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + (13 + 13 * i) * s), ({ warn = YELLOW, bad = RED })[askLevel] or COLOR_DIM)
+    end
     Drag.icons('share', p1, p2, s)
   end
   return function(car, w, h, s)
