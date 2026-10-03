@@ -420,6 +420,26 @@ local TEXTS = {
   dirGuidNone = 'The KMR gave no GUID for %s (the name is case sensitive)', dirGuidGot = 'GUID of %s: %s',
   dirNoRed = 'No red flag nor VSC on', redKmrOn = 'KMR admin: logged in', redKmrOff = 'KMR admin: type /kmr login <password> in the chat',
   redPlace = 'pit place', redLane = 'pit lane', redTrack = 'track', redCount = 'In the pits %d / %d - over the limit %d',
+  scrCockpit = 'COCKPIT', cockpitNoApp = 'app not running', cockpitMore = '+ ALL', cockpitAudio = 'VOLUME - EVERY CHANNEL',
+  cockpitRows = { ffb = 'Force feedback', y = 'Seat up / down', x = 'Seat left / right', pitch = 'Pitch up / down',
+    fov = 'Field of view', ['vol.main'] = 'Volume (master)' },
+  cockpitChannels = { engine = 'Engine', transmission = 'Transmission', tyres = 'Tyres', surfaces = 'Surfaces', dirt = 'Dirt',
+    wind = 'Wind', opponents = 'Opponents', carComponents = 'Car components', track = 'Track', weather = 'Weather',
+    rain = 'Rain', wipers = 'Wipers' },
+  dirLogout = 'LOGOUT', dirLoggedOut = 'Logged out on this screen - the KMR has no logout: it forgets the login when you leave the server',
+  dirKmrLost = 'KMR login not answered - it fell: log in again',
+  dirResetBtn = 'RESET', dirReset = 'Window reset - fields, lists and place back to the start; KMR login checked',
+  connLap = 'LAP ', connSector = 'S%d', connSpline = 'SPL %.3f', connPing = 'PING %d ms', connPingNone = 'PING -',
+  connOk = 'CONNECTION OK', connHigh = 'PING HIGH', connKick = 'KMR KICK LIKELY - avg %.0f / dev %.0f ms', connStalled = 'DATA STALLED - DROP LIKELY',
+  connAlert = 'ALERT  ', connAlertCar = '#%s %s: %s',
+  connPitTitle = 'PIT  ', connStopped = 'stopped at the pit place %s', connOutAfter = 'driver out %s after the stop',
+  connOutNoStop = 'driver out away from the pit place', connSwapTime = 'swap time %s / %s',
+  connBackSame = 'same driver back after %s (swap time %s)', connBackOther = 'new driver in after %s (swap time %s)',
+  connInTime = 'within the swap time', connLate = 'after the swap time',
+  connCause = { pitPlace = 'left at the pit place', menu = 'ESC / menu - left on purpose', lost = 'connection lost',
+    pingHigh = 'kicked by the KMR - high ping', pingUnstable = 'kicked by the KMR - unstable ping', kick = 'kicked',
+    unknown = 'left - no menu seen, connection fine' },
+  connGoneTitle = 'LEFT THE SERVER', connLeft = 'left', connTitle = 'Connection', connLog = '%s left the server - %s',
   lobbyTitle = 'RACING CONTROL', lobbyStops = 'Stops', lobbyKmr = 'KMR points / rating', lobbyWeather = 'Air / track',
   lobbyMessages = 'MESSAGES', lobbyWindow = 'Racing Control - lobby',
   scrShare = 'RACING ROOM', shareOn = 'GAME SCREEN SHARED', shareOff = 'GAME SCREEN NOT SHARED', shareHint = '< off   on >',
@@ -443,7 +463,7 @@ local TEXTS = {
   edChoose = 'Click a screen to choose it and drag it to its place',
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
-    weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room' },
+    weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit' },
   scrTelemetry = 'TELEMETRY',
   teleChannels = { thr = 'THR', brk = 'BRK', clu = 'CLU', str = 'STR', spd = 'SPD', gear = 'GEAR', glat = 'G LAT', glon = 'G LON' },
   teleShort = { thr = 'T', brk = 'B', clu = 'C', str = 'S', spd = 'V', gear = 'G', glat = 'X', glon = 'Z' },
@@ -1214,6 +1234,149 @@ do
     if q.send(q.msg, false, q.target) then table.remove(OnlineQueue.items, 1) end
   end
 end
+local Connection = { cars = {}, menu = {}, kicks = {}, hudMode = nil }
+do
+  local PING_WARN = 250
+  local PING_KICK = 270
+  local DEV_KICK = 100
+  local CHECK_SECONDS = 18
+  local STALL_SECONDS = 2
+  local MENU_SECONDS = 30
+  local KICK_SECONDS = 10
+  local KEEP_SECONDS = 900
+  local sendMenu = ac.OnlineEvent({
+    ac.StructItem.key('amxracing.race-control.menu'),
+    mnOpen = ac.StructItem.uint8(),
+  }, function(sender, msg)
+    if not sender or sender.index == 0 then return end
+    Connection.menu[sender.index] = { open = msg.mnOpen == 1, t = state.ui.clock }
+  end, nil, nil, { processPostponed = true })
+  local ownOpen = false
+  local function ownMenu(open)
+    if open == ownOpen then return end
+    ownOpen = open
+    local msg = { mnOpen = open and 1 or 0 }
+    if not sendMenu(msg) then OnlineQueue.push(sendMenu, msg, nil) end
+    ac.log('race-control: menu of the game ' .. (open and 'opened' or 'closed') .. ' (told to the other clients)')
+  end
+  local function car(i)
+    local e = Connection.cars[i]
+    if not e then
+      e = { pings = {}, pingT = -1e9, last = nil, stillT = nil, moving = false, parkedT = nil, name = '' }
+      Connection.cars[i] = e
+    end
+    return e
+  end
+  local function stats(list)
+    local n = #list
+    if n == 0 then return nil, nil end
+    local sum = 0
+    for _, v in ipairs(list) do sum = sum + v end
+    local avg = sum / n
+    local sq = 0
+    for _, v in ipairs(list) do sq = sq + (v - avg) ^ 2 end
+    return avg, math.sqrt(sq / n)
+  end
+  function Connection.chat(message)
+    local low = message:lower()
+    if not (low:find('kicked ', 1, true) or low:find('removido ', 1, true)) then return end
+    local why = (low:find('high ping', 1, true) or low:find('ping elevado', 1, true)) and 'pingHigh'
+      or (low:find('unstable ping', 1, true) or low:find('ping instavel', 1, true)) and 'pingUnstable' or 'kick'
+    for i = 1, (sim.carsCount or 1) - 1 do
+      local name = tostring(ac.getDriverName(i) or '')
+      if name ~= '' and message:find(name, 1, true) then
+        Connection.kicks[name] = { why = why, t = state.ui.clock, text = message }
+      end
+    end
+  end
+  function Connection.level(i)
+    local e = Connection.cars[i]
+    if not e then return 'ok' end
+    local avg, dev = stats(e.pings)
+    local stalled = e.stillT and e.moving and state.ui.clock - e.stillT >= STALL_SECONDS
+    local full = #e.pings >= 4
+    if stalled or (full and avg > PING_KICK) or (full and dev > DEV_KICK) then return 'bad', avg, dev, stalled end
+    if (e.ping or 0) > PING_WARN then return 'warn', avg, dev, false end
+    return 'ok', avg, dev, false
+  end
+  local function causeOf(i, e)
+    local k = Connection.kicks[e.name]
+    if k and math.abs(state.ui.clock - k.t) <= KICK_SECONDS then return k.why end
+    if e.parked then return 'pitPlace' end
+    local m = Connection.menu[i]
+    if m and m.open and state.ui.clock - m.t <= MENU_SECONDS then return 'menu' end
+    local lvl = Connection.level(i)
+    if lvl == 'bad' or lvl == 'warn' then return 'lost' end
+    return 'unknown'
+  end
+  ac.onClientDisconnected(function(i)
+    if i == 0 then return end
+    local e = car(i)
+    e.leftT, e.leftCause, e.inT, e.sameDriver = state.ui.clock, causeOf(i, e), nil, nil
+    e.leftAfterStop = e.parkedT and (state.ui.clock - e.parkedT) or nil
+    ac.log(string.format('race-control: connection: car %d (%s) left - %s', i, e.name, e.leftCause))
+    if config.isDirector then rcLog(TEXTS.connTitle, string.format(TEXTS.connLog, e.name, TEXTS.connCause[e.leftCause] or e.leftCause)) end
+  end)
+  ac.onClientConnected(function(i)
+    if i == 0 then return end
+    local e = car(i)
+    local name = tostring(ac.getDriverName(i) or '')
+    if e.leftT then
+      e.inT = state.ui.clock
+      e.sameDriver = name == e.name
+    end
+    e.name, e.pings, e.ping, e.stillT, e.moving, e.last = name, {}, nil, nil, false, nil
+    Connection.menu[i] = nil
+    ac.log(string.format('race-control: connection: car %d (%s) connected%s', i, name,
+      e.leftT and (e.sameDriver and ' - same driver back' or ' - another driver (driver swap)') or ''))
+  end)
+  function Connection.update()
+    local mode = Connection.hudMode
+    ownMenu(sim.isInMainMenu == true or mode == 'pause' or mode == 'menu' or ac.isKeyDown(27) == true)
+    local now = state.ui.clock
+    for i = 1, (sim.carsCount or 1) - 1 do
+      local c = ac.getCar(i)
+      if c and c.isConnected then
+        local e = car(i)
+        e.name = tostring(ac.getDriverName(i) or e.name)
+        e.ping = CarRead.num(c.ping)
+        if now - e.pingT >= CHECK_SECONDS and e.ping > 0 then
+          e.pingT = now
+          table.insert(e.pings, e.ping)
+          while #e.pings > 4 do table.remove(e.pings, 1) end
+        end
+        local p = c.position
+        if p and e.last and (p.x ~= e.last.x or p.z ~= e.last.z) then
+          e.stillT = nil
+          e.moving = CarRead.num(c.speedKmh) > 5
+        elseif p and not e.stillT then
+          e.stillT = now
+        end
+        if p then e.last = vec2(p.x, p.z) end
+        local parked = CarRead.parked(c)
+        if parked and not e.parked then e.parkedT = now end
+        if not c.isInPitlane then e.parkedT = nil end
+        if e.inT and not c.isInPitlane and now - e.inT > 5 then
+          e.leftT, e.inT, e.leftCause, e.sameDriver, e.leftAfterStop = nil, nil, nil, nil, nil
+        end
+        e.parked = parked
+        e.seenT = now
+      end
+    end
+  end
+  function Connection.gone()
+    local out = {}
+    for i, e in pairs(Connection.cars) do
+      local c = ac.getCar(i)
+      if e.leftT and not e.inT and not (c and c.isConnected) and state.ui.clock - e.leftT <= KEEP_SECONDS then
+        out[#out + 1] = { i = i, e = e }
+      end
+    end
+    table.sort(out, function(a, b) return a.e.leftT > b.e.leftT end)
+    return out
+  end
+  Connection.PING_WARN, Connection.PING_KICK, Connection.DEV_KICK = PING_WARN, PING_KICK, DEV_KICK
+end
 local Trust = { refused = {} }
 do
   local TRUST_POS_M = 250
@@ -1711,6 +1874,17 @@ do
       ac.shutdownAssettoCorsa()
     end
   end
+  local COCKPIT_REQUEST = 'amxracing.race-control.cockpit'
+  local COCKPIT_ANSWER = 'amxracing.race-control.cockpit.state'
+  AppLink.cockpitState = {}
+  function AppLink.cockpit(text)
+    ac.broadcastSharedEvent(COCKPIT_REQUEST, text)
+  end
+  ac.onSharedEvent(COCKPIT_ANSWER, function(data)
+    local st = {}
+    for item, value in tostring(data or ''):gmatch('([%w%.]+)=(%-?[%d%.]+)') do st[item] = tonumber(value) end
+    AppLink.cockpitState = st
+  end)
   ac.onSharedEvent(APP_ANSWER, function(data, senderName, senderType, senderID)
     AppLink.alive = true
     if tostring(data or '') == '' then return end
@@ -2697,6 +2871,7 @@ ac.onChatMessage(function(message, senderCarIndex)
   local server = fromServer(senderCarIndex)
   if server and message:match('^%s*$') then return true end
   local low = message:lower()
+  if server then Connection.chat(message) end
   if message:sub(1, #TEXTS.rcPrefix) ~= TEXTS.rcPrefix and (hasAny(low, DICT.kmr.driveThrough)
       or hasAny(low, DICT.kmr.penalty)) then
     rcLog('Chat seen', string.format('sender %s - %s', tostring(senderCarIndex), message:sub(1, 90)))
@@ -6617,7 +6792,7 @@ local Desktop = { current = 1, count = 1, pitOn = true, place = {}, focus = nil,
   indicatorUntil = 0, drawnOrder = {}, wasInPit = nil }
 do
   local SCREENS = { 'pitbox', 'setup', 'status', 'race', 'laps', 'standings', 'relative', 'laptime', 'delta', 'event',
-    'weather', 'map', 'telemetry', 'share' }
+    'weather', 'map', 'telemetry', 'share', 'cockpit' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local STORAGE_KEY = 'rc.desktops'
   local OFF_KEY = 'rc.desktopsOff'
@@ -6848,11 +7023,15 @@ do
       Desktop.deltaStep(dir)
     elseif g == 'share' then
       RecordSync.base.rrShare(dir > 0)
+    elseif g == 'cockpit' then
+      Desktop.cockpitStep(dir)
     end
   end
   Desktop.filter = { relative = 'ALL', standings = 'ALL', map = 'ALL', weather = 'forecast' }
   Desktop.lapsStep = function() end
   Desktop.deltaStep = function() end
+  Desktop.cockpitStep = function() end
+  Desktop.cockpitMove = function() end
   function Desktop.padFor(g)
     if Desktop.focus == nil then return g == 'pitbox' end
     return Desktop.focus == g
@@ -7107,6 +7286,10 @@ do
     if g and g ~= 'pitbox' and PitBox.PAD then
       if PitBox.PAD.left:pressed() or Desktop.dir.left then valueStep(g, -1) end
       if PitBox.PAD.right:pressed() or Desktop.dir.right then valueStep(g, 1) end
+      if g == 'cockpit' then
+        if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.cockpitMove(-1) end
+        if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.cockpitMove(1) end
+      end
     end
   end
 end
@@ -7272,8 +7455,8 @@ Desktop.commands = {
 local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
-    'event', 'weather', 'map', 'telemetry', 'share' }
-  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden' }
+    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit' }
+  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden' }
   local MODES = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
   local ICON_SIZE, ICON_GAP = 12, 3
@@ -7348,7 +7531,8 @@ do
           { ui.Icons.CarFront, 'status' }, { ui.Icons.Flag, 'race' }, { ui.Icons.List, 'laps' },
           { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
           { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.Weather, 'weather' },
-          { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' }, { ui.Icons.VideoCamera, 'share' } }) do
+          { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' }, { ui.Icons.VideoCamera, 'share' },
+          { ui.Icons.SteeringWheel, 'cockpit' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
       end
     end
@@ -8299,7 +8483,7 @@ local drawRaceScreens = (function()
   local FS = 10
   local PLACE = { relative = { 1572, 380, 300 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 430 }, event = { 770, 200, 380 },
-    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 } }
+    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 } }
   local filter = Desktop.filter
   local function lapTime(ms)
     if not ms or ms <= 0 then return '-' end
@@ -8749,9 +8933,11 @@ local drawRaceScreens = (function()
     for i = 0, (sim.sessionsCount or 0) - 1 do
       local ss = ac.getSession(i)
       if ss then
-        out[#out + 1] = { TEXTS.sessionName[ss.type] or '-', ss.durationMinutes and ss.durationMinutes > 0
-          and hms(ss.durationMinutes * 60000) or (ss.laps and ss.laps > 0 and string.format('%d L', ss.laps)) or '-',
-          i == sim.currentSessionIndex }
+        local total = ss.durationMinutes and ss.durationMinutes > 0 and hms(ss.durationMinutes * 60000)
+          or (ss.laps and ss.laps > 0 and string.format('%d L', ss.laps)) or '-'
+        local now = i == sim.currentSessionIndex
+        if now then total = hms(sessionElapsedMs()) .. ' / ' .. total end
+        out[#out + 1] = { TEXTS.sessionName[ss.type] or '-', total, now }
       end
     end
     out[#out + 1] = false
@@ -9223,6 +9409,68 @@ local drawRaceScreens = (function()
     end
     Drag.icons('share', p1, p2, s)
   end
+  local COCKPIT_ROWS = { { key = 'ffb', step = 0.01 }, { key = 'y', step = 0.005 }, { key = 'x', step = 0.005 },
+    { key = 'pitch', step = 0.5 }, { key = 'fov', step = 1 }, { key = 'vol.main', step = 0.05 } }
+  local CHANNELS = { 'engine', 'transmission', 'tyres', 'surfaces', 'dirt', 'wind', 'opponents', 'carComponents', 'track',
+    'weather', 'rain', 'wipers' }
+  local cockpit = { row = 1, askT = -1e9, audio = false }
+  local function cockpitSend(key, dir, step) AppLink.cockpit(string.format('%s=%g', key, dir * step)) end
+  Desktop.cockpitMove = function(dir) cockpit.row = (cockpit.row - 1 + dir) % #COCKPIT_ROWS + 1 end
+  Desktop.cockpitStep = function(dir) local r = COCKPIT_ROWS[cockpit.row]; cockpitSend(r.key, dir, r.step) end
+  local function cockpitValue(key, v)
+    if v == nil then return '-' end
+    if key == 'ffb' or key:match('^vol%.') then return string.format('%.0f %%', v * 100) end
+    if key == 'x' or key == 'y' then return string.format('%.1f cm', v * 100) end
+    if key == 'pitch' then return string.format('%.1f deg', v) end
+    return string.format('%.0f deg', v)
+  end
+  local function stepBox(text, a, s, fn)
+    local b = vec2(a.x + 14 * s, a.y + 12 * s)
+    ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s)
+    local tw = textWidth(text, FONT_MONO, 10 * s)
+    drawText(text, FONT_MONO, 10 * s, vec2(a.x + (14 * s - tw) / 2, a.y), COLOR_TITLE)
+    Drag.clickable(a, b, fn)
+  end
+  local function cockpitScreen(car, w, h, s)
+    if state.ui.clock - cockpit.askT >= 2 then cockpit.askT = state.ui.clock; AppLink.cockpit('state') end
+    local st = AppLink.cockpitState or {}
+    local focus = Desktop.focus == 'cockpit'
+    local p1, p2, y = frame('cockpit', w, h, s, #COCKPIT_ROWS, TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp)
+    for i, r in ipairs(COCKPIT_ROWS) do
+      local on = focus and cockpit.row == i
+      drawText(TEXTS.cockpitRows[r.key], FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), on and YELLOW or COLOR_DIM)
+      local vx = p2.x - 14 * s - 70 * s
+      stepBox('-', vec2(vx - 70 * s, y), s, function() cockpit.row = i; cockpitSend(r.key, -1, r.step) end)
+      drawTextRight(cockpitValue(r.key, st[r.key]), FONT_MONO, FS * s, vx - 4 * s, y, on and YELLOW or COLOR_TITLE)
+      stepBox('+', vec2(vx, y), s, function() cockpit.row = i; cockpitSend(r.key, 1, r.step) end)
+      if r.key == 'vol.main' then
+        local a = vec2(vx + 20 * s, y)
+        local b = vec2(a.x + 46 * s, a.y + 12 * s)
+        if cockpit.audio then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s) end
+        drawText(TEXTS.cockpitMore, FONT_MONO, 9 * s, vec2(a.x + 4 * s, a.y + 0.5 * s), cockpit.audio and rgbm(0.07, 0.07, 0.07, 1) or COLOR_TITLE)
+        Drag.clickable(a, b, function() cockpit.audio = not cockpit.audio end)
+      end
+      y = y + ROW * s
+    end
+    if cockpit.audio then
+      local a1 = vec2(p1.x, p2.y + 6 * s)
+      local a2 = vec2(p2.x, a1.y + (26 + #CHANNELS * ROW + 2) * s)
+      drawPanel(a1, a2, BORDER_BASE, s)
+      drawText(TEXTS.cockpitAudio, FONT_TITLE, 12 * s, vec2(a1.x + 14 * s, a1.y + 4 * s), COLOR_TITLE)
+      drawSeparator(a1, a2, a1.y + 21 * s, s)
+      local ay = a1.y + 26 * s
+      for _, ch in ipairs(CHANNELS) do
+        local key = 'vol.' .. ch
+        drawText(TEXTS.cockpitChannels[ch] or ch, FONT_TEXT, FS * s, vec2(a1.x + 14 * s, ay), COLOR_DIM)
+        local vx = a2.x - 14 * s - 14 * s
+        stepBox('-', vec2(vx - 70 * s, ay), s, function() cockpitSend(key, -1, 0.05) end)
+        drawTextRight(cockpitValue(key, st[key]), FONT_MONO, FS * s, vx - 4 * s, ay, COLOR_TITLE)
+        stepBox('+', vec2(vx, ay), s, function() cockpitSend(key, 1, 0.05) end)
+        ay = ay + ROW * s
+      end
+    end
+    Drag.icons('cockpit', p1, p2, s)
+  end
   return function(car, w, h, s)
     local line, sector = Desktop.recent('line'), Desktop.recent('sector')
     if shown('race', car.isInPitlane or line) then raceScreen(car, w, h, s) end
@@ -9236,6 +9484,7 @@ local drawRaceScreens = (function()
     if shown('map', Desktop.close or line) then mapScreen(car, w, h, s) end
     if shown('telemetry', false) then telemetryScreen(car, w, h, s) end
     if shown('share', car.isInPitlane) then shareScreen(car, w, h, s) end
+    if shown('cockpit', car.isInPitlane) then cockpitScreen(car, w, h, s) end
   end
 end)()
 local KmrEvents = (function()
@@ -10250,6 +10499,15 @@ local drawDesktopUI = (function()
     while #list > SEEN_MAX do table.remove(list) end
     ac.storage['rc.dir.seen'] = table.concat(list, '\n')
   end
+  local PROBE_WAIT, PROBE_EVERY = 6, 300
+  local function probeKmr()
+    if not state.kmrAdmin or Direction.probe then return end
+    local me = tostring(ac.getDriverName(0) or '')
+    Direction.probe = { t = state.ui.clock, name = me }
+    Direction.probeT = state.ui.clock
+    queueCommand('/kmr player_name ' .. tostring(ac.getCar(0).sessionID or 0))
+    ac.log('race-control: race direction: KMR login checked')
+  end
   local function sendKmr(command, label)
     queueCommand('/kmr ' .. command)
     Direction.status, Direction.statusT = string.format(TEXTS.dirSent, label or command), state.ui.clock
@@ -10284,6 +10542,12 @@ local drawDesktopUI = (function()
     ac.log('race-control: race direction: GUID asked for ' .. name .. ' (' .. action .. ')')
   end
   state.directionAnswer = function(message)
+    local pr = Direction.probe
+    if pr and pr.name ~= '' and message:find(pr.name, 1, true) and state.ui.clock - pr.t <= PROBE_WAIT then
+      Direction.probe = nil
+      state.kmrAdmin = true
+      return
+    end
     local listed = false
     for _, name, g in message:gmatch('(%d+):([^:\n]+):(%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d)') do
       name = name:gsub('^%s+', ''):gsub('%s+$', '')
@@ -10616,7 +10880,78 @@ local drawDesktopUI = (function()
     if #parts == 0 then return TEXTS.dirPenNone, COLOR_DIM end
     return TEXTS.dirPenTitle .. table.concat(parts, '  -  '), (dsq or 0) > 0 and PANEL_COLORS.red or PANEL_COLORS.yellow
   end
+  local function mmss(sec)
+    sec = math.max(math.floor(sec or 0), 0)
+    return string.format('%d:%02d', math.floor(sec / 60), sec % 60)
+  end
+  local function dataCells(i, c)
+    local lvl, avg, dev, stalled = Connection.level(i)
+    local ping = CarRead.num(c.ping)
+    local conn = stalled and TEXTS.connStalled
+      or lvl == 'bad' and string.format(TEXTS.connKick, avg or 0, dev or 0)
+      or lvl == 'warn' and TEXTS.connHigh or TEXTS.connOk
+    local col = lvl == 'bad' and PANEL_COLORS.red or lvl == 'warn' and PANEL_COLORS.yellow or COLOR_DIM
+    return {
+      { 'P' .. tostring(CarRead.num(c.racePosition)), COLOR_TITLE },
+      { TEXTS.connLap .. lapTimeText(c.lapTimeMs), COLOR_DIM },
+      { string.format(TEXTS.connSector, CarRead.num(c.currentSector) + 1), COLOR_DIM },
+      { string.format(TEXTS.connSpline, CarRead.num(c.splinePosition)), COLOR_DIM },
+      { ping > 0 and string.format(TEXTS.connPing, ping) or TEXTS.connPingNone, ping > Connection.PING_WARN and col or COLOR_DIM },
+      { conn, col },
+    }, lvl
+  end
+  local function swapLine(i, c)
+    local e = Connection.cars[i]
+    if not e then return nil end
+    local now, min = state.ui.clock, config.swapMinSeconds
+    local parts, col = {}, COLOR_DIM
+    if c and c.isConnected and e.parked and e.parkedT and not e.leftT then
+      parts[#parts + 1] = string.format(TEXTS.connStopped, mmss(now - e.parkedT))
+      col = PANEL_COLORS.green
+    end
+    if e.leftT then
+      parts[#parts + 1] = e.leftAfterStop and string.format(TEXTS.connOutAfter, mmss(e.leftAfterStop)) or TEXTS.connOutNoStop
+      parts[#parts + 1] = TEXTS.connCause[e.leftCause] or e.leftCause
+      if e.inT then
+        local took = e.inT - e.leftT
+        parts[#parts + 1] = string.format(e.sameDriver and TEXTS.connBackSame or TEXTS.connBackOther, mmss(took), mmss(min))
+        parts[#parts + 1] = took <= min and TEXTS.connInTime or TEXTS.connLate
+        col = took <= min and PANEL_COLORS.green or PANEL_COLORS.yellow
+      else
+        parts[#parts + 1] = string.format(TEXTS.connSwapTime, mmss(now - e.leftT), mmss(min))
+        col = (e.leftCause == 'menu' or e.leftCause == 'lost' or e.leftCause:match('^ping')) and PANEL_COLORS.red
+          or (now - e.leftT > min and PANEL_COLORS.yellow or PANEL_COLORS.green)
+      end
+    end
+    if #parts == 0 then return nil end
+    return TEXTS.connPitTitle .. table.concat(parts, '  -  '), col
+  end
+  local function resetDirection()
+    Direction.pwd, Direction.prompt, Direction.target, Direction.value = '', '', '', ''
+    Direction.status, Direction.statusColor, Direction.focus, Direction.guidJob = nil, nil, nil, nil
+    Direction.listOpen, Direction.cmdOpen, Direction.waitLogin, Direction.probe = false, false, false, nil
+    Direction.cmdTab, Direction.cmdScroll = 'rc', 0
+    Direction.web.t, Direction.web.err = -1e9, nil
+    KmrEvents.open = false
+    armKey, redArm = nil, 0
+    ac.storage['rc.win.redflag'], ac.storage['rc.winsz.redflag'] = '', ''
+    probeKmr()
+    Direction.status, Direction.statusT, Direction.statusColor = TEXTS.dirReset, state.ui.clock, COLOR_TITLE
+    ac.log('race-control: race direction window reset')
+  end
   local function redWindow(w, h, s)
+    if not Direction.openSeen or Direction.session ~= sim.currentSessionIndex
+        or state.ui.clock - (Direction.probeT or -1e9) >= PROBE_EVERY then
+      Direction.openSeen, Direction.session = true, sim.currentSessionIndex
+      probeKmr()
+      Direction.probeT = state.ui.clock
+    end
+    if Direction.probe and state.ui.clock - Direction.probe.t > PROBE_WAIT then
+      Direction.probe = nil
+      state.kmrAdmin = false
+      Direction.status, Direction.statusT, Direction.statusColor = TEXTS.dirKmrLost, state.ui.clock, PANEL_COLORS.red
+      ac.log('race-control: race direction: KMR login not answered - fell')
+    end
     local cars = {}
     for i = 0, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
@@ -10627,10 +10962,23 @@ local drawDesktopUI = (function()
       Direction.status, Direction.statusColor = string.format(TEXTS.dirGuidNone, Direction.guidJob.name), PANEL_COLORS.red
       Direction.statusT, Direction.guidJob = state.ui.clock, nil
     end
-    local W5, H5 = cmd and 940 or 560, 30 + (cmd and 22 or 16) + (cmd and (22 + 22 + 22 + 22) or 0) + 18 + 16 + #cars * 44 + 22
+    local gone = Connection.gone()
+    local cells, alerts = {}, {}
+    for _, e in ipairs(cars) do
+      local list, lvl = dataCells(e.i, e.c)
+      cells[e.i] = list
+      if lvl == 'bad' then alerts[#alerts + 1] = string.format(TEXTS.connAlertCar, tostring(ac.getDriverNumber(e.i) or e.i),
+        tostring(ac.getDriverName(e.i) or ''), list[6][1]) end
+    end
+    local colW = {}
+    for _, list in pairs(cells) do
+      for k, cell in ipairs(list) do colW[k] = math.max(colW[k] or 0, textWidth(cell[1], FONT_MONO, 8.5 * s)) end
+    end
+    local W5, H5 = cmd and 940 or 560, 30 + (cmd and 22 or 16) + (cmd and (22 + 22 + 22 + 22) or 0) + 18 + 16 + #cars * 56 + 22
+    H5 = H5 + (#alerts > 0 and 14 or 0) + (#gone > 0 and (16 + #gone * 30) or 0)
     for _, e in ipairs(cars) do
       local n = #fitLines((penaltyLine(e.i, e.c)), 8.5 * s, (W5 - 74) * s) + #fitLines(kmrLine(e, e.c), 8.5 * s, (W5 - 74) * s)
-      H5 = H5 + math.max(n - 2, 0) * 12
+      H5 = H5 + math.max(n - 2, 0) * 12 + (swapLine(e.i, e.c) and 12 or 0)
     end
     local p1, p2 = windowAt('redflag', W5, H5, w, h, s, true)
     Drag.group = nil
@@ -10640,8 +10988,10 @@ local drawDesktopUI = (function()
     drawPanel(p1, p2, state.redFlag and BORDER_RED or BORDER_BASE, s)
     drawText(TEXTS.dirTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     drawText(TEXTS.dirRole[config.role] or '', FONT_MONO, 10 * s, vec2(p1.x + 170 * s, p1.y + 5 * s), COLOR_DIM)
-    drawTextRight(state.redFlag and TEXTS.flagRed or TEXTS.redNone, FONT_MONO, 10 * s, p2.x - 40 * s, p1.y + 5 * s,
-      state.redFlag and PANEL_COLORS.red or COLOR_DIM)
+    local flagText = state.redFlag and TEXTS.flagRed or TEXTS.redNone
+    drawTextRight(flagText, FONT_MONO, 10 * s, p2.x - 40 * s, p1.y + 5 * s, state.redFlag and PANEL_COLORS.red or COLOR_DIM)
+    chip(TEXTS.dirResetBtn, vec2(p2.x - 40 * s - textWidth(flagText, FONT_MONO, 10 * s) - textWidth(TEXTS.dirResetBtn, FONT_MONO, 9 * s) - 24 * s,
+      p1.y + 4 * s), s, false, nil, resetDirection)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.redOpen = false end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 28 * s
@@ -10655,6 +11005,11 @@ local drawDesktopUI = (function()
     if cmd then
       if state.kmrAdmin then
         drawText(TEXTS.redKmrOn, FONT_MONO, 9.5 * s, vec2(x0, y + 1 * s), PANEL_COLORS.green)
+        chip(TEXTS.dirLogout, vec2(x0 + textWidth(TEXTS.redKmrOn, FONT_MONO, 9.5 * s) + 10 * s, y - 1 * s), s, false, PANEL_COLORS.red, function()
+          state.kmrAdmin, Direction.probe = false, nil
+          Direction.status, Direction.statusT, Direction.statusColor = TEXTS.dirLoggedOut, state.ui.clock, COLOR_TITLE
+          ac.log('race-control: race direction: KMR login no longer used (logout on this screen)')
+        end)
       else
         drawText(TEXTS.dirLogin, FONT_TEXT, 10 * s, vec2(x0, y), COLOR_TITLE)
         local enter
@@ -10778,6 +11133,12 @@ local drawDesktopUI = (function()
     end
     drawText(status, FONT_MONO, 9 * s, vec2(x0, y), Direction.statusColor or PANEL_COLORS.yellow)
     y = y + 18 * s
+    if #alerts > 0 then
+      local text = TEXTS.connAlert .. table.concat(alerts, '  -  ')
+      while #text > 1 and textWidth(text, FONT_MONO, 9 * s) > maxW do text = text:sub(1, -2) end
+      drawText(text, FONT_MONO, 9 * s, vec2(x0, y), PANEL_COLORS.red)
+      y = y + 14 * s
+    end
     local inPits, over = 0, 0
     for _, e in ipairs(cars) do
       local c = e.c
@@ -10824,9 +11185,29 @@ local drawDesktopUI = (function()
       local pen, penColor = penaltyLine(e.i, c)
       local lw = p2.x - p1.x - 74 * s
       local ly = y + 16 * s
+      local cx = p1.x + 60 * s
+      for k, cell in ipairs(cells[e.i] or {}) do
+        drawText(cell[1], FONT_MONO, 8.5 * s, vec2(cx, ly), cell[2])
+        cx = cx + (colW[k] or 0) + 14 * s
+      end
+      ly = ly + 12 * s
+      local sl, slColor = swapLine(e.i, c)
+      if sl then drawText(sl, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, ly), slColor); ly = ly + 12 * s end
       for _, t in ipairs(fitLines(pen, 8.5 * s, lw)) do drawText(t, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, ly), penColor); ly = ly + 12 * s end
       for _, t in ipairs(fitLines(kline, 8.5 * s, lw)) do drawText(t, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, ly), COLOR_DIM); ly = ly + 12 * s end
       y = math.max(y + 44 * s, ly + 4 * s)
+    end
+    if #gone > 0 then
+      drawText(TEXTS.connGoneTitle, FONT_TITLE, 8.5 * s, vec2(x0, y), COLOR_DIM)
+      y = y + 16 * s
+      for _, g in ipairs(gone) do
+        drawText('#' .. tostring(ac.getDriverNumber(g.i) or g.i), FONT_MONO, 9.5 * s, vec2(x0, y), COLOR_DIM)
+        drawText(g.e.name, FONT_TEXT, 9.5 * s, vec2(p1.x + 60 * s, y), COLOR_DIM)
+        drawText(TEXTS.connLeft, FONT_MONO, 9.5 * s, vec2(p1.x + 210 * s, y), PANEL_COLORS.red)
+        local sl, slColor = swapLine(g.i, nil)
+        if sl then drawText(sl, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 14 * s), slColor) end
+        y = y + 30 * s
+      end
     end
     drawText(string.format(TEXTS.redCount, inPits, #cars, over), FONT_MONO, 9 * s, vec2(x0, y + 2 * s), COLOR_DIM)
     if cmd and Direction.listOpen then driversList(w, h, s, p1, p2) end
@@ -10995,6 +11376,7 @@ local drawDesktopUI = (function()
     if not lobbyHud and ui.onExclusiveHUD then
       lobbyHud = true
       ui.onExclusiveHUD(function(mode)
+        Connection.hudMode = mode
         if mode == 'menu' then
           local size = ac.getUI().windowSize
           local sm = math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3)
@@ -11107,7 +11489,7 @@ local drawDesktopUI = (function()
     if Audit.open then audit(w, h, s) end
     if Desktop.buttons then buttonsScreen(w, h, s) end
     if Desktop.settingsOpen then settingsWindow(w, h, s) else Settings.shown = false end
-    if Desktop.redOpen and config.role then redWindow(w, h, s) end
+    if Desktop.redOpen and config.role then redWindow(w, h, s) else Direction.openSeen = false end
     if sim.isInMainMenu then lobby(w, h, s) end
     if Desktop.menu then menu(w, h, s) end
     if state.ui.clock < Desktop.indicatorUntil then indicator(w, h, s) end
@@ -11625,6 +12007,7 @@ function script.update(dt)
   Diag.update(car)
   CarRead.updateMotion(car)
   OnlineQueue.update()
+  Connection.update()
   RecordSync.update()
   RecordSync.base.update()
   RecordSync.base.bestUpdate()

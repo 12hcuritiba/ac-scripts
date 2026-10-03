@@ -203,6 +203,50 @@ if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK
     end
   end, 1)
 end
+local COCKPIT_REQUEST = 'amxracing.race-control.cockpit'
+local COCKPIT_ANSWER = 'amxracing.race-control.cockpit.state'
+local CHANNELS = { 'main', 'engine', 'transmission', 'tyres', 'surfaces', 'dirt', 'wind', 'opponents', 'carComponents',
+  'track', 'weather', 'rain', 'wipers' }
+local function cockpitState()
+  local out = {}
+  local car = ac.getCar(0)
+  out[#out + 1] = string.format('ffb=%.3f', car and car.ffbMultiplier or 1)
+  out[#out + 1] = string.format('fov=%.1f', ac.getSim().firstPersonFOV or 56)
+  local ok, p = pcall(ac.getOnboardCameraParams, 0)
+  if ok and p then out[#out + 1] = string.format('x=%.4f;y=%.4f;pitch=%.2f', p.position.x, p.position.y, p.pitch) end
+  for _, ch in ipairs(CHANNELS) do
+    local v = ac.getAudioVolume(ch, nil, -1)
+    if v and v >= 0 then out[#out + 1] = string.format('vol.%s=%.3f', ch, v) end
+  end
+  return table.concat(out, ';')
+end
+local function clamp(v, a, b) return math.min(math.max(v, a), b) end
+ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
+  if senderType ~= 'server_script' then return end
+  local seat = nil
+  for item, delta in tostring(data or ''):gmatch('([%w%.]+)=(%-?[%d%.]+)') do
+    local d = tonumber(delta) or 0
+    if item == 'ffb' then
+      local car = ac.getCar(0)
+      ac.setFFBMultiplier(clamp((car and car.ffbMultiplier or 1) + d, 0, 2))
+    elseif item == 'fov' then
+      ac.setFirstPersonCameraFOV(clamp((ac.getSim().firstPersonFOV or 56) + d, 10, 120))
+    elseif item == 'x' or item == 'y' or item == 'pitch' then
+      if not seat then local ok, p = pcall(ac.getOnboardCameraParams, 0); seat = ok and p or false end
+      if seat then
+        if item == 'pitch' then seat.pitch = clamp(seat.pitch + d, -30, 30)
+        else seat.position[item] = seat.position[item] + d end
+      end
+    elseif item:match('^vol%.') then
+      local ch = item:sub(5)
+      local v = ac.getAudioVolume(ch, nil, -1)
+      if v and v >= 0 then ac.setAudioVolume(ch, clamp(v + d, 0, 1)) end
+    end
+  end
+  if seat then pcall(ac.setOnboardCameraParams, 0, seat, true) end
+  if tostring(data or '') ~= 'state' then ac.log('race-control app: cockpit ' .. tostring(data)) end
+  ac.broadcastSharedEvent(COCKPIT_ANSWER, cockpitState())
+end)
 ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
   if senderType ~= 'server_script' then
     ac.log('race-control app: preset request ignored, sender ' .. tostring(senderName) .. ' / ' .. tostring(senderType))
