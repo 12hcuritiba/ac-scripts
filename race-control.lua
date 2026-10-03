@@ -408,6 +408,12 @@ local TEXTS = {
   dirWebLine = 'money %s - %s - infr %s (%s/100km) - crashes %s (%s/100km) - laps %d best %s',
   dirWebOthers = 'Registered in the KMR',
   dirWebErr = 'KMR web stats not read: %s', dirWebOff = 'KMR web stats: key kmrStatsUrl empty', dirValue = 'Value', dirBallast = 'BALLAST', dirRestrictor = 'RESTRICTOR',
+  kmrEvBtn = 'KMR EVENTS', kmrEvTitle = 'KMR EVENTS - RACE CONTROL OF THE SESSION', kmrEvConnecting = 'Connecting to the KMR race control...',
+  kmrEvErr = 'KMR race control not reached: %s', kmrEvNone = 'No event', kmrEvReplay = 'REPLAY', kmrEvBack = '< LIST', kmrEvLoading = 'Loading the replay from the KMR...',
+  kmrEvNoData = 'The KMR gave no replay for this event', kmrEvPlay = 'PLAY', kmrEvPause = 'PAUSE', kmrEvToEvent = 'EVENT', kmrEvGear = 'gear',
+  kmrEvLap = 'lap ', kmrEvReviewed = 'reviewed ', kmrEvLast = 'THIS SESSION', kmrEvAll = 'ALL SESSIONS',
+  kmrEvKinds = { collision = 'COLLISION', cut = 'CUT', generic = 'INFO', overtake = 'OVERTAKE' },
+  kmrEvFilters = { all = 'ALL', collision = 'COLLISIONS', cut = 'CUTS', generic = 'INFO' },
   dirNeedCarValue = 'Ballast / restrictor: a driver on the server in the field and a value', dirList = 'DRIVERS', dirListBtn = 'LIST', dirCmdBtn = 'COMMANDS', dirCmdTitle = 'COMMANDS', dirCmdHow = 'How: ', dirSessionTime = '%s elapsed / %s left',
   dirSessionLaps = 'lap %d', dirSessionLapsOf = 'lap %d / %d - %d left',
   dirLeft = 'Left the server', dirGuidAsk = 'Asking the KMR the GUID of %s',
@@ -7427,7 +7433,8 @@ do
       ui.captureMouse(true)
     elseif ok then
       local done = false
-      for _, b in ipairs(buttons) do
+      for bi = #buttons, 1, -1 do
+        local b = buttons[bi]
         if inside(m, b.p1, b.p2) then
           ui.setMouseCursor(ui.MouseCursor.Hand)
           ui.captureMouse(true)
@@ -9231,6 +9238,332 @@ local drawRaceScreens = (function()
     if shown('share', car.isInPitlane) then shareScreen(car, w, h, s) end
   end
 end)()
+local KmrEvents = (function()
+  local M = { open = false, view = nil, filter = 'all', last = true, scroll = 0 }
+  local io = { sid = nil, busy = false, err = nil, retryT = 0, pingT = 0, events = {}, tracks = {}, data = {}, asked = {} }
+  local PING_EVERY, RETRY_AFTER = 20, 5
+  local COLORS = { rgbm(0.4, 0.6, 1, 1), rgbm(1, 0.35, 0.35, 1), rgbm(1, 0.85, 0.25, 1), rgbm(0.45, 1, 0.55, 1), rgbm(0.9, 0.5, 1, 1) }
+  local function base() return config.kmrStatsUrl ~= '' and (config.kmrStatsUrl .. '/socket.io/?EIO=3&transport=polling') or nil end
+  local function packets(body)
+    local out, i, n = {}, 1, #body
+    while i <= n do
+      local c = body:find(':', i, true)
+      local len = c and tonumber(body:sub(i, c - 1))
+      if not len then break end
+      local j, units = c + 1, 0
+      while units < len and j <= n do
+        local b = body:byte(j)
+        local w = b >= 240 and 4 or b >= 224 and 3 or b >= 192 and 2 or 1
+        units = units + (w == 4 and 2 or 1)
+        j = j + w
+      end
+      out[#out + 1] = body:sub(c + 1, j - 1)
+      i = j
+    end
+    return out
+  end
+  local function enc(v)
+    local t = type(v)
+    if t == 'table' then
+      if #v > 0 or next(v) == nil then
+        local parts = {}
+        for _, x in ipairs(v) do parts[#parts + 1] = enc(x) end
+        return '[' .. table.concat(parts, ',') .. ']'
+      end
+      local parts = {}
+      for k, x in pairs(v) do parts[#parts + 1] = enc(tostring(k)) .. ':' .. enc(x) end
+      return '{' .. table.concat(parts, ',') .. '}'
+    elseif t == 'string' then
+      return '"' .. v:gsub('[%c"\\]', function(ch) return string.format('\\u%04x', ch:byte()) end) .. '"'
+    elseif t == 'number' then
+      return (v == math.floor(v) and math.abs(v) < 2^53) and string.format('%d', v) or tostring(v)
+    elseif t == 'boolean' then return tostring(v) end
+    return 'null'
+  end
+  local function send(text)
+    if not io.sid or not web or not web.request then return end
+    web.request('POST', base() .. '&sid=' .. io.sid, { ['Content-Type'] = 'text/plain;charset=UTF-8' }, (#text) .. ':' .. text, function() end)
+  end
+  local function onEvent(name, data)
+    if name == 'race.control.set.events' and type(data) == 'table' then
+      io.events = data
+    elseif name and name:find('^race%.control%.add%.') and type(data) == 'table' then
+      io.events[#io.events + 1] = data
+    elseif name == 'race.control.update.event' and type(data) == 'table' then
+      for i, e in ipairs(io.events) do if e.ts == data.ts and e.type == data.type then io.events[i] = data end end
+    elseif name == 'race.control.set.track' and type(data) == 'table' and data.track then
+      io.tracks[tostring(data.track)] = data.data
+    elseif name and name:find('^race%.control%.set%.%a+%.data$') and type(data) == 'table' and data.ts then
+      io.data[tostring(data.ts)] = data
+    end
+  end
+  local function handle(body)
+    for _, p in ipairs(packets(tostring(body or ''))) do
+      if p:sub(1, 1) == '0' then
+        local d = JSON.parse(p:sub(2))
+        if type(d) == 'table' and d.sid then io.sid = tostring(d.sid) end
+      elseif p:sub(1, 2) == '42' then
+        local d = JSON.parse(p:sub(3))
+        if type(d) == 'table' then onEvent(d[1], d[2]) end
+      elseif p == '1' then
+        io.sid = nil
+      end
+    end
+  end
+  local function fail(err)
+    io.busy, io.sid, io.err, io.retryT = false, nil, tostring(err or 'no answer'), state.ui.clock + RETRY_AFTER
+    ac.log('race-control: KMR race control not read: ' .. io.err)
+  end
+  local function pump()
+    if not base() or not web or not web.request or not JSON or io.busy or state.ui.clock < io.retryT then return end
+    io.busy = true
+    local url = base() .. (io.sid and ('&sid=' .. io.sid) or '')
+    web.request('GET', url, nil, nil, function(err, res)
+      if err or not res or (tonumber(res.status) or 200) >= 400 then fail(err or (res and res.status)); return end
+      local had = io.sid
+      handle(res.body)
+      io.busy, io.err = false, nil
+      if not had and io.sid then ac.log('race-control: KMR race control connected') end
+    end)
+    if io.sid and state.ui.clock >= io.pingT then io.pingT = state.ui.clock + PING_EVERY; send('2') end
+  end
+  local function ask(e)
+    local key = tostring(e.ts)
+    if io.data[key] or io.asked[key] then return end
+    io.asked[key] = state.ui.clock
+    if e.track and not io.tracks[tostring(e.track)] then send('42' .. enc({ 'race.control.request.track', e.track })) end
+    send('42' .. enc({ 'race.control.request.' .. e.type .. '.data', e }))
+  end
+  local function hhmmss(ts) return os.date('%H:%M:%S', math.floor((tonumber(ts) or 0) / 1000)) end
+  local function hasReplay(e) return e.type == 'collision' or e.type == 'cut' end
+  local function who(e)
+    local a = tostring(e.car_driver_name or '')
+    if e.other_car_driver_name then a = a .. ' x ' .. tostring(e.other_car_driver_name) end
+    return a ~= '' and a or tostring(e.text or '')
+  end
+  local function detail(e)
+    if e.type == 'cut' then
+      local cc = type(e.cut_count) == 'table' and string.format(' %s/%s', tostring(e.cut_count[1] or '-'), tostring(e.cut_count[2] or '-')) or ''
+      return tostring(e.cut_type or ''):gsub('%$%d+$', '') .. cc
+    end
+    return ''
+  end
+  local function penalty(e)
+    local m = type(e.moderated) == 'table' and e.moderated or {}
+    local out = {}
+    for _, p in pairs(type(m.penalties) == 'table' and m.penalties or {}) do
+      if type(p) == 'table' and p.penalty_hr and p.penalty_hr ~= '0p' then out[#out + 1] = tostring(p.penalty_hr) end
+    end
+    return (m.reviewed == 1 and TEXTS.kmrEvReviewed or '') .. table.concat(out, ' ')
+  end
+  local function rows()
+    local lastId
+    for _, e in ipairs(io.events) do
+      local id = type(e.session_info) == 'table' and e.session_info.id
+      if id and (not lastId or id > lastId) then lastId = id end
+    end
+    local out = {}
+    for i = #io.events, 1, -1 do
+      local e = io.events[i]
+      local okKind = M.filter == 'all' or (M.filter == 'collision' and e.type == 'collision') or (M.filter == 'cut' and e.type == 'cut')
+        or (M.filter == 'generic' and e.type ~= 'collision' and e.type ~= 'cut')
+      local okSession = not M.last or (type(e.session_info) == 'table' and e.session_info.id == lastId)
+      if okKind and okSession then out[#out + 1] = e end
+    end
+    return out
+  end
+  local function posAt(samples, t)
+    if #samples == 0 then return nil end
+    if t <= samples[1].ts then return samples[1].world_position, samples[1] end
+    for i = 1, #samples - 1 do
+      local a, b = samples[i], samples[i + 1]
+      if t <= b.ts then
+        local dt = math.max((b.ts - a.ts) / 1000, 0.001)
+        local u = (t - a.ts) / (b.ts - a.ts)
+        local h00, h10, h01, h11 = 2 * u ^ 3 - 3 * u ^ 2 + 1, u ^ 3 - 2 * u ^ 2 + u, -2 * u ^ 3 + 3 * u ^ 2, u ^ 3 - u ^ 2
+        local pa, pb = a.world_position, b.world_position
+        local va, vb = a.velocity or { x = 0, z = 0 }, b.velocity or { x = 0, z = 0 }
+        return { x = h00 * pa.x + h10 * dt * (va.x or 0) + h01 * pb.x + h11 * dt * (vb.x or 0),
+          z = h00 * pa.z + h10 * dt * (va.z or 0) + h01 * pb.z + h11 * dt * (vb.z or 0) }, (u < 0.5 and a or b)
+      end
+    end
+    return samples[#samples].world_position, samples[#samples]
+  end
+  local ZOOMS = { 25, 50, 100, 200, 400, 1500 }
+  local function replay(p1, p2, s, chip, e)
+    local d = io.data[tostring(e.ts)]
+    local v = M.view
+    local x0 = p1.x + 12 * s
+    local y = p1.y + 26 * s
+    local tx = chip(TEXTS.kmrEvBack, vec2(x0, y), s, false, nil, function() M.view = nil end)
+    drawText(string.format('%s  %s  -  %s  %s', hhmmss(e.ts), (TEXTS.kmrEvKinds[e.type] or e.type), who(e), detail(e)),
+      FONT_TEXT, 10 * s, vec2(tx + 8 * s, y + 1 * s), COLOR_TITLE)
+    y = y + 22 * s
+    if not d then
+      ask(e)
+      drawText(io.asked[tostring(e.ts)] and state.ui.clock - io.asked[tostring(e.ts)] > 15 and TEXTS.kmrEvNoData or TEXTS.kmrEvLoading,
+        FONT_MONO, 9.5 * s, vec2(x0, y), COLOR_DIM)
+      return
+    end
+    local track = io.tracks[tostring(d.track or e.track)] or {}
+    local cars, tmin, tmax = {}, math.huge, -math.huge
+    local k = 0
+    for guid, list in pairs(type(d.lap_logs) == 'table' and d.lap_logs or {}) do
+      if type(list) == 'table' and #list > 0 then
+        k = k + 1
+        table.sort(list, function(a, b) return (a.ts or 0) < (b.ts or 0) end)
+        local name = (type(d.drivers) == 'table' and type(d.drivers[guid]) == 'table' and d.drivers[guid].name) or guid
+        cars[#cars + 1] = { name = tostring(name), list = list, color = COLORS[(k - 1) % #COLORS + 1] }
+        tmin, tmax = math.min(tmin, list[1].ts), math.max(tmax, list[#list].ts)
+      end
+    end
+    local evT = tonumber(d.ts or e.ts) or tmin
+    if tmin == math.huge then tmin, tmax = evT - 2000, evT + 1000 end
+    tmax = math.max(tmax, evT + 500)
+    v.t = v.t or tmin
+    local now = state.ui.clock
+    if v.playing then
+      v.t = v.t + (now - (v.lastClock or now)) * 1000 * v.speed
+      if v.t >= tmax then v.t, v.playing = tmax, false end
+    end
+    v.lastClock = now
+    local cx = x0
+    cx = chip('<< 1s', vec2(cx, y), s, false, nil, function() v.t = math.max(tmin, v.t - 1000) end)
+    cx = chip(v.playing and TEXTS.kmrEvPause or TEXTS.kmrEvPlay, vec2(cx, y), s, v.playing, nil, function()
+      if not v.playing and v.t >= tmax then v.t = tmin end
+      v.playing = not v.playing
+    end)
+    cx = chip('1s >>', vec2(cx, y), s, false, nil, function() v.t = math.min(tmax, v.t + 1000) end)
+    cx = cx + 8 * s
+    for _, sp in ipairs({ 0.25, 0.5, 1 }) do
+      cx = chip(sp .. 'x', vec2(cx, y), s, v.speed == sp, nil, function() v.speed = sp end)
+    end
+    cx = chip(TEXTS.kmrEvToEvent, vec2(cx + 8 * s, y), s, false, PANEL_COLORS.red, function() v.t, v.playing = evT, false end)
+    cx = chip('-', vec2(cx + 8 * s, y), s, false, nil, function() v.zoom = math.min(#ZOOMS, v.zoom + 1) end)
+    chip('+', vec2(cx, y), s, false, nil, function() v.zoom = math.max(1, v.zoom - 1) end)
+    y = y + 22 * s
+    local ta, tb = vec2(x0, y), vec2(p2.x - 12 * s, y + 8 * s)
+    ui.drawRectFilled(ta, tb, rgbm(1, 1, 1, 0.1), 2 * s)
+    local function xOf(t) return ta.x + (tb.x - ta.x) * (t - tmin) / math.max(tmax - tmin, 1) end
+    ui.drawRectFilled(ta, vec2(xOf(v.t), tb.y), rgbm(0.4, 0.6, 1, 0.6), 2 * s)
+    ui.drawLine(vec2(xOf(evT), ta.y - 3 * s), vec2(xOf(evT), tb.y + 3 * s), PANEL_COLORS.red, 2 * s)
+    local SEG = 40
+    for i = 0, SEG - 1 do
+      local a = vec2(ta.x + (tb.x - ta.x) * i / SEG, ta.y - 3 * s)
+      local b = vec2(ta.x + (tb.x - ta.x) * (i + 1) / SEG, tb.y + 3 * s)
+      Drag.clickable(a, b, function() v.t, v.playing = tmin + (tmax - tmin) * (i + 0.5) / SEG, false end)
+    end
+    drawTextRight(string.format('%+.1f s', (v.t - evT) / 1000), FONT_MONO, 9 * s, p2.x - 12 * s, y + 10 * s, COLOR_DIM)
+    y = y + 24 * s
+    local ma, mb = vec2(x0, y), vec2(p2.x - 12 * s, p2.y - 12 * s)
+    ui.drawRectFilled(ma, mb, rgbm(0, 0, 0, 0.55), 2 * s)
+    local ep = d.event_position or { x = 0, z = 0 }
+    local half = ZOOMS[v.zoom]
+    local scale = math.min(mb.x - ma.x, mb.y - ma.y) / (2 * half)
+    local mc = vec2((ma.x + mb.x) / 2, (ma.y + mb.y) / 2)
+    local function sp(p) return vec2(mc.x + (p.x - ep.x) * scale, mc.y - (p.z - ep.z) * scale) end
+    ui.pushClipRect(ma, mb)
+    local function line(list, col, w)
+      if type(list) ~= 'table' then return end
+      local prev
+      local keys = {}
+      for key in pairs(list) do if tonumber(key) then keys[#keys + 1] = tonumber(key) end end
+      table.sort(keys)
+      for _, key in ipairs(keys) do
+        local q = list[key] or list[tostring(key)]
+        local wp = type(q) == 'table' and (q.wp or q) or nil
+        if wp and wp.x then
+          local pt = sp(wp)
+          if prev and math.abs(pt.x - prev.x) + math.abs(pt.y - prev.y) < 400 * s then ui.drawLine(prev, pt, col, w) end
+          prev = pt
+        end
+      end
+    end
+    local b = type(track.boundary) == 'table' and track.boundary or {}
+    line(b.left, rgbm(0.85, 0.85, 0.85, 0.9), 1.5 * s)
+    line(b.right, rgbm(0.85, 0.85, 0.85, 0.9), 1.5 * s)
+    local pa = type(track.pit_area) == 'table' and track.pit_area or {}
+    line(pa.left, rgbm(0.5, 0.55, 0.6, 0.8), 1 * s)
+    line(pa.right, rgbm(0.5, 0.55, 0.6, 0.8), 1 * s)
+    for _, cl in ipairs(type(track.cut_lines) == 'table' and track.cut_lines or {}) do
+      if type(cl) == 'table' and cl.a and cl.b then ui.drawLine(sp(cl.a), sp(cl.b), rgbm(1, 0.85, 0.25, 0.7), 1.5 * s) end
+    end
+    ui.drawCircle(sp(ep), 9 * s, PANEL_COLORS.red, 24, 2 * s)
+    local ly = ma.y + 6 * s
+    for _, c in ipairs(cars) do
+      local prev
+      for _, q in ipairs(c.list) do
+        local pt = sp(q.world_position)
+        if prev then ui.drawLine(prev, pt, rgbm(c.color.r, c.color.g, c.color.b, 0.35), 1 * s) end
+        prev = pt
+      end
+      local pos, q = posAt(c.list, v.t)
+      if pos then
+        local pt = sp(pos)
+        ui.drawCircleFilled(pt, 5 * s, c.color, 16)
+        drawText(c.name, FONT_TEXT, 9 * s, vec2(pt.x + 8 * s, pt.y - 7 * s), c.color)
+        drawText(string.format('%s  %d km/h  %s %s  %d rpm', c.name, math.floor((q.velocity_modulus or 0) + 0.5), TEXTS.kmrEvGear,
+          tostring(q.gear or '-'), math.floor(q.engine_rpm or 0)), FONT_MONO, 9 * s, vec2(ma.x + 8 * s, ly), c.color)
+        ly = ly + 13 * s
+      end
+    end
+    ui.popClipRect()
+  end
+  function M.draw(w, h, s, dp1, dp2, chip)
+    pump()
+    local LW, LH, ROWE = 820 * s, 520 * s, 14 * s
+    local x = math.min(math.max(dp1.x, 4 * s), w - LW - 4 * s)
+    local yTop = dp2.y + 8 * s
+    if yTop + LH > h then yTop = math.max(4 * s, h - LH - 4 * s) end
+    local p1 = vec2(math.floor(x), math.floor(yTop))
+    local p2 = vec2(p1.x + LW, p1.y + LH)
+    drawPanel(p1, p2, BORDER_BASE, s)
+    local m = ui.mousePos()
+    local over = m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y
+    if over then ui.captureMouse(true) end
+    drawText(TEXTS.kmrEvTitle, FONT_TITLE, 12 * s, vec2(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
+    chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() M.open = false end)
+    drawSeparator(p1, p2, p1.y + 21 * s, s)
+    if M.view then
+      replay(p1, p2, s, chip, M.view.e)
+      return
+    end
+    local x0 = p1.x + 12 * s
+    local y = p1.y + 26 * s
+    local tx = x0
+    for _, f in ipairs({ 'all', 'collision', 'cut', 'generic' }) do
+      tx = chip(TEXTS.kmrEvFilters[f], vec2(tx, y), s, M.filter == f, nil, function() M.filter, M.scroll = f, 0 end)
+    end
+    tx = chip(M.last and TEXTS.kmrEvLast or TEXTS.kmrEvAll, vec2(tx + 10 * s, y), s, M.last, nil, function() M.last, M.scroll = not M.last, 0 end)
+    local status = config.kmrStatsUrl == '' and TEXTS.dirWebOff or io.err and string.format(TEXTS.kmrEvErr, io.err)
+      or (not io.sid and #io.events == 0) and TEXTS.kmrEvConnecting or nil
+    if status then drawTextRight(status, FONT_MONO, 8.5 * s, p2.x - 12 * s, y + 2 * s, io.err and PANEL_COLORS.red or COLOR_DIM) end
+    y = y + 22 * s
+    local list = rows()
+    local top = y
+    local fit = math.max(math.floor((p2.y - 8 * s - top) / ROWE), 1)
+    if over then M.scroll = M.scroll - math.floor(ui.mouseWheel() * 3) end
+    M.scroll = math.min(math.max(M.scroll, 0), math.max(#list - fit, 0))
+    if #list == 0 then drawText(TEXTS.kmrEvNone, FONT_MONO, 9.5 * s, vec2(x0, y), COLOR_DIM) end
+    ui.pushClipRect(vec2(p1.x, top), vec2(p2.x, p2.y - 4 * s))
+    for i = M.scroll + 1, math.min(#list, M.scroll + fit) do
+      local e = list[i]
+      local col = e.type == 'collision' and PANEL_COLORS.red or e.type == 'cut' and PANEL_COLORS.yellow or COLOR_DIM
+      drawText(hhmmss(e.ts), FONT_MONO, 9 * s, vec2(x0, y), COLOR_DIM)
+      drawText(TEXTS.kmrEvKinds[e.type] or tostring(e.type), FONT_MONO, 9 * s, vec2(x0 + 66 * s, y), col)
+      drawText(who(e), FONT_TEXT, 9 * s, vec2(x0 + 150 * s, y), COLOR_TITLE)
+      drawText((e.car_lap and (TEXTS.kmrEvLap .. tostring(e.car_lap) .. '  ') or '') .. detail(e), FONT_MONO, 9 * s, vec2(x0 + 440 * s, y), COLOR_DIM)
+      drawTextRight(penalty(e), FONT_MONO, 9 * s, p2.x - 90 * s, y, COLOR_TITLE)
+      if hasReplay(e) then
+        chip(TEXTS.kmrEvReplay, vec2(p2.x - 80 * s, y - 2 * s), s, false, nil, function() M.view = { e = e, speed = 0.5, zoom = 2 } ; ask(e) end)
+      end
+      y = y + ROWE
+    end
+    ui.popClipRect()
+  end
+  M._test = { packets = packets, enc = enc, posAt = posAt, io = io, rows = rows }
+  return M
+end)()
 local drawDesktopUI = (function()
   local W = 660
   local CANVAS_W = 422
@@ -10314,8 +10647,10 @@ local drawDesktopUI = (function()
     local y = p1.y + 28 * s
     local x0 = p1.x + 14 * s
     drawText(sessionLine(), FONT_MONO, 10 * s, vec2(x0, y), COLOR_TITLE)
-    chip(TEXTS.dirCmdBtn, vec2(p2.x - 14 * s - textWidth(TEXTS.dirCmdBtn, FONT_MONO, 9 * s) - 10 * s, y - 1 * s), s,
-      Direction.cmdOpen, nil, function() Direction.cmdOpen = not Direction.cmdOpen end)
+    local cbx = p2.x - 14 * s - textWidth(TEXTS.dirCmdBtn, FONT_MONO, 9 * s) - 10 * s
+    chip(TEXTS.dirCmdBtn, vec2(cbx, y - 1 * s), s, Direction.cmdOpen, nil, function() Direction.cmdOpen = not Direction.cmdOpen end)
+    chip(TEXTS.kmrEvBtn, vec2(cbx - textWidth(TEXTS.kmrEvBtn, FONT_MONO, 9 * s) - 20 * s, y - 1 * s), s, KmrEvents.open, nil,
+      function() KmrEvents.open = not KmrEvents.open end)
     y = y + (cmd and 22 or 16) * s
     if cmd then
       if state.kmrAdmin then
@@ -10496,6 +10831,7 @@ local drawDesktopUI = (function()
     drawText(string.format(TEXTS.redCount, inPits, #cars, over), FONT_MONO, 9 * s, vec2(x0, y + 2 * s), COLOR_DIM)
     if cmd and Direction.listOpen then driversList(w, h, s, p1, p2) end
     if Direction.cmdOpen then commandsList(w, h, s, p1, p2) end
+    if KmrEvents.open then KmrEvents.draw(w, h, s, p1, p2, chip) end
     webUpdate()
   end
   local LOBBY_W, EVENT_W = 380, 380
