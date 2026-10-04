@@ -211,7 +211,7 @@ local function cockpitState()
   local out = {}
   local car = ac.getCar(0)
   out[#out + 1] = string.format('ffb=%.3f', car and car.ffbMultiplier or 1)
-  out[#out + 1] = string.format('fov=%.1f', ac.getSim().firstPersonFOV or 56)
+  out[#out + 1] = string.format('fov=%.1f', ac.getSim().firstPersonCameraFOV or 56)
   local ok, p = pcall(ac.getOnboardCameraParams, 0)
   if ok and p then out[#out + 1] = string.format('x=%.4f;y=%.4f;pitch=%.2f', p.position.x, p.position.y, p.pitch) end
   for _, ch in ipairs(CHANNELS) do
@@ -222,6 +222,7 @@ local function cockpitState()
 end
 local function clamp(v, a, b) return math.min(math.max(v, a), b) end
 local COCKPIT_APPLY_SECONDS = 3
+local COCKPIT_STORE = '.amxracing.race-control.cockpit'
 local function cockpitKey() return 'cockpit.' .. tostring(ac.getCarID(0) or 'car') end
 local function cockpitApply(text)
   local seat, n = nil, 0
@@ -262,6 +263,7 @@ ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
     local now = cockpitState()
     ac.storage[cockpitKey()] = now
     ac.log('race-control app: cockpit values saved for ' .. cockpitKey() .. ': ' .. now)
+    ac.store(COCKPIT_STORE, now)
     ac.broadcastSharedEvent(COCKPIT_ANSWER, now .. ';saved=1')
     return
   end
@@ -272,7 +274,7 @@ ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
       local car = ac.getCar(0)
       ac.setFFBMultiplier(clamp((car and car.ffbMultiplier or 1) + d, 0, 2))
     elseif item == 'fov' then
-      ac.setFirstPersonCameraFOV(clamp((ac.getSim().firstPersonFOV or 56) + d, 10, 120))
+      ac.setFirstPersonCameraFOV(clamp((ac.getSim().firstPersonCameraFOV or 56) + d, 10, 120))
     elseif item == 'x' or item == 'y' or item == 'pitch' then
       if not seat then local ok, p = pcall(ac.getOnboardCameraParams, 0); seat = ok and p or false end
       if seat then
@@ -287,7 +289,9 @@ ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
   end
   if seat then pcall(ac.setOnboardCameraParams, 0, seat, true) end
   if tostring(data or '') ~= 'state' then ac.log('race-control app: cockpit ' .. tostring(data)) end
-  ac.broadcastSharedEvent(COCKPIT_ANSWER, cockpitState())
+  local now = cockpitState()
+  ac.store(COCKPIT_STORE, now)
+  ac.broadcastSharedEvent(COCKPIT_ANSWER, now)
 end)
 ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
   if senderType ~= 'server_script' then

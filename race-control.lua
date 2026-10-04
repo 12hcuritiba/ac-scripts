@@ -2004,6 +2004,34 @@ do
   local COCKPIT_REQUEST = 'amxracing.race-control.cockpit'
   local COCKPIT_ANSWER = 'amxracing.race-control.cockpit.state'
   AppLink.cockpitState = {}
+  local COCKPIT_CHANNELS = { 'main', 'engine', 'transmission', 'tyres', 'surfaces', 'dirt', 'wind', 'opponents',
+    'carComponents', 'track', 'weather', 'rain', 'wipers' }
+  local COCKPIT_STORE = '.amxracing.race-control.cockpit'
+  local storeLogged = false
+  function AppLink.cockpitRead(car)
+    local st = {}
+    local kept = ac.load and ac.load(COCKPIT_STORE)
+    if type(kept) == 'string' and kept ~= '' then
+      for item, value in kept:gmatch('([%w%.]+)=(%-?[%d%.]+)') do st[item] = tonumber(value) end
+      if not storeLogged then
+        storeLogged = true
+        ac.log('race-control: cockpit: values of the app read from the shared storage: ' .. kept:sub(1, 160))
+      end
+    end
+    for k, v in pairs(AppLink.cockpitState) do st[k] = v end
+    local function num(v) v = tonumber(v); return v and v == v and v or nil end
+    st.ffb = num(car and car.ffbMultiplier) or st.ffb
+    st.fov = num(ac.getSim().firstPersonCameraFOV) or st.fov
+    local eyes = car and car.driverEyesPosition
+    if eyes then st.x, st.y = num(eyes.x) or st.x, num(eyes.y) or st.y end
+    if ac.getAudioVolume then
+      for _, ch in ipairs(COCKPIT_CHANNELS) do
+        local v = num(ac.getAudioVolume(ch, nil, -1))
+        if v and v >= 0 then st['vol.' .. ch] = v end
+      end
+    end
+    return st
+  end
   AppLink.cockpitSavedT = nil
   local cockpitAsk = { t = nil, answered = false, warned = false }
   function AppLink.cockpit(text)
@@ -10529,7 +10557,7 @@ local drawRaceScreens = (function()
   end
   local function cockpitScreen(car, w, h, s)
     if state.ui.clock - cockpit.askT >= 2 then cockpit.askT = state.ui.clock; AppLink.cockpit('state') end
-    local st = AppLink.cockpitState or {}
+    local st = AppLink.cockpitRead(car)
     local focus = Desktop.focus == 'cockpit'
     local p1, p2, y = frame('cockpit', w, h, s, #COCKPIT_ROWS + 1, TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp)
     do
@@ -10548,7 +10576,10 @@ local drawRaceScreens = (function()
       local label = lit and TEXTS.cockpitSaved or TEXTS.cockpitSave
       local lw = textWidth(label, FONT_MONO, 9 * s)
       drawText(label, FONT_MONO, 9 * s, vec2((a.x + b.x) / 2 - lw / 2, a.y + 0.5 * s), lit and rgbm(0.07, 0.07, 0.07, 1) or COLOR_TITLE)
-      Drag.clickable(a, b, function() AppLink.cockpit('save') end)
+      Drag.clickable(a, b, function()
+        AppLink.cockpit('save')
+        if AppLink.alive then AppLink.cockpitSavedT = state.ui.clock end
+      end)
       y = y + ROW * s
     end
     for i, r in ipairs(COCKPIT_ROWS) do
