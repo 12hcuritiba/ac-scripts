@@ -745,7 +745,7 @@ local config = (function()
     tyreLife = structKey('tyreLife', { ok = 70, worn = 30 }),
     tyreTemp = structKey('tyreTemp', { edge = 98 }),
     wrongWay = structKey('wrongWay', { maxMeters = 60, penalty = 'DSQ', showMeters = 2, angle = 110 }),
-    parkedCar = structKey('parkedCar', { seconds = 10, distance = 24, grace = 0, fuelRaceSeconds = 60, moveSeconds = 10 }),
+    parkedCar = structKey('parkedCar', { seconds = 6, distance = 24, grace = 0, fuelRaceSeconds = 60, moveSeconds = 10 }),
     flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
       greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30,
       redOverSeconds = 10, redNoLineSG = 120, yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
