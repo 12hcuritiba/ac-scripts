@@ -4409,14 +4409,19 @@ do
   function PitBox.logSpinners(why)
     local parts = {}
     for i, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
-      parts[#parts + 1] = string.format('%d:%s/%s=%s[%s..%s]%s', i, tostring(sp.name), tostring(sp.type), tostring(sp.value),
-        tostring(sp.min), tostring(sp.max), sp.readOnly and 'ro' or '')
+      local vals = {}
+      if type(sp.values) == 'table' then for k = 1, #sp.values do vals[#vals + 1] = tostring(sp.values[k]) end end
+      parts[#parts + 1] = string.format('%d:%s/%s=%s[%s..%s]%s{%s:%s}', i, tostring(sp.name), tostring(sp.type), tostring(sp.value),
+        tostring(sp.min), tostring(sp.max), sp.readOnly and 'ro' or '', type(sp.values), table.concat(vals, ','))
     end
-    ac.log('race-control: pit stop spinners (' .. why .. '): ' .. (#parts > 0 and table.concat(parts, ' ') or 'none'))
+    ac.log('race-control: pit stop spinners (' .. why .. '): ' .. (#parts > 0 and table.concat(parts, ' ') or 'none')
+      .. string.format('; presets %d, preset of the game %s', presetCount(), tostring(sim.currentQuickPitPreset)))
   end
   function PitBox.logSpinnersOnce()
-    if loggedSession == sim.currentSessionIndex then return end
-    loggedSession = sim.currentSessionIndex
+    local n = #(ac.getPitstopSpinners and ac.getPitstopSpinners() or {})
+    local key = tostring(sim.currentSessionIndex) .. '|' .. n
+    if loggedSession == key then return end
+    loggedSession = key
     PitBox.logSpinners('session')
   end
   local function buildRows()
@@ -4720,6 +4725,7 @@ do
       ac.disableExtraHUDElements('quickPitsMenu', true)
       menuOff = true
     end
+    PitBox.logSpinnersOnce()
     local sv = state.pitService
     if sv then
       if serverTimeMs() >= sv.untilMs and CarState.ready() then
@@ -5584,7 +5590,6 @@ do
     end
     if red and Flags.onGrid then red[4], red[5] = TEXTS.srCancelled, TEXTS.srGridLocked end
     if not red and Flags.standingFlag then red = Flags.standingFlag(car) end
-    if not red and Flags.parkedFlag then yellow = Flags.parkedFlag() end
     if state.code80 and not yellow then
       yellow = { 2, 'yellow', TEXTS.flagCode80[state.code80] or state.code80, TEXTS.flagCode80Line,
         restartText() or TEXTS.flagRaceControl }
@@ -5660,6 +5665,7 @@ do
     if osl and not st then st = { 2, 'start', TEXTS.osTitle, osl, '' } end
     if st and st[1] == 2 and not yellow then yellow = st end
     if st and st[1] == 5 then normal = st end
+    if not red and not yellow and Flags.parkedFlag then yellow = Flags.parkedFlag() end
     local f = red or yellow or info or normal
     if not f then return nil end
     return { group = f[1], kind = f[2], title = f[3], line1 = f[4], line2 = f[5], alert = f[6], lights = f[7] }
@@ -6224,13 +6230,14 @@ do
   end
 end
 do
-  local P = { count = 0, winT = nil, winPos = nil, fuelStop = false, fuelInvalid = false, invLap = nil, elapsed = 0 }
+  local P = { count = 0, winT = nil, winPos = nil, fuelStop = false, fuelInvalid = false, invLap = nil, elapsed = 0, detected = false }
   function Flags.parkedReset()
-    P.count, P.winT, P.winPos, P.fuelStop, P.fuelInvalid, P.invLap, P.elapsed = 0, nil, nil, false, false, nil, 0
+    P.count, P.winT, P.winPos, P.fuelStop, P.fuelInvalid, P.invLap, P.elapsed, P.detected = 0, nil, nil, false, false, nil, 0, false
     Flags.parkedLine = nil
   end
   local function watched(car)
-    return sim.isSessionStarted and not car.isInPitlane and not state.hold and not state.redFlag and not state.restart
+    return sim.isSessionStarted and not car.isInPitlane and not car.isInPit and not CarRead.parked(car) and not state.hold
+      and not state.redFlag and not state.restart
       and not Flags.onGrid and Flags.ending ~= 'finished' and not (state.dtDsqActive or state.pitDsqActive)
   end
   local function detection(car)
@@ -6276,7 +6283,7 @@ do
     end
     Flags.parkedLine = nil
     if rule.grace < 0 or not watched(car) or not car.position then
-      P.winT, P.winPos, P.elapsed = nil, nil, 0
+      P.winT, P.winPos, P.elapsed, P.detected = nil, nil, 0, false
       return
     end
     local pos = car.position
@@ -6284,14 +6291,16 @@ do
     if not P.winT then P.winT, P.winPos = clock, { x = pos.x, z = pos.z } end
     local moved = math.sqrt((pos.x - P.winPos.x) ^ 2 + (pos.z - P.winPos.z) ^ 2)
     if moved >= rule.distance then
-      P.winT, P.winPos, P.fuelStop = clock, { x = pos.x, z = pos.z }, false
+      P.winT, P.winPos, P.fuelStop, P.detected = clock, { x = pos.x, z = pos.z }, false, false
       P.elapsed = 0
       return
     end
+    if P.detected then return end
     P.elapsed = clock - P.winT
     if P.elapsed >= rule.seconds then
+      P.detected = true
       detection(car)
-      P.winT, P.winPos, P.elapsed = clock, { x = pos.x, z = pos.z }, 0
+      return
     end
     if P.elapsed >= 1 and state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1
         and not (state.dtDsqActive or state.pitDsqActive) then
@@ -6302,7 +6311,7 @@ do
   function Flags.parkedFlag()
     local l = Flags.parkedLine
     if not l then return nil end
-    return { 2, 'yellow', TEXTS.parkedFlagTitle, l[1], l[2], true }
+    return { 2, 'yellow', TEXTS.parkedFlagTitle, l[1], l[2], false }
   end
 end
 local PassMirror = { seq = 0, loaded = 0, last = nil, red = nil }
@@ -9511,7 +9520,12 @@ local drawRaceScreens = (function()
       local minute, sl = Radar.draw(vec2(p1.x + 10 * s, y + 18 * s), side, s, fc, big)
       if big then
         drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 10 * s, vec2(zx + 6 * s, y), YELLOW)
-        drawText(tostring(sl.name), FONT_MONO, 9 * s, vec2(zx + 46 * s, y + 1 * s), COLOR_TITLE)
+        local nm, room = tostring(sl.name), sa.x - 6 * s - (zx + 46 * s)
+        if textWidth(nm, FONT_MONO, 9 * s) > room then
+          while #nm > 1 and textWidth(nm .. '...', FONT_MONO, 9 * s) > room do nm = nm:sub(1, -2) end
+          nm = nm .. '...'
+        end
+        drawText(nm, FONT_MONO, 9 * s, vec2(zx + 46 * s, y + 1 * s), COLOR_TITLE)
         local ly = y + 18 * s + side + 8 * s
         drawText(TEXTS.scrRadarPrec, FONT_MONO, 8.5 * s, vec2(p1.x + 14 * s, ly), COLOR_DIM)
         local bx1, bx2 = p1.x + 100 * s, p2.x - 14 * s
@@ -9524,7 +9538,12 @@ local drawRaceScreens = (function()
         drawText(TEXTS.scrRadarHeavy, FONT_MONO, 8 * s, vec2(bx1 + (bx2 - bx1) * 0.55 - 12 * s, ly + 11 * s), COLOR_DIM)
         drawTextRight(TEXTS.scrRadarExtreme, FONT_MONO, 8 * s, bx2, ly + 11 * s, COLOR_DIM)
         drawText(TEXTS.scrRadarClouds, FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 25 * s), COLOR_DIM)
-        drawText(string.format(TEXTS.scrRadarLoop, #fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic), FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 37 * s), COLOR_DIM)
+        local lp, lroom = string.format(TEXTS.scrRadarLoop, #fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic), p2.x - 14 * s - (p1.x + 14 * s)
+        if textWidth(lp, FONT_MONO, 8 * s) > lroom then
+          while #lp > 1 and textWidth(lp .. '...', FONT_MONO, 8 * s) > lroom do lp = lp:sub(1, -2) end
+          lp = lp .. '...'
+        end
+        drawText(lp, FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 37 * s), COLOR_DIM)
       end
     else
       local kmhW = CarRead.num(sim.windSpeedKmh)
@@ -10108,21 +10127,27 @@ local drawRaceScreens = (function()
     return seat0[key] - 0.3, seat0[key] + 0.3
   end
   local function slider(key, v, a, b, s, on)
-    ui.drawRect(a, b, rgbm(1, 1, 1, 0.25), 2 * s)
+    ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.10), 2 * s)
+    local t = '-'
     if v ~= nil then
       local lo, hi = slideRange(key, v)
       local f = math.min(math.max((v - lo) / (hi - lo), 0), 1)
-      ui.drawRectFilled(a, vec2(a.x + (b.x - a.x) * f, b.y), on and rgbm(1, 0.85, 0.25, 0.35) or rgbm(1, 1, 1, 0.14), 2 * s)
+      ui.drawRectFilled(a, vec2(a.x + (b.x - a.x) * f, b.y), on and rgbm(1, 0.85, 0.25, 0.9) or rgbm(0.36, 0.38, 0.98, 0.9), 2 * s)
       Drag.clickable(a, b, function()
         local m = ui.mousePos()
         local k = math.min(math.max((m.x - a.x) / (b.x - a.x), 0), 1)
         local d = lo + (hi - lo) * k - v
         if math.abs(d) > 1e-6 then AppLink.cockpit(string.format('%s=%g', key, d)) end
       end)
+      local own = key == 'ffb' or key:match('^vol%.')
+      t = string.format('%.0f %%', own and v * 100 or f * 100)
+      if not own then
+        drawText(cockpitValue(key, v), FONT_MONO, FS * s, vec2(b.x + 22 * s, a.y), COLOR_DIM)
+      end
     end
-    local t = cockpitValue(key, v)
+    ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s)
     local tw = textWidth(t, FONT_MONO, FS * s)
-    drawText(t, FONT_MONO, FS * s, vec2((a.x + b.x) / 2 - tw / 2, a.y), on and YELLOW or COLOR_TITLE)
+    drawText(t, FONT_MONO, FS * s, vec2((a.x + b.x) / 2 - tw / 2, a.y), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_TITLE)
   end
   local function stepBox(text, a, s, fn)
     local b = vec2(a.x + 14 * s, a.y + 12 * s)
@@ -10606,7 +10631,11 @@ local drawDesktopUI = (function()
     local tw = textWidth(text, FONT_MONO, 9 * s)
     local a, b = vec2(p.x, p.y), vec2(p.x + tw + 10 * s, p.y + 14 * s)
     if on then ui.drawRectFilled(a, b, PANEL_COLORS.yellow, 3 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 3 * s) end
-    drawText(text, FONT_MONO, 9 * s, vec2(a.x + 5 * s, a.y + 1.5 * s), on and rgbm(0.07, 0.07, 0.07, 1) or (color or COLOR_DIM))
+    local cs = math.max(9 * s, Desktop.text.minPx)
+    ui.pushDWriteFont(FONT_MONO)
+    local th = ui.measureDWriteText(text, cs).y
+    ui.popDWriteFont()
+    drawText(text, FONT_MONO, 9 * s, vec2(a.x + 5 * s, a.y + (b.y - a.y - th) / 2), on and rgbm(0.07, 0.07, 0.07, 1) or (color or COLOR_DIM))
     if fn then Drag.clickable(a, b, fn) end
     return b.x + 4 * s
   end
@@ -11309,14 +11338,28 @@ local drawDesktopUI = (function()
       else armKey, redArm = key, state.ui.clock + 5 end
     end)
   end
+  local function rowY(text, font, size, y, s)
+    size = math.max(size, Desktop.text.minPx)
+    ui.pushDWriteFont(font)
+    local th = ui.measureDWriteText(text, size).y
+    ui.popDWriteFont()
+    return y - 1 * s + (14 * s - th) / 2
+  end
+  local function rowLabel(text, font, size, x, y, s, color)
+    drawText(text, font, size, vec2(x, rowY(text, font, size, y, s)), color)
+  end
   local function ownField(key, fa, fb, value, masked, s)
     local on = Direction.focus == key
     ui.drawRectFilled(fa, fb, rgbm(0, 0, 0, 0.5), 2 * s)
     ui.drawRect(fa, fb, on and PANEL_COLORS.yellow or rgbm(1, 1, 1, 0.35), 2 * s)
     local caret = on and math.floor(state.ui.clock * 2) % 2 == 0 and '|' or ''
     ui.pushClipRect(fa, fb)
-    drawText((masked and string.rep('*', #value) or value) .. caret, FONT_MONO, 10 * s, vec2(fa.x + 4 * s, fa.y + 1 * s),
-      COLOR_TITLE)
+    local shown = (masked and string.rep('*', #value) or value) .. caret
+    local ms = math.max(10 * s, Desktop.text.minPx)
+    ui.pushDWriteFont(FONT_MONO)
+    local th = ui.measureDWriteText(shown ~= '' and shown or 'X', ms).y
+    ui.popDWriteFont()
+    drawText(shown, FONT_MONO, 10 * s, vec2(fa.x + 4 * s, fa.y + (fb.y - fa.y - th) / 2), COLOR_TITLE)
     ui.popClipRect()
     Drag.clickable(fa, fb, function() Direction.focus = key end)
     local enter = false
@@ -11731,16 +11774,16 @@ local drawDesktopUI = (function()
     y = y + (cmd and 22 or 16) * s
     if cmd then
       if state.kmrAdmin then
-        drawText(TEXTS.redKmrOn, FONT_MONO, 9.5 * s, vec2(x0, y + 1 * s), PANEL_COLORS.green)
+        rowLabel(TEXTS.redKmrOn, FONT_MONO, 9.5 * s, x0, y, s, PANEL_COLORS.green)
         chip(TEXTS.dirLogout, vec2(x0 + textWidth(TEXTS.redKmrOn, FONT_MONO, 9.5 * s) + 10 * s, y - 1 * s), s, false, PANEL_COLORS.red, function()
           state.kmrAdmin, Direction.probe = false, nil
           Direction.status, Direction.statusT, Direction.statusColor = TEXTS.dirLoggedOut, state.ui.clock, COLOR_TITLE
           ac.log('race-control: race direction: KMR login no longer used (logout on this screen)')
         end)
       else
-        drawText(TEXTS.dirLogin, FONT_TEXT, 10 * s, vec2(x0, y), COLOR_TITLE)
+        rowLabel(TEXTS.dirLogin, FONT_TEXT, 10 * s, x0, y, s, COLOR_TITLE)
         local enter
-        Direction.pwd, enter = ownField('pwd', vec2(x0 + 110 * s, y - 2 * s), vec2(x0 + 270 * s, y + 13 * s),
+        Direction.pwd, enter = ownField('pwd', vec2(x0 + 110 * s, y - 1 * s), vec2(x0 + 270 * s, y + 13 * s),
           Direction.pwd, true, s)
         do
           if enter and Direction.pwd ~= '' then
@@ -11754,10 +11797,10 @@ local drawDesktopUI = (function()
       end
       do
         local px = x0 + 340 * s
-        drawText(TEXTS.dirPrompt, FONT_TEXT, 10 * s, vec2(px, y), COLOR_TITLE)
+        rowLabel(TEXTS.dirPrompt, FONT_TEXT, 10 * s, px, y, s, COLOR_TITLE)
         local fx = px + textWidth(TEXTS.dirPrompt, FONT_TEXT, 10 * s) + 8 * s
         local enter
-        Direction.prompt, enter = ownField('prompt', vec2(fx, y - 2 * s), vec2(p2.x - 14 * s, y + 13 * s),
+        Direction.prompt, enter = ownField('prompt', vec2(fx, y - 1 * s), vec2(p2.x - 14 * s, y + 13 * s),
           Direction.prompt or '', false, s)
         if enter and (Direction.prompt or ''):match('%S') then
           queueCommand(Direction.prompt)
@@ -11773,8 +11816,8 @@ local drawDesktopUI = (function()
         Direction.status, Direction.statusColor = TEXTS.dirNoAnswer, PANEL_COLORS.red
       end
       y = y + 22 * s
-      drawText(TEXTS.dirDriver, FONT_TEXT, 10 * s, vec2(x0, y), COLOR_TITLE)
-      Direction.target = ownField('name', vec2(x0 + 110 * s, y - 2 * s), vec2(x0 + 330 * s, y + 13 * s), Direction.target,
+      rowLabel(TEXTS.dirDriver, FONT_TEXT, 10 * s, x0, y, s, COLOR_TITLE)
+      Direction.target = ownField('name', vec2(x0 + 110 * s, y - 1 * s), vec2(x0 + 330 * s, y + 13 * s), Direction.target,
         false, s)
       local tx = x0 + 340 * s
       tx = confirmChip(TEXTS.dirMoney, 'tmoney', vec2(tx, y - 1 * s), s, nil, function()
@@ -11790,8 +11833,8 @@ local drawDesktopUI = (function()
         if Direction.listOpen and state.kmrAdmin then queueCommand('/kmr player_list') end
       end)
       local vx = tx + 10 * s
-      drawText(TEXTS.dirValue, FONT_TEXT, 10 * s, vec2(vx, y), COLOR_TITLE)
-      Direction.value = (ownField('value', vec2(vx + 40 * s, y - 2 * s), vec2(vx + 90 * s, y + 13 * s),
+      rowLabel(TEXTS.dirValue, FONT_TEXT, 10 * s, vx, y, s, COLOR_TITLE)
+      Direction.value = (ownField('value', vec2(vx + 40 * s, y - 1 * s), vec2(vx + 90 * s, y + 13 * s),
         Direction.value or '', false, s):gsub('%D', ''))
       local function acsm(cmd, label)
         local slot
