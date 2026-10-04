@@ -1994,10 +1994,12 @@ do
     if ok and body and body ~= T.sig then T.sig = body; Record.save('box', math.floor(serverTimeMs() / 1000), body) end
   end
   B.plan = { nextT = 0, busy = false, done = tostring(ac.storage['rc.pitplan'] or '') }
+  local PLAN_PIT_GAP = 2
   function B.planUpdate()
     local P = B.plan
     if not on() or P.busy or state.ui.clock < P.nextT or not (B.app and B.app.alive) then return end
-    P.busy, P.nextT = true, state.ui.clock + PLAN_GAP
+    local car = ac.getCar(0)
+    P.busy, P.nextT = true, state.ui.clock + ((car and car.isInPitlane) and PLAN_PIT_GAP or PLAN_GAP)
     WebQueue.request('GET', config.baseUrl .. '/v1/pitplan?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
       P.busy = false
       if err or not res or tonumber(res.status) ~= 200 then return end
