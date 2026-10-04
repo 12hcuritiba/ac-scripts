@@ -437,7 +437,7 @@ local TEXTS = {
   where = { menu = 'MENU (ESC)', box = 'BOX (LOBBY)', pit = 'PIT', pitlane = 'PIT LANE', grid = 'GRID', stopped = 'STOPPED',
     track = 'TRACK' }, redCount = 'In the pits %d / %d - over the limit %d',
   scrPerf = 'PERFORMANCE', perfRows = { fps = 'FPS', cpu = 'CPU', gpu = 'GPU' },
-  scrCockpit = 'COCKPIT', cockpitNoApp = 'app not running', cockpitMore = '+ ALL', cockpitAudio = 'VOLUME - EVERY CHANNEL',
+  scrCockpit = 'COCKPIT', cockpitCar = 'Settings of this car: %s', cockpitSave = 'SAVE', cockpitSaved = 'SAVED', cockpitNoApp = 'app not running', cockpitMore = '+ ALL', cockpitAudio = 'VOLUME - EVERY CHANNEL',
   cockpitRows = { ffb = 'Force feedback', y = 'Seat up / down', x = 'Seat left / right', pitch = 'Pitch up / down',
     fov = 'Field of view', ['vol.main'] = 'Volume (master)' },
   cockpitChannels = { engine = 'Engine', transmission = 'Transmission', tyres = 'Tyres', surfaces = 'Surfaces', dirt = 'Dirt',
@@ -2004,6 +2004,7 @@ do
   local COCKPIT_REQUEST = 'amxracing.race-control.cockpit'
   local COCKPIT_ANSWER = 'amxracing.race-control.cockpit.state'
   AppLink.cockpitState = {}
+  AppLink.cockpitSavedT = nil
   local cockpitAsk = { t = nil, answered = false, warned = false }
   function AppLink.cockpit(text)
     ac.broadcastSharedEvent(COCKPIT_REQUEST, text)
@@ -2020,6 +2021,11 @@ do
       cockpitAsk.answered = true
       ac.log(string.format('race-control: cockpit: first answer of the app (%s, %s): %d values, %d characters: %s', tostring(senderName),
         tostring(senderType), n, #tostring(data or ''), tostring(data or ''):sub(1, 160)))
+    end
+    if st.saved then
+      st.saved = nil
+      AppLink.cockpitSavedT = state.ui.clock
+      ac.log('race-control: cockpit: values saved by the app for the car')
     end
     AppLink.cockpitState = st
   end)
@@ -10525,7 +10531,26 @@ local drawRaceScreens = (function()
     if state.ui.clock - cockpit.askT >= 2 then cockpit.askT = state.ui.clock; AppLink.cockpit('state') end
     local st = AppLink.cockpitState or {}
     local focus = Desktop.focus == 'cockpit'
-    local p1, p2, y = frame('cockpit', w, h, s, #COCKPIT_ROWS, TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp)
+    local p1, p2, y = frame('cockpit', w, h, s, #COCKPIT_ROWS + 1, TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp)
+    do
+      local a = vec2(p2.x - 14 * s - 46 * s, y)
+      local b = vec2(p2.x - 14 * s, y + 12 * s)
+      local name = tostring(ac.getCarName and ac.getCarName(0) or ac.getCarID(0) or '')
+      local t = string.format(TEXTS.cockpitCar, name)
+      local tw = a.x - 8 * s - (p1.x + 14 * s)
+      if textWidth(t, FONT_TEXT, FS * s) > tw then
+        while #t > 1 and textWidth(t .. '...', FONT_TEXT, FS * s) > tw do t = t:sub(1, -2) end
+        t = t .. '...'
+      end
+      drawText(t, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+      local lit = AppLink.cockpitSavedT and state.ui.clock - AppLink.cockpitSavedT < 3
+      if lit then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s) end
+      local label = lit and TEXTS.cockpitSaved or TEXTS.cockpitSave
+      local lw = textWidth(label, FONT_MONO, 9 * s)
+      drawText(label, FONT_MONO, 9 * s, vec2((a.x + b.x) / 2 - lw / 2, a.y + 0.5 * s), lit and rgbm(0.07, 0.07, 0.07, 1) or COLOR_TITLE)
+      Drag.clickable(a, b, function() AppLink.cockpit('save') end)
+      y = y + ROW * s
+    end
     for i, r in ipairs(COCKPIT_ROWS) do
       local on = focus and cockpit.row == i
       drawText(TEXTS.cockpitRows[r.key], FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), on and YELLOW or COLOR_DIM)

@@ -221,8 +221,50 @@ local function cockpitState()
   return table.concat(out, ';')
 end
 local function clamp(v, a, b) return math.min(math.max(v, a), b) end
+local COCKPIT_APPLY_SECONDS = 3
+local function cockpitKey() return 'cockpit.' .. tostring(ac.getCarID(0) or 'car') end
+local function cockpitApply(text)
+  local seat, n = nil, 0
+  for item, value in tostring(text or ''):gmatch('([%w%.]+)=(%-?[%d%.]+)') do
+    local v = tonumber(value)
+    if v then
+      n = n + 1
+      if item == 'ffb' then ac.setFFBMultiplier(clamp(v, 0, 2))
+      elseif item == 'fov' then ac.setFirstPersonCameraFOV(clamp(v, 10, 120))
+      elseif item == 'x' or item == 'y' or item == 'pitch' then
+        if not seat then local ok, p = pcall(ac.getOnboardCameraParams, 0); seat = ok and p or false end
+        if seat then
+          if item == 'pitch' then seat.pitch = clamp(v, -30, 30) else seat.position[item] = v end
+        end
+      elseif item:match('^vol%.') then ac.setAudioVolume(item:sub(5), clamp(v, 0, 1))
+      end
+    end
+  end
+  if seat then pcall(ac.setOnboardCameraParams, 0, seat, true) end
+  return n
+end
+if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
+  local waited, applied = 0, false
+  setInterval(function()
+    if applied then return end
+    waited = waited + 1
+    if waited < COCKPIT_APPLY_SECONDS then return end
+    applied = true
+    local saved = ac.storage[cockpitKey()]
+    if saved and saved ~= '' then
+      ac.log(string.format('race-control app: cockpit values saved for %s applied: %d', cockpitKey(), cockpitApply(saved)))
+    end
+  end, 1)
+end
 ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
   if senderType ~= 'server_script' then return end
+  if tostring(data or '') == 'save' then
+    local now = cockpitState()
+    ac.storage[cockpitKey()] = now
+    ac.log('race-control app: cockpit values saved for ' .. cockpitKey() .. ': ' .. now)
+    ac.broadcastSharedEvent(COCKPIT_ANSWER, now .. ';saved=1')
+    return
+  end
   local seat = nil
   for item, delta in tostring(data or ''):gmatch('([%w%.]+)=(%-?[%d%.]+)') do
     local d = tonumber(delta) or 0
