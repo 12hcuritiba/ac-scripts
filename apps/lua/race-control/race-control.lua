@@ -322,3 +322,64 @@ ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
   ac.log('race-control app: preset ' .. tostring(data) .. ' -> ' .. text)
   ac.broadcastSharedEvent(APP_ANSWER, text)
 end)
+local SETUP_STORE = '.amxracing.race-control.setup'
+local SETUP_SECONDS = 15
+local function setupText()
+  local ok, list = pcall(ac.getSetupSpinners)
+  if not ok or type(list) ~= 'table' then return '' end
+  local out = {}
+  for _, s in ipairs(list) do
+    local raw = tonumber(s.value) or 0
+    local shown
+    if type(s.items) == 'table' and s.items[raw - (tonumber(s.min) or 0) + 1] then shown = tostring(s.items[raw - (tonumber(s.min) or 0) + 1])
+    else shown = string.format('%g', raw * (tonumber(s.displayMultiplier) or 1)) end
+    local label = tostring(s.label or s.name or ''):gsub('[|;=%c]', ' ')
+    out[#out + 1] = label .. '=' .. shown:gsub('[|;=%c]', ' ') .. (s.units and s.units ~= '' and (' ' .. tostring(s.units):gsub('[|;=%c]', ' ')) or '')
+  end
+  return table.concat(out, ';')
+end
+local function keepSetup(why)
+  local text = setupText()
+  if text ~= '' then ac.store(SETUP_STORE, text) end
+  if why then ac.log('race-control app: setup kept (' .. why .. '): ' .. #text .. ' characters') end
+end
+if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
+  setTimeout(function() keepSetup('load') end, 3)
+  setInterval(function() keepSetup() end, SETUP_SECONDS)
+  if ac.onSetupFile then ac.onSetupFile(function(op) keepSetup(tostring(op)) end) end
+end
+local PUSH_STORE, PUSH_DONE = '.amxracing.race-control.setuppush', '.amxracing.race-control.setuppush.done'
+local PUSH_TOLD_SECONDS = 15
+if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
+  local push = { id = nil, answered = {}, toldT = -1e9, clock = 0 }
+  local function answer(id, st, why)
+    push.answered[id] = true
+    local reason = tostring(why or ''):gsub('[|%c]', ' ')
+    ac.store(PUSH_DONE, id .. '|' .. st .. '|' .. reason)
+    ac.log('race-control app: team setup ' .. id .. ': ' .. st .. (reason ~= '' and (' (' .. reason .. ')') or ''))
+  end
+  setInterval(function()
+    push.clock = push.clock + 1
+    local raw = ac.load and ac.load(PUSH_STORE)
+    if type(raw) ~= 'string' or raw == '' then return end
+    local id, name, ini = raw:match('^([%w%-]+)|([^\n]*)\n(.*)$')
+    if not id or push.answered[id] then return end
+    if push.id ~= id then
+      push.id, push.toldT = id, -1e9
+      ac.log('race-control app: team setup received: ' .. id .. ' ' .. name .. ', ' .. #ini .. ' characters')
+    end
+    local okE, editable = pcall(ac.isSetupAvailableToEdit)
+    if not (okE and editable) or push.clock - push.toldT < PUSH_TOLD_SECONDS then return end
+    push.toldT = push.clock
+    local toast = ui.toast(ui.Icons.Wrench, 'Setup from your team: ' .. name .. '###rc-team-setup')
+    toast:button(ui.Icons.Confirm, 'Apply', function()
+      if push.answered[id] then return end
+      local ok, res = pcall(ac.loadSetup, ini)
+      if ok and res then answer(id, 'aplicado', '')
+      else answer(id, 'falhou', ok and 'refused by the game: not in the setup menu or the setup is fixed' or tostring(res)) end
+    end)
+    toast:button(ui.Icons.Cancel, 'Refuse', function()
+      if not push.answered[id] then answer(id, 'recusado', 'refused by the driver') end
+    end)
+  end, 1)
+end

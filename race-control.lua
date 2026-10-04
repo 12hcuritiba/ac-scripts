@@ -549,6 +549,7 @@ local TEXTS = {
   flagRestart = 'Restart P%d - behind %s', flagRestartFirst = 'Restart P%d - first car',
   flagRestartSwap = 'Restart P%d - driver swap: back of the field, behind %s',
   appMissing = 'Racing Control app not running - install it from the event page - the game closes in %d s',
+  teamSetup = 'Setup from your team: %s - open the setup menu in the pits to apply or refuse it',
   realNameMissing = 'Registration incomplete - you cannot take part in this session - missing: %s - complete it in the 12h Curitiba app',
   realNameWhat = { cadastro = 'registration', steam = 'Steam account confirmed', nome = 'real name' },
   realNameOffline = 'Registration not confirmed - the base of the event does not answer - wait for it before the session starts',
@@ -1953,6 +1954,89 @@ do
     if R.asked ~= R.game then return TEXTS.shareNoAnswer, 'warn' end
     return nil
   end
+  local STRAT_GAP, PLAN_GAP = 5, 10
+  local SETUP_STORE = '.amxracing.race-control.setup'
+  local clean = function(s) return (tostring(s or ''):gsub('[|;,/=\r\n]', ' ')) end
+  B.strat = { sig = nil, nextT = 0, setupSig = nil }
+  function B.stratUpdate()
+    local T = B.strat
+    if not on() or state.ui.clock < T.nextT then return end
+    T.nextT = state.ui.clock + STRAT_GAP
+    local parts = {}
+    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+      local vals = {}
+      if type(sp.values) == 'table' then for k = 1, #sp.values do vals[#vals + 1] = tostring(math.floor(tonumber(sp.values[k]) or 0)) end end
+      parts[#parts + 1] = table.concat({ clean(sp.name), clean(sp.type), tostring(math.floor(tonumber(sp.min) or 0)), tostring(math.floor(tonumber(sp.max) or 0)),
+        tostring(math.floor(tonumber(sp.value) or 0)), table.concat(vals, '/') }, ',')
+    end
+    if #parts > 0 then
+      local body = tostring(sim.currentQuickPitPreset or 0) .. '|' .. table.concat(parts, ';')
+      if body ~= T.sig then T.sig = body; Record.save('strat', math.floor(serverTimeMs() / 1000), body) end
+    end
+    local kept = ac.load and ac.load(SETUP_STORE)
+    if type(kept) == 'string' and kept ~= '' then
+      local legal, why = 'legal', ''
+      if ac.getCarSetupState then local ok, s, r = pcall(ac.getCarSetupState); if ok and s then legal, why = tostring(s), clean(r) end end
+      local body = legal .. '|' .. why .. '|' .. kept
+      if body ~= T.setupSig then T.setupSig = body; Record.save('setup', math.floor(serverTimeMs() / 1000), body) end
+    end
+  end
+  B.plan = { nextT = 0, busy = false, done = tostring(ac.storage['rc.pitplan'] or '') }
+  function B.planUpdate()
+    local P = B.plan
+    if not on() or P.busy or state.ui.clock < P.nextT or not (B.app and B.app.alive) then return end
+    P.busy, P.nextT = true, state.ui.clock + PLAN_GAP
+    WebQueue.request('GET', config.baseUrl .. '/v1/pitplan?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
+      P.busy = false
+      if err or not res or tonumber(res.status) ~= 200 then return end
+      local id, preset, list = tostring(res.body or ''):match('^OK|([%w%-]+)|(%d+)|([^\r\n]*)')
+      if not id or id == P.done then return end
+      local changes = {}
+      for name, value in list:gmatch('([^;=]+)=(%-?%d+)') do changes[#changes + 1] = { name = name, value = tonumber(value) } end
+      P.done = id
+      ac.storage['rc.pitplan'] = id
+      if #changes == 0 then return end
+      B.app.setPreset(changes, tonumber(preset) or 0)
+      B.strat.nextT, B.strat.sig = state.ui.clock + 2, nil
+      rcLog('Pit stop plan', string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
+      WebQueue.request('POST', config.baseUrl .. '/v1/pitplan/done', { ['Content-Type'] = 'application/json' },
+        '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"id":' .. jsonStr(id) .. '}', function() end)
+    end)
+  end
+  local PUSH_STORE, PUSH_DONE, PUSH_EVENT = '.amxracing.race-control.setuppush', '.amxracing.race-control.setuppush.done', 'amxracing.race-control.setuppush'
+  B.spush = { nextT = 0, busy = false, id = nil, answered = nil }
+  local function pushDone(id, st, reason)
+    WebQueue.request('POST', config.baseUrl .. '/v1/setuppush/done', { ['Content-Type'] = 'application/json' },
+      '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"id":' .. jsonStr(id) .. ',"state":' .. jsonStr(st) .. ',"reason":' .. jsonStr(reason or '') .. '}',
+      function() end)
+  end
+  function B.setupPushUpdate()
+    local P = B.spush
+    if not on() or not (B.app and B.app.alive) then return end
+    local done = ac.load and ac.load(PUSH_DONE)
+    if type(done) == 'string' then
+      local id, st, why = done:match('^([%w%-]+)|(%a+)|(.*)$')
+      if id and id ~= P.answered then
+        P.answered = id
+        rcLog('Team setup', string.format('answer of the driver: %s%s', st, why ~= '' and (' - ' .. why) or ''))
+        pushDone(id, st, why)
+      end
+    end
+    if P.busy or state.ui.clock < P.nextT then return end
+    P.busy, P.nextT = true, state.ui.clock + PLAN_GAP
+    WebQueue.request('GET', config.baseUrl .. '/v1/setuppush?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
+      P.busy = false
+      if err or not res or tonumber(res.status) ~= 200 then return end
+      local id, name, ini = tostring(res.body or ''):match('^OK|([%w%-]+)|([^\r\n]*)\r?\n(.*)$')
+      if not id or id == P.id then return end
+      P.id = id
+      ac.store(PUSH_STORE, id .. '|' .. name .. '\n' .. ini)
+      ac.broadcastSharedEvent(PUSH_EVENT, id)
+      rcLog('Team setup', string.format('from the Racing Room: %s - apply it in the setup menu', name))
+      showNotice(TEXTS.rcTitle, string.format(TEXTS.teamSetup, name), nil, 8)
+      pushDone(id, 'entregue', '')
+    end)
+  end
   local publish = Record.onSave
   Record.onSave = function(list, seq, text)
     if publish then publish(list, seq, text) end
@@ -1960,6 +2044,7 @@ do
   end
 end
 local AppLink = { alive = false }
+RecordSync.base.app = AppLink
 do
   local APP_REQUEST = 'amxracing.race-control.preset'
   local APP_ANSWER = 'amxracing.race-control.preset.done'
@@ -10754,6 +10839,7 @@ local KmrEvents = (function()
     end
     return (m.reviewed == 1 and TEXTS.kmrEvReviewed or '') .. table.concat(out, ' ')
   end
+  local SESSION_SLACK_MS = 60000
   local function rows()
     local lastId
     for _, e in ipairs(io.events) do
@@ -10765,7 +10851,8 @@ local KmrEvents = (function()
       local e = io.events[i]
       local okKind = M.filter == 'all' or (M.filter == 'collision' and e.type == 'collision') or (M.filter == 'cut' and e.type == 'cut')
         or (M.filter == 'generic' and e.type ~= 'collision' and e.type ~= 'cut')
-      local okSession = not M.last or (type(e.session_info) == 'table' and e.session_info.id == lastId)
+      local id = type(e.session_info) == 'table' and tonumber(e.session_info.id)
+      local okSession = not M.last or (id ~= nil and lastId - id <= SESSION_SLACK_MS)
       if okKind and okSession then out[#out + 1] = e end
     end
     return out
@@ -13229,6 +13316,9 @@ function script.update(dt)
   RecordSync.base.bestUpdate()
   RecordSync.base.forecastUpdate()
   RecordSync.base.rrUpdate()
+  RecordSync.base.stratUpdate()
+  RecordSync.base.planUpdate()
+  RecordSync.base.setupPushUpdate()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
     state.hold = nil
     PitRecord.save()
