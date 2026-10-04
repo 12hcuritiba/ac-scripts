@@ -83,6 +83,7 @@ local cfg = ac.configValues({
   pitSpeedTolerance = 2,
   pitSpeedDeadlineLaps = 1,
   wrongWay = '',
+  parkedCar = '',
   stopAndGo = '',
   holdShortSeconds = 45,
   holdLongSeconds = 90,
@@ -185,6 +186,8 @@ local TEXTS = {
   pitPressureFront = 'Pressure front',
   pitPressureRear = 'Pressure rear',
   pitWing = 'Wing',
+  pitStrategy = 'Strategy', pitStrategyTab = 'STRATEGY', pitPresetN = 'Preset %d', pitBack = 'Back',
+  pitStrategyHint = 'Right: use it   Left: back',
   pitPressure = 'Pressure',
   pitRepairSuspension = 'Suspension repair',
   pitRepairPowertrain = 'Powertrain repair',
@@ -294,7 +297,14 @@ local TEXTS = {
   holdTwoDT = 'Two pending drive-throughs',
   holdTwoDTLong = 'Two pending drive-throughs (pit lane speeding expired on track)',
   towReason = 'Back to pits',
+  qualiEndTow = 'tow', qualiEndHold = 'Qualifying ended - %s',
+  qualiEndNotice = 'Qualifying ended (%s) - your best valid lap counts',
   repairReason = 'Repair in the pit stop',
+  parkedFlagTitle = 'CAR STOPPED ON TRACK', parkedMove = 'Move on - %d s', parkedLeft = 'Stops tolerated left: %d of %d - over: disqualified',
+  parkedTitle = 'Car stopped on track', parkedLog = 'stop %d of %d tolerated', parkedDsq = 'Car stopped on track',
+  parkedDsqDetail = 'over %d stops of %d s', parkedTimeTitle = 'Time penalty', parkedTimeLog = '%d s - out of fuel on track',
+  parkedFuelRace = 'Out of fuel on track - %d s added to your race time', parkedFuelLaps = 'Out of fuel on track - your laps are invalid from now on',
+  parkedFuelLapsLog = 'out of fuel - laps invalid from now on',
   reason = {
     SD1 = 'Exclusion zone cut - zone 1',
     SD2 = 'Exclusion zone cut - zone 2',
@@ -473,10 +483,10 @@ local TEXTS = {
   scrClassSel = '< CLASS: %s >', scrLapsCar = 'LAPS - CAR #%s', scrLapsMore = 'MORE', scrLapsLess = 'LESS',
   scrCompare = 'COMPARE', scrDriverSel = '< DRIVER: %s >', scrStintShort = 'ST %d', scrMap = 'TRACK MAP', scrNoMap = 'No map of this track',
   scrMapLegend = { 'yellow you - blue lap ahead - beige lap down', 'grey pit - red stopped' },
-  scrWeather = 'WEATHER', scrWeatherModes = { forecast = 'FORECAST', map = 'RADAR' }, scrRadarTrack = 'TRACK', scrRadarWide = '20 KM', scrRadarBig = '+', scrRadarSmall = '-',
+  scrWeather = 'WEATHER', scrWeatherModes = { forecast = 'FORECAST', map = 'RADAR' }, scrRadarZoom = '%g KM',scrRadarBig = '+', scrRadarSmall = '-',
   scrRadarPrec = 'PRECIPITATION', scrRadarLight = 'light', scrRadarHeavy = 'heavy', scrRadarExtreme = 'extreme', scrRadarClouds = 'clouds: white = light, grey = heavy',
   scrRadarLoop = '%s - 1 hour at 6 frames per second', scrRadarNoTrack = 'No AI spline on this track',
-  scrWeatherAnim = 'forecast hour by hour', scrWeatherStatic = 'no forecast',
+  scrWeatherAnim = 'forecast hour by hour', scrWeatherStatic = 'no forecast', scrWxPage = '< %d/%d >',
   scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
   scrEvent = 'EVENT', scrEventInfo = 'event info', evStops = 'Pit stops required', evSwaps = 'Driver swaps required',
   evStint = 'Stint', evOrder = 'Pit stop order', evPitSpeed = 'Pit lane speed', evRating = 'KMR rating',
@@ -676,6 +686,7 @@ local config = (function()
   local STOP_AND_GO = structKey('stopAndGo', { mode = 'HOLD', secondsPerDT = 30, maxDT = 7, deadlineLaps = 1,
     returnSeconds = 0, holdShort = 45, holdLong = 90 })
   local TOW_RULE = { mode = 'TOW', towSeconds = 120, repairFactor = 1.5 }
+  local QUALIFY_RULE = { mode = 'END', towSeconds = 0, repairFactor = 0 }
   local REPAIR_FORMULA = structKey('repairFormula', { baseSeconds = 180, weightEngine = 1.0, weightSuspension = 0.5,
     weightBody = 0.25 })
   local DAMAGE = structKey('damage', { toeBent = 10, toeBroken = 20, camberBent = 10, camberBroken = 20, bodyRepair = 150,
@@ -725,6 +736,7 @@ local config = (function()
     tyreLife = structKey('tyreLife', { ok = 70, worn = 30 }),
     tyreTemp = structKey('tyreTemp', { edge = 98 }),
     wrongWay = structKey('wrongWay', { maxMeters = 60, penalty = 'DSQ', showMeters = 2, angle = 110 }),
+    parkedCar = structKey('parkedCar', { seconds = 6, distance = 24, grace = 4, fuelRaceSeconds = 60 }),
     flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
       greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30,
       redOverSeconds = 10, redNoLineSG = 120, yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
@@ -750,7 +762,7 @@ local config = (function()
       interval = tonumber(K('cockpitCheckInterval')) or 0.05, exempt = tostring(K('cockpitExemptSteamIDs') or '') },
     tow = bySession(
       structKey('practiceTow', { mode = 'RESET', towSeconds = 0, repairFactor = 0, clearDsq = 1 }),
-      structKey('qualifyTow', TOW_RULE),
+      structKey('qualifyTow', QUALIFY_RULE),
       structKey('raceTow', TOW_RULE)),
     repair = {
       base = REPAIR_FORMULA.baseSeconds,
@@ -1125,14 +1137,16 @@ end
 function CarRead.trackAngle(car, x, z)
   local len = tonumber(sim.trackLengthM) or 0
   local n = math.sqrt(x * x + z * z)
-  if len <= 0 or n <= 0 then return nil end
-  local p = car.position
-  local a = ac.worldCoordinateToTrackProgress(p)
-  local b = ac.worldCoordinateToTrackProgress(vec3(p.x + x / n * TRACK_PROBE_M, p.y, p.z + z / n * TRACK_PROBE_M))
-  if not a or not b or a < 0 or b < 0 then return nil end
-  local d = b - a
-  if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
-  return math.deg(math.acos(math.min(math.max(d * len / TRACK_PROBE_M, -1), 1)))
+  if len <= 0 or n <= 0 or not car.position then return nil end
+  local a = ac.worldCoordinateToTrackProgress(car.position)
+  if not a or a < 0 then return nil end
+  local p1 = ac.trackProgressToWorldCoordinate(a, true)
+  local p2 = ac.trackProgressToWorldCoordinate((a + TRACK_PROBE_M / len) % 1, true)
+  if not p1 or not p2 then return nil end
+  local tx, tz = p2.x - p1.x, p2.z - p1.z
+  local tn = math.sqrt(tx * tx + tz * tz)
+  if tn <= 0 then return nil end
+  return math.deg(math.acos(math.min(math.max((tx * x + tz * z) / (tn * n), -1), 1)))
 end
 end
 local function mmss(seconds, fixed)
@@ -1930,8 +1944,8 @@ local AppLink = { alive = false }
 do
   local APP_REQUEST = 'amxracing.race-control.preset'
   local APP_ANSWER = 'amxracing.race-control.preset.done'
-  function AppLink.setPreset(changes)
-    local parts = {}
+  function AppLink.setPreset(changes, preset)
+    local parts = { '@' .. math.floor(preset or 0) }
     for _, c in ipairs(changes) do parts[#parts + 1] = c.name .. '=' .. math.floor(c.value) end
     local text = table.concat(parts, ';')
     ac.broadcastSharedEvent(APP_REQUEST, text)
@@ -2956,6 +2970,10 @@ do
       local t, d = tostring(title or ''), tostring(description or '')
       local text = d ~= '' and (t ~= '' and (t .. ' - ' .. d) or d) or t
       if Audit.blank(text) then return end
+      if text:match('^%s*SERVER%s*:') then
+        ac.log('race-control: game message (log only): ' .. text)
+        return
+      end
       for _, k in ipairs(LOG_ONLY) do
         if t == k then
           ac.log('race-control: game message (log only): ' .. text)
@@ -3528,6 +3546,15 @@ local function repairSeconds(d)
   if not d then return 0 end
   local s = factor * (r.base * (r.wEngine * d.powertrain + r.wSuspension * d.suspension) + r.wBody * d.body)
   return math.max(math.floor(s + 0.5), 0)
+end
+function PitRecord.endQualifying(reason)
+  local left = CarRead.num(sim.sessionTimeLeft) / 1000
+  state.tow.repairDone = true
+  state.tow.damage = nil
+  startHold(left > 0 and math.ceil(left) + 5 or 86400, string.format(TEXTS.qualiEndHold, reason))
+  ac.log('race-control: qualifying ended - ' .. reason)
+  rcLog('Qualifying ended', reason)
+  showNotice(TEXTS.rcTitle, string.format(TEXTS.qualiEndNotice, reason))
 end
 local function applyTowHold(tow, damage, reason)
   local repair = repairSeconds(damage)
@@ -4323,14 +4350,38 @@ do
   local ALL_TYRES = #TYRE_CHOICES
   local ROWS = { 'fuel', 'compound', 'tyres', 'suspension', 'powertrain', 'body', 'mode' }
   PitBox.preset = {}
+  PitBox.tab = 'stop'
+  PitBox.presetIdx = nil
+  local function presetCount()
+    local n = 1
+    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+      if type(sp.values) == 'table' then n = math.max(n, #sp.values) end
+    end
+    return n
+  end
+  PitBox.presetCount = presetCount
+  function PitBox.presetIndex()
+    local n = presetCount()
+    if n <= 1 then return 0 end
+    local i = PitBox.presetIdx
+    if i == nil then i = num(sim.currentQuickPitPreset) end
+    return math.min(math.max(math.floor(i), 0), n - 1)
+  end
+  local function presetValue(sp, idx)
+    if type(sp.values) == 'table' and sp.values[idx + 1] ~= nil then return sp.values[idx + 1] end
+    return sp.value
+  end
+  PitBox.presetValue = presetValue
   local function presetSpinners()
     local out, byName = {}, {}
+    local idx = PitBox.presetIndex()
     for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
       if (sp.type == 'pressure' or sp.type == 'wing') and not sp.readOnly then
         local same = byName[sp.name]
         if same then same.n = same.n + 1
         else
-          local e = { name = sp.name, type = sp.type, min = sp.min, max = sp.max, value = sp.value, readOnly = sp.readOnly, n = 1 }
+          local e = { name = sp.name, type = sp.type, min = sp.min, max = sp.max, value = presetValue(sp, idx), values = sp.values,
+            readOnly = sp.readOnly, n = 1 }
           byName[sp.name] = e
           out[#out + 1] = e
         end
@@ -4369,7 +4420,14 @@ do
     PitBox.logSpinners('session')
   end
   local function buildRows()
+    if PitBox.tab == 'strategy' then
+      local rows = {}
+      for i = 0, presetCount() - 1 do rows[#rows + 1] = 'preset:' .. i end
+      rows[#rows + 1] = 'back'
+      return rows
+    end
     local rows = { 'fuel', 'compound', 'tyres' }
+    if presetCount() > 1 then table.insert(rows, 1, 'strategy') end
     for _, sp in ipairs(presetSpinners()) do rows[#rows + 1] = 'set:' .. sp.name end
     for _, r in ipairs({ 'suspension', 'powertrain', 'body', 'mode' }) do rows[#rows + 1] = r end
     return rows
@@ -4494,6 +4552,8 @@ do
     for _, c in ipairs(presetChanges()) do
       if c.type == 'wing' or #TYRE_CHOICES[tyres][2] > 0 then p.preset[#p.preset + 1] = c end
     end
+    p.presetIdx = PitBox.presetIndex()
+    p.switch = presetCount() > 1 and p.presetIdx ~= num(sim.currentQuickPitPreset)
     return p
   end
   local function planText(p)
@@ -4550,22 +4610,40 @@ do
       table.concat(parts, ' / ')))
   end
   PitBox.gameStop = gameStop
+  local function gameNeeded(p) return #p.preset > 0 or p.switch end
+  local function presetRequest(p)
+    local req = {}
+    for _, c in ipairs(p.preset) do req[#req + 1] = c end
+    for _, sp in ipairs(ac.getPitstopSpinners() or {}) do
+      if sp.type == 'fuel' and not sp.readOnly then req[#req + 1] = { name = sp.name, value = 0, type = 'fuel' } end
+    end
+    local parts = { tostring(p.presetIdx) }
+    for _, c in ipairs(req) do parts[#parts + 1] = c.name .. '=' .. math.floor(c.value) end
+    return req, table.concat(parts, ';')
+  end
+  PitBox.sentSig = nil
+  local NUDGE_MS = 0.3
+  local function writePreset(p, why, nudge)
+    local req, sig = presetRequest(p)
+    if sig == PitBox.sentSig and PitBox.gameStopOn then return end
+    PitBox.sentSig = sig
+    AppLink.onWritten = function()
+      PitBox.logSpinners('after the write')
+      if PitBox.sentSig ~= sig then return end
+      gameStop(true, why)
+      local car = ac.getCar(0)
+      if nudge and car and car.look and CarRead.parked(car) then
+        physics.setCarVelocity(0, vec3(car.look.x * NUDGE_MS, 0, car.look.z * NUDGE_MS))
+        ac.log(string.format('race-control: game pit stop: the car moved %.1f m/s at its place, to stop there with the stop of the game on', NUDGE_MS))
+      end
+    end
+    PitBox.logSpinners('before the write')
+    AppLink.setPreset(req, p.presetIdx)
+  end
   local function startStop(p)
     state.pitService = { startMs = serverTimeMs(), untilMs = serverTimeMs() + p.total * 1000, plan = planText(p) }
     PitStops.markService()
-    if #p.preset > 0 then
-      local req = {}
-      for _, c in ipairs(p.preset) do req[#req + 1] = c end
-      for _, sp in ipairs(ac.getPitstopSpinners() or {}) do
-        if sp.type == 'fuel' and not sp.readOnly then req[#req + 1] = { name = sp.name, value = 0, type = 'fuel' } end
-      end
-      AppLink.onWritten = function()
-        PitBox.logSpinners('after the write')
-        if state.pitService then gameStop(true, 'preset written by the app') end
-      end
-      PitBox.logSpinners('before the write')
-      AppLink.setPreset(req)
-    end
+    if gameNeeded(p) then writePreset(p, 'preset written by the app', CarRead.parked(ac.getCar(0))) end
     physics.lockUserControlsFor(p.total + SERVICE_LOCK_EXTRA)
     PitRecord.save()
     ac.log(string.format('race-control: pit stop started, %.1f s (%s)', p.total, planText(p)))
@@ -4581,6 +4659,7 @@ do
     PitBox.row, PitBox.fuel, PitBox.compound, PitBox.tyres, PitBox.repair = 1, 0, nil, 1, {}
     PitBox.preset = {}
     PitBox.touched = false
+    PitBox.tab, PitBox.presetIdx, PitBox.sentSig = 'stop', nil, nil
   end
   PitBox.reset = reset
   function PitBox.isAuto()
@@ -4589,7 +4668,7 @@ do
   end
   local function chosen(p)
     return p.fuel > 0 or #TYRE_CHOICES[p.tyres][2] > 0 or p.repair.suspension or p.repair.powertrain or p.repair.body
-      or #p.preset > 0
+      or #p.preset > 0 or p.switch
   end
   local function choose(car, dir)
     local what = ROWS[PitBox.row]
@@ -4604,6 +4683,21 @@ do
       PitBox.tyres = (PitBox.tyres - 1 + dir) % ALL_TYRES + 1
     elseif what == 'mode' then
       PitBox.auto = not PitBox.isAuto()
+      return
+    elseif what == 'strategy' then
+      PitBox.tab, PitBox.row = 'strategy', PitBox.presetIndex() + 1
+      return
+    elseif what == 'back' then
+      PitBox.tab, PitBox.row = 'stop', 1
+      return
+    elseif what:sub(1, 7) == 'preset:' then
+      if dir > 0 then
+        PitBox.presetIdx = tonumber(what:sub(8))
+        PitBox.preset = {}
+        PitBox.touched = true
+        ac.log(string.format('race-control: pit stop: preset %d of the quick pit menu chosen for the stop', PitBox.presetIdx + 1))
+      end
+      PitBox.tab, PitBox.row = 'stop', 1
       return
     elseif what:sub(1, 4) == 'set:' then
       local name = what:sub(5)
@@ -4620,6 +4714,7 @@ do
   local menuOff = false
   function PitBox.update(car)
     if PitBox.gameStopOn and not car.isInPitlane then gameStop(false, 'left the pit lane') end
+    if not car.isInPitlane then PitBox.sentSig = nil end
     if not menuOff then
       ac.disableQuickMenuPitstop(true)
       ac.disableExtraHUDElements('quickPitsMenu', true)
@@ -4650,10 +4745,18 @@ do
     local up, down, left, right = hit('up'), hit('down'), hit('left'), hit('right')
     if up then PitBox.row = (PitBox.row - 2) % #ROWS + 1 end
     if down then PitBox.row = PitBox.row % #ROWS + 1 end
-    local confirm = right and ROWS[PitBox.row] == 'mode'
+    local confirm = right and ROWS[PitBox.row] == 'mode' and PitBox.tab == 'stop'
     if left then choose(car, -1) end
     if right and not confirm then choose(car, 1) end
     if (up or down or left or right) and not PitBox.open then PitBox.shownUntil = state.ui.clock + config.screens.pitBoxSeconds end
+    if not PitBox.open and car.isInPitlane and PitBox.isAuto() and PitBox.touched then
+      local p = PitBox.plan(car)
+      if chosen(p) and gameNeeded(p) then writePreset(p, 'AUTO: preset written before the arrival', false)
+      elseif PitBox.gameStopOn then
+        PitBox.sentSig = nil
+        gameStop(false, 'AUTO: nothing for the stop of the game')
+      end
+    end
     if not PitBox.open then return end
     local p = PitBox.plan(car)
     if not chosen(p) then return end
@@ -5481,7 +5584,8 @@ do
     end
     if red and Flags.onGrid then red[4], red[5] = TEXTS.srCancelled, TEXTS.srGridLocked end
     if not red and Flags.standingFlag then red = Flags.standingFlag(car) end
-    if state.code80 then
+    if not red and Flags.parkedFlag then yellow = Flags.parkedFlag() end
+    if state.code80 and not yellow then
       yellow = { 2, 'yellow', TEXTS.flagCode80[state.code80] or state.code80, TEXTS.flagCode80Line,
         restartText() or TEXTS.flagRaceControl }
     end
@@ -5761,6 +5865,7 @@ do
   function Flags.sessionReset()
     Flags.endSession, Flags.ending, Flags.overLeader, Flags.prevPitlane = nil, nil, nil, nil
     Flags.lastLap, Flags.lastLapSession, Flags.sector, Flags.greenUntil, Flags.lastGroup = nil, nil, nil, 0, nil
+    if Flags.parkedReset then Flags.parkedReset() end
   end
   local function sessionEnd(car, lineFrame)
     if Flags.endSession ~= sim.currentSessionIndex then
@@ -5871,6 +5976,7 @@ do
     restartUpdate()
     exitQueue(car)
     if Flags.standingUpdate then Flags.standingUpdate(car) end
+    if Flags.parkedUpdate then Flags.parkedUpdate(car) end
     yellowRules(car)
     Flags.current = pick(car)
   end
@@ -6115,6 +6221,88 @@ do
     if not os_.held or os_.startLogged or os_.released then return nil end
     local c = config.restart
     return string.format(TEXTS.osLocked, string.format(TEXTS.osLockedLight, c.releaseLight))
+  end
+end
+do
+  local P = { count = 0, winT = nil, winPos = nil, fuelStop = false, fuelInvalid = false, invLap = nil, elapsed = 0 }
+  function Flags.parkedReset()
+    P.count, P.winT, P.winPos, P.fuelStop, P.fuelInvalid, P.invLap, P.elapsed = 0, nil, nil, false, false, nil, 0
+    Flags.parkedLine = nil
+  end
+  local function watched(car)
+    return sim.isSessionStarted and not car.isInPitlane and not state.hold and not state.redFlag and not state.restart
+      and not Flags.onGrid and Flags.ending ~= 'finished' and not (state.dtDsqActive or state.pitDsqActive)
+  end
+  local function detection(car)
+    local rule = config.parkedCar
+    if state.repair.class == 'beyond' then
+      ac.log('race-control: car stopped on track: broken (beyond the safety limit), no penalty')
+      return
+    end
+    if CarRead.num(car.fuel) <= 0.1 then
+      if P.fuelStop then return end
+      P.fuelStop = true
+      if sim.raceSessionType == ac.SessionType.Race then
+        ac.log(string.format('race-control: car stopped on track out of fuel: %d s added to the final time', rule.fuelRaceSeconds))
+        rcLog(TEXTS.parkedTimeTitle, string.format(TEXTS.parkedTimeLog, rule.fuelRaceSeconds))
+        showNotice(TEXTS.rcTitle, string.format(TEXTS.parkedFuelRace, rule.fuelRaceSeconds))
+      else
+        P.fuelInvalid = true
+        ac.log('race-control: car stopped on track out of fuel: laps invalid from now on')
+        rcLog(TEXTS.parkedTitle, TEXTS.parkedFuelLapsLog)
+        showNotice(TEXTS.rcTitle, TEXTS.parkedFuelLaps)
+      end
+      return
+    end
+    P.count = P.count + 1
+    ac.log(string.format('race-control: car stopped on track on purpose: stop %d of %d tolerated', P.count, rule.grace))
+    rcLog(TEXTS.parkedTitle, string.format(TEXTS.parkedLog, P.count, rule.grace))
+    if P.count > rule.grace then
+      ac.log('race-control: DSQ, car stopped on track over the stops tolerated')
+      carDsq(1, TEXTS.parkedDsq, nil, string.format(TEXTS.parkedDsqDetail, rule.grace, rule.seconds))
+    end
+  end
+  function Flags.parkedUpdate(car)
+    local rule = config.parkedCar
+    if P.fuelInvalid then
+      if sim.raceSessionType == ac.SessionType.Practice and CarRead.parked(car) then
+        P.fuelInvalid = false
+        ac.log('race-control: practice, car at its pit place: laps valid again')
+      elseif P.invLap ~= car.lapCount then
+        P.invLap = car.lapCount
+        physics.setCarFuel(0, car.fuel)
+        ac.log('race-control: lap invalid (out of fuel on track)')
+      end
+    end
+    Flags.parkedLine = nil
+    if rule.grace < 0 or not watched(car) or not car.position then
+      P.winT, P.winPos, P.elapsed = nil, nil, 0
+      return
+    end
+    local pos = car.position
+    local clock = state.ui.clock
+    if not P.winT then P.winT, P.winPos = clock, { x = pos.x, z = pos.z } end
+    local moved = math.sqrt((pos.x - P.winPos.x) ^ 2 + (pos.z - P.winPos.z) ^ 2)
+    if moved >= rule.distance then
+      P.winT, P.winPos, P.fuelStop = clock, { x = pos.x, z = pos.z }, false
+      P.elapsed = 0
+      return
+    end
+    P.elapsed = clock - P.winT
+    if P.elapsed >= rule.seconds then
+      detection(car)
+      P.winT, P.winPos, P.elapsed = clock, { x = pos.x, z = pos.z }, 0
+    end
+    if P.elapsed >= 1 and state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1
+        and not (state.dtDsqActive or state.pitDsqActive) then
+      Flags.parkedLine = { string.format(TEXTS.parkedMove, math.max(math.ceil(rule.seconds - P.elapsed), 0)),
+        string.format(TEXTS.parkedLeft, math.max(rule.grace - P.count, 0), rule.grace) }
+    end
+  end
+  function Flags.parkedFlag()
+    local l = Flags.parkedLine
+    if not l then return nil end
+    return { 2, 'yellow', TEXTS.parkedFlagTitle, l[1], l[2], true }
   end
 end
 local PassMirror = { seq = 0, loaded = 0, last = nil, red = nil }
@@ -7003,9 +7191,9 @@ do
     e.x, e.y = v.x, v.y
     Desktop.save()
   end
-  function Desktop.cycleMode(g)
+  function Desktop.stepMode(g, nextOf)
     local e = Desktop.entry(g)
-    if e then e.mode = MODE_NEXT[e.mode]; Desktop.save() end
+    if e then e.mode = nextOf[e.mode] or e.mode; Desktop.save() end
   end
   function Desktop.setMode(g, mode)
     local e, away = Desktop.entry(g)
@@ -7114,7 +7302,9 @@ do
   end
   local function valueStep(g, dir)
     if g == 'weather' then
-      Desktop.filter.weather = Desktop.filter.weather == 'map' and 'forecast' or 'map'
+      if Desktop.filter.weather == 'map' then
+        if not Desktop.radarZoom(dir) and dir < 0 then Desktop.filter.weather = 'forecast' end
+      elseif not Desktop.weatherStep(dir) then Desktop.filter.weather = 'map' end
     elseif g == 'laps' then
       Desktop.lapsStep(dir)
     elseif g == 'relative' or g == 'standings' or g == 'map' then
@@ -7137,6 +7327,8 @@ do
   end
   Desktop.filter = { relative = 'ALL', standings = 'ALL', map = 'ALL', weather = 'forecast' }
   Desktop.lapsStep = function() end
+  Desktop.weatherStep = function() end
+  Desktop.radarZoom = function() end
   Desktop.deltaStep = function() end
   Desktop.cockpitStep = function() end
   Desktop.cockpitMove = function() end
@@ -7222,6 +7414,23 @@ do
     end
     return false
   end
+  Desktop.firedAt = {}
+  Desktop.FIRED_SECONDS = 0.4
+  local function fire(name) Desktop.firedAt[name] = state.ui.clock end
+  function Desktop.fired(name) return state.ui.clock - (Desktop.firedAt[name] or -1e9) < Desktop.FIRED_SECONDS end
+  if PitBox.PAD then
+    for _, d in ipairs({ 'up', 'down', 'left', 'right' }) do
+      local orig = PitBox.PAD[d]
+      if orig then
+        PitBox.PAD[d] = setmetatable({}, { __index = function(_, k)
+          if k == 'pressed' then return function() local hit = orig:pressed(); if hit then fire(d) end; return hit end end
+          local v = orig[k]
+          if type(v) == 'function' then return function(_, ...) return v(orig, ...) end end
+          return v
+        end })
+      end
+    end
+  end
   Desktop.dir = {}
   local dirOwn = {}
   local dirNext = {}
@@ -7237,6 +7446,7 @@ do
       elseif DIR_REPEAT[name] and state.ui.clock >= dirNext[name] then dirNext[name], hit = state.ui.clock + 0.08, true end
       Desktop.dir[name] = hit and not Desktop.capture
       dirOwn[name] = Desktop.dir[name] and own and true or false
+      if Desktop.dir[name] then fire(name) end
     end
   end
   function Desktop.ownDir(name)
@@ -7381,13 +7591,12 @@ do
     if Desktop.controlsUpdate then Desktop.controlsUpdate(car) end
     if Desktop.lobbyUpdate then Desktop.lobbyUpdate() end
     local nav = not Desktop.capture
-    if nav and (NAV.nextDesktop:pressed() or bindPressed('nextDesktop')) then Desktop.go(1) end
-    if nav and (NAV.prevDesktop:pressed() or bindPressed('prevDesktop')) then Desktop.go(-1) end
-    if nav and (NAV.nextScreen:pressed() or bindPressed('nextScreen')) then moveFocus(1) end
-    if nav and (NAV.prevScreen:pressed() or bindPressed('prevScreen')) then moveFocus(-1) end
-    if nav and (NAV.showPanel:pressed() or bindPressed('showPanel')) then
-      Desktop.panelUntil = state.ui.clock + config.screens.autoSeconds
-    end
+    local function given(name) local hit = nav and (NAV[name]:pressed() or bindPressed(name)); if hit then fire(name) end; return hit end
+    if given('nextDesktop') then Desktop.go(1) end
+    if given('prevDesktop') then Desktop.go(-1) end
+    if given('nextScreen') then moveFocus(1) end
+    if given('prevScreen') then moveFocus(-1) end
+    if given('showPanel') then Desktop.panelUntil = state.ui.clock + config.screens.autoSeconds end
     if car.isInPitlane and Desktop.wasInPit == false then Desktop.focus, Desktop.focusByNav = 'pitbox', false end
     Desktop.wasInPit = car.isInPitlane
     local g = Desktop.focus
@@ -7418,6 +7627,7 @@ Desktop.commands = {
     { 'RC LOCK <ID> <seconds>', 'locks the controls (up to 86400 s)' },
     { 'RC FUEL <ID>', 'fuel unlocked under the red flag (FUEL button)' },
     { 'RC KMR <ID>', 'the car asks its KMR numbers again' },
+    { 'RC MENU <ID> [minutes]', 'the game menu back to that driver (5 min; up to 60; 0 ends it) (MENU 5 MIN button)' },
     { 'RC REDFLAG ALL [- reason]', 'red flag to every car (RED FLAG button)' },
     { 'RC REDFLAG OFF ALL', 'red flag off: rolling restart under the VSC' },
     { 'RC RESTART ALL', 'standing restart, red flag up (STANDING RESTART button)' },
@@ -7565,8 +7775,9 @@ do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
     'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf' }
   local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden' }
-  local MODES = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
-  local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
+  local MODES = { visible = true, auto = true, hidden = true }
+  Drag.EYE_NEXT = { visible = 'hidden', auto = 'hidden', hidden = 'visible' }
+  Drag.GHOST_NEXT = { visible = 'auto', auto = 'visible', hidden = 'auto' }
   local ICON_SIZE, ICON_GAP = 12, 3
   local ICON_COLOR = rgbm(0.85, 0.87, 0.9, 0.9)
   local ICON_ON = rgbm(1, 0.2, 0.15, 1)
@@ -7648,7 +7859,9 @@ do
       row[#row + 1] = { ui.Icons.AppWindow, Desktop.titleHidden[group] and ICON_ON or ICON_COLOR,
         function() Desktop.toggleTitle(group) end }
     end
-    row[#row + 1] = { MODE_ICON[Drag.mode(group)], ICON_COLOR, 'mode:' .. group }
+    local m = Drag.mode(group)
+    row[#row + 1] = { m == 'hidden' and ui.Icons.Hide or ui.Icons.Eye, m == 'hidden' and ICON_OFF or ICON_COLOR, 'eye:' .. group }
+    row[#row + 1] = { ui.Icons.Ghost, m == 'auto' and ICON_COLOR or ICON_OFF, 'ghost:' .. group }
     row[#row + 1] = { ui.Icons.Pin, pins[group] and ICON_ON or ICON_COLOR, 'pin:' .. group }
     if group == 'panel' then row[#row + 1] = { ui.Icons.Reset, ICON_COLOR, 'reset' } end
     local y = p1.y - size - gap
@@ -7667,8 +7880,9 @@ do
   end
   local function press(action)
     local what, g = action:match('^(%a+):?(%a*)$')
-    if what == 'mode' then
-      if Desktop.has(g) then Desktop.cycleMode(g) else modes[g] = MODES[modes[g]] end
+    if what == 'eye' or what == 'ghost' then
+      local nextOf = what == 'eye' and Drag.EYE_NEXT or Drag.GHOST_NEXT
+      if Desktop.has(g) then Desktop.stepMode(g, nextOf) else modes[g] = nextOf[modes[g]] or modes[g] end
     elseif what == 'pin' then pins[g] = not pins[g]
     elseif what == 'show' then Drag.setMode(g, Drag.mode(g) == 'visible' and 'auto' or 'visible')
     elseif what == 'reset' then
@@ -8027,6 +8241,10 @@ do
         and ac.getTyresLongName(0, p.compound) or names[p.compound] or '-') .. ' >', nil },
       { 'tyres', TEXTS.pitTyres, nil, p.times.tyres },
     }
+    local presets = PitBox.presetCount()
+    if presets > 1 then
+      table.insert(rows, 1, { 'strategy', TEXTS.pitStrategy, '< ' .. string.format(TEXTS.pitPresetN, PitBox.presetIndex() + 1) .. ' >', nil })
+    end
     local spinners = PitBox.presetSpinners()
     if #spinners > 0 then PitBox.logSpinnersOnce() end
     if #spinners > 0 then
@@ -8066,14 +8284,35 @@ do
       need = math.max(need, BOX.side * s + labelW + 8 * s + vw + tw + BOX.side * s)
     end
     local bw, bh = math.max(BOX_W * s, math.ceil(need)), boxH * s
+    local strategy = PitBox.tab == 'strategy' and presets > 1
+    local stopN = #rows
+    if strategy then
+      local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+      local list = {}
+      for i = 0, presets - 1 do
+        local press, wingV = {}, {}
+        for _, sp in ipairs(all) do
+          local v = PitBox.presetValue(sp, i)
+          if sp.type == 'pressure' then press[#press + 1] = tostring(v) elseif sp.type == 'wing' then wingV[#wingV + 1] = tostring(v) end
+        end
+        local value = table.concat(press, ' ') .. (#wingV > 0 and ('  ' .. TEXTS.pitWing .. ' ' .. table.concat(wingV, '/')) or '')
+        list[#list + 1] = { 'preset:' .. i, string.format(TEXTS.pitPresetN, i + 1) .. (i == PitBox.presetIndex() and ' *' or ''), value, nil }
+      end
+      list[#list + 1] = { 'back', TEXTS.pitBack, '', nil }
+      rows = list
+    end
     local o = Drag.offset('pitbox', h)
     local right = math.min(w - BOX_RIGHT * k, w - STATUS_RIGHT * k - STATUS_W * s - STATUS_GAP * k)
     local p1 = vec2(math.floor(right - bw + o.x), math.floor(h - BOX_BOTTOM * k - bh + o.y))
     Drag.group = 'pitbox'
     local p2 = vec2(p1.x + bw, p1.y + bh)
     drawPanel(p1, p2, Desktop.focus == 'pitbox' and BORDER_YELLOW or BORDER_GREEN, s)
-    local gap = (boxH - BOX.head - (#rows + 1) * ROW_H) / 4 * s
-    drawText(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s, vec2(p1.x + BOX.side * s, p1.y + 4 * s), COLOR_TITLE)
+    local gap = (boxH - BOX.head - (math.max(#rows, stopN) + 1) * ROW_H) / 4 * s
+    drawText(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s, vec2(p1.x + BOX.side * s, p1.y + 4 * s), strategy and COLOR_DIM or COLOR_TITLE)
+    if presets > 1 then
+      local tx = p1.x + BOX.side * s + textWidth(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s) + 8 * s
+      drawText('|  ' .. TEXTS.pitStrategyTab, FONT_TITLE, 12 * s, vec2(tx, p1.y + 4 * s), strategy and COLOR_SEL or COLOR_DIM)
+    end
     local total = string.format(TEXTS.pitBoxTotal, mmss(p.total))
     drawTextRight(total, FONT_MONO, 11 * s, p2.x - BOX.side * s, p1.y + 5 * s, COLOR_TITLE)
     ui.pushDWriteFont(FONT_MONO)
@@ -8131,12 +8370,12 @@ do
           rest and rest > 0 and COLOR_SWAP or COLOR_TITLE)
       end
     end
-    local sep = rowsTop + #rows * ROW_H * s + gap
+    local sep = rowsTop + math.max(#rows, stopN) * ROW_H * s + gap
     drawSeparator(p1, p2, sep, s)
     local fy = sep + gap
     local elapsed = sv and math.max(p.total - (sv.untilMs - serverTimeMs()) / 1000, 0) or 0
     local modeSel = not sv and chosen == 'mode'
-    local footer = sv and TEXTS.pitBoxServing
+    local footer = sv and TEXTS.pitBoxServing or strategy and TEXTS.pitStrategyHint
       or string.format(TEXTS.pitBoxMode, PitBox.isAuto() and TEXTS.pitModeAuto or TEXTS.pitModeManual) .. TEXTS.pitBoxStart
     drawText(footer, FONT_TEXT, fs, vec2(p1.x + BOX.side * s, fy),
       sv and COLOR_SWAP or (modeSel and COLOR_SEL or COLOR_TITLE))
@@ -9125,16 +9364,27 @@ local drawRaceScreens = (function()
     return cells
   end
   local COMPASS = { 'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW' }
+  Radar.ZOOM = { 150, 300, 600, 900, 1500, 2500, 5000, 10000 }
+  Radar.RING = { [150] = 50, [300] = 100, [600] = 200, [900] = 250, [1500] = 500, [2500] = 1000, [5000] = 1000, [10000] = 2500 }
+  Radar.zoomAt = 4
+  function Radar.half() return Radar.ZOOM[Radar.zoomAt] end
+  function Radar.zoomStep(dir)
+    local n = Radar.zoomAt - dir
+    if n < 1 or n > #Radar.ZOOM then return false end
+    Radar.zoomAt = n
+    return true
+  end
+  Desktop.radarZoom = Radar.zoomStep
   function Radar.draw(a, side, s, fc, big)
-    local zoom = filter.radarZoom or 'track'
-    local half = zoom == 'track' and 900 or 10000
+    local half = Radar.half()
+    local zoom = half <= 2500 and 'track' or 'wide'
     local slots = Radar.slots(fc)
     local L = Radar.hour(slots)
     local k = math.floor(state.ui.clock * 6) % 60
     local minute = L.m0 + k
     local sl = Radar.at(slots, minute)
     local G = big and 48 or 36
-    local key = zoom .. '|' .. G .. '|' .. minute .. '|' .. L.m0
+    local key = half .. '|' .. G .. '|' .. minute .. '|' .. L.m0
     if Radar.cellsT ~= key then Radar.cells, Radar.cellsT = Radar.frame(sl, L.off[k], half, G), key end
     local b = vec2(a.x + side, a.y + side)
     ui.pushClipRect(a, b, true)
@@ -9147,7 +9397,7 @@ local drawRaceScreens = (function()
     local c = vec2(a.x + side / 2, a.y + side / 2)
     local kk = side / (2 * half)
     if big then
-      local stepM = zoom == 'track' and 250 or 2500
+      local stepM = Radar.RING[half] or 250
       local r = stepM
       while r < half * 1.5 do
         ui.drawCircle(c, r * kk, rgbm(0.27, 0.35, 0.39, 1), 48, 1)
@@ -9191,11 +9441,23 @@ local drawRaceScreens = (function()
     ui.drawRect(a, b, big and rgbm(0.27, 0.3, 0.35, 1) or rgbm(0.16, 0.43, 0.9, 1))
     return minute, sl
   end
+  local WX_PAGE = 6
+  local wxPage = 1
+  local function wxPages(fc) return math.max(math.ceil(#fc / WX_PAGE), 1) end
+  Desktop.weatherStep = function(dir)
+    local fc = Weather.forecast or RecordSync.base.forecast.list or {}
+    local n = wxPage + dir
+    if n < 1 or n > wxPages(fc) then return false end
+    wxPage = n
+    return true
+  end
   local function weatherScreen(car, w, h, s)
     local mode = filter.weather or 'forecast'
     local fc = Weather.forecast or RecordSync.base.forecast.list or {}
     local big = filter.radarBig ~= false
-    local rows = mode == 'map' and (big and 30 or 21.5) or (7 + (#fc > 0 and (#fc + 2) or 0))
+    wxPage = math.min(wxPage, wxPages(fc))
+    local paged = #fc > WX_PAGE
+    local rows = mode == 'map' and (big and 30 or 21.5) or (7 + (#fc > 0 and (math.min(#fc, WX_PAGE) + 2) or 0))
     local p1, p2, y = frame('weather', w, h, s, rows, TEXTS.scrWeather, nil)
     local off = nil
     if ac.getTimeZoneOffset then off = CarRead.num(ac.getTimeZoneOffset())
@@ -9229,13 +9491,15 @@ local drawRaceScreens = (function()
     if mode == 'map' then
       local side = p2.x - p1.x - 20 * s
       local zx = p1.x + 10 * s
-      for _, z in ipairs({ { 'track', TEXTS.scrRadarTrack }, { 'wide', TEXTS.scrRadarWide } }) do
+      local zt = string.format(TEXTS.scrRadarZoom, 2 * Radar.half() / 1000)
+      for _, z in ipairs({ { -1, '-' }, { 0, zt }, { 1, '+' } }) do
         local tw = textWidth(z[2], FONT_MONO, 9 * s)
         local za, zb = vec2(zx, y), vec2(zx + tw + 8 * s, y + 13 * s)
-        local on = (filter.radarZoom or 'track') == z[1]
-        if on then ui.drawRectFilled(za, zb, YELLOW, 2 * s) else ui.drawRect(za, zb, rgbm(1, 1, 1, 0.3), 2 * s) end
-        drawText(z[2], FONT_MONO, 9 * s, vec2(za.x + 4 * s, za.y + 1 * s), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
-        Drag.clickable(za, zb, function() filter.radarZoom = z[1] end)
+        if z[1] ~= 0 then
+          ui.drawRect(za, zb, rgbm(1, 1, 1, 0.3), 2 * s)
+          Drag.clickable(za, zb, function() Radar.zoomStep(z[1]) end)
+        end
+        drawText(z[2], FONT_MONO, 9 * s, vec2(za.x + 4 * s, za.y + 1 * s), z[1] == 0 and YELLOW or COLOR_DIM)
         zx = zb.x + 4 * s
       end
       local st = big and TEXTS.scrRadarSmall or TEXTS.scrRadarBig
@@ -9283,8 +9547,17 @@ local drawRaceScreens = (function()
         y = y + 8 * s
         row(p1, y, s, { { 'TIME', 14, COLOR_AXIS }, { 'SKY', 70, COLOR_AXIS }, { 'AIR', 220, COLOR_AXIS, true },
           { 'TRACK', 286, COLOR_AXIS, true } })
+        if paged then
+          local t = string.format(TEXTS.scrWxPage, wxPage, wxPages(fc))
+          local tw = textWidth(t, FONT_MONO, FS * s)
+          local cx = p1.x + 145 * s
+          drawText(t, FONT_MONO, FS * s, vec2(cx - tw / 2, y), COLOR_DIM)
+          Drag.clickable(vec2(cx - tw / 2 - 4 * s, y), vec2(cx, y + ROW * s), function() Desktop.weatherStep(-1) end)
+          Drag.clickable(vec2(cx, y), vec2(cx + tw / 2 + 4 * s, y + ROW * s), function() Desktop.weatherStep(1) end)
+        end
         y = y + ROW * s
-        for _, f in ipairs(fc) do
+        for k =(wxPage - 1) * WX_PAGE + 1, math.min(wxPage * WX_PAGE, #fc) do
+          local f = fc[k]
           row(p1, y, s, { { f.time or '-', 14 }, { f.sky or '-', 70 }, { f.air and string.format('%.0f', f.air) or '-', 220, nil, true },
             { f.road and string.format('%.0f', f.road) or '-', 286, nil, true } })
           y = y + ROW * s
@@ -9826,6 +10099,31 @@ local drawRaceScreens = (function()
     if key == 'pitch' then return string.format('%.1f deg', v) end
     return string.format('%.0f deg', v)
   end
+  local SLIDE = { ffb = { 0, 2 }, fov = { 10, 120 }, pitch = { -30, 30 } }
+  local seat0 = {}
+  local function slideRange(key, v)
+    if SLIDE[key] then return SLIDE[key][1], SLIDE[key][2] end
+    if key:match('^vol%.') then return 0, 1 end
+    if seat0[key] == nil then seat0[key] = v end
+    return seat0[key] - 0.3, seat0[key] + 0.3
+  end
+  local function slider(key, v, a, b, s, on)
+    ui.drawRect(a, b, rgbm(1, 1, 1, 0.25), 2 * s)
+    if v ~= nil then
+      local lo, hi = slideRange(key, v)
+      local f = math.min(math.max((v - lo) / (hi - lo), 0), 1)
+      ui.drawRectFilled(a, vec2(a.x + (b.x - a.x) * f, b.y), on and rgbm(1, 0.85, 0.25, 0.35) or rgbm(1, 1, 1, 0.14), 2 * s)
+      Drag.clickable(a, b, function()
+        local m = ui.mousePos()
+        local k = math.min(math.max((m.x - a.x) / (b.x - a.x), 0), 1)
+        local d = lo + (hi - lo) * k - v
+        if math.abs(d) > 1e-6 then AppLink.cockpit(string.format('%s=%g', key, d)) end
+      end)
+    end
+    local t = cockpitValue(key, v)
+    local tw = textWidth(t, FONT_MONO, FS * s)
+    drawText(t, FONT_MONO, FS * s, vec2((a.x + b.x) / 2 - tw / 2, a.y), on and YELLOW or COLOR_TITLE)
+  end
   local function stepBox(text, a, s, fn)
     local b = vec2(a.x + 14 * s, a.y + 12 * s)
     ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s)
@@ -9843,7 +10141,7 @@ local drawRaceScreens = (function()
       drawText(TEXTS.cockpitRows[r.key], FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), on and YELLOW or COLOR_DIM)
       local vx = p2.x - 14 * s - 70 * s
       stepBox('-', vec2(vx - 70 * s, y), s, function() cockpit.row = i; cockpitSend(r.key, -1, r.step) end)
-      drawTextRight(cockpitValue(r.key, st[r.key]), FONT_MONO, FS * s, vx - 4 * s, y, on and YELLOW or COLOR_TITLE)
+      slider(r.key, st[r.key], vec2(vx - 54 * s, y), vec2(vx - 2 * s, y + 12 * s), s, on)
       stepBox('+', vec2(vx, y), s, function() cockpit.row = i; cockpitSend(r.key, 1, r.step) end)
       if r.key == 'vol.main' then
         local a = vec2(vx + 20 * s, y)
@@ -9866,7 +10164,7 @@ local drawRaceScreens = (function()
         drawText(TEXTS.cockpitChannels[ch] or ch, FONT_TEXT, FS * s, vec2(a1.x + 14 * s, ay), COLOR_DIM)
         local vx = a2.x - 14 * s - 14 * s
         stepBox('-', vec2(vx - 70 * s, ay), s, function() cockpitSend(key, -1, 0.05) end)
-        drawTextRight(cockpitValue(key, st[key]), FONT_MONO, FS * s, vx - 4 * s, ay, COLOR_TITLE)
+        slider(key, st[key], vec2(vx - 54 * s, ay), vec2(vx - 2 * s, ay + 12 * s), s, false)
         stepBox('+', vec2(vx, ay), s, function() cockpitSend(key, 1, 0.05) end)
         ay = ay + ROW * s
       end
@@ -10221,8 +10519,6 @@ end)()
 local drawDesktopUI = (function()
   local W = 780
   local CANVAS_W = 422
-  local MODE_ICON = { visible = ui.Icons.Eye, auto = ui.Icons.Ghost, hidden = ui.Icons.Hide }
-  local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local drag = nil
   local moving = nil
   local sizing = nil
@@ -10380,7 +10676,7 @@ local drawDesktopUI = (function()
           local rmin, rmax, base = r.min, r.max, r.base
           local a, b = toCanvas(rmin.x, rmin.y), toCanvas(rmax.x, rmax.y)
           local size = vec2(rmax.x - rmin.x, rmax.y - rmin.y)
-          b = vec2(math.max(b.x, a.x + 44 * s), math.max(b.y, a.y + 22 * s))
+          b = vec2(math.max(b.x, a.x + 56 * s), math.max(b.y, a.y + 22 * s))
           if b.x > c2.x then a = vec2(a.x - (b.x - c2.x), a.y); b = vec2(c2.x, b.y) end
           if b.y > c2.y then a = vec2(a.x, a.y - (b.y - c2.y)); b = vec2(b.x, c2.y) end
           local dragging = drag and drag.g == g
@@ -10390,7 +10686,7 @@ local drawDesktopUI = (function()
           drawText(TEXTS.screenNames[g] or g, FONT_TEXT, 7.5 * s, vec2(a.x + 3 * s, a.y + 1 * s), COLOR_TITLE)
           ui.popClipRect()
           local isz = 9 * s
-          local ix, iy = b.x - 3 * (isz + 2 * s) - 1 * s, b.y - isz - 2 * s
+          local ix, iy = b.x - 4 * (isz + 2 * s) - 1 * s, b.y - isz - 2 * s
           local function icon(id, col, fn)
             local q1, q2 = vec2(ix, iy), vec2(ix + isz, iy + isz)
             ui.drawIcon(id, q1, q2, col)
@@ -10398,9 +10694,12 @@ local drawDesktopUI = (function()
             ix = ix + isz + 2 * s
           end
           icon(ui.Icons.Monitor, L[2] and PANEL_COLORS.green or COLOR_DIM, function() Desktop.pinAll(L[2] and 'all' or desk, g) end)
-          icon(MODE_ICON[e.mode] or ui.Icons.Eye, COLOR_TITLE, function() e.mode = MODE_NEXT[e.mode]; Desktop.save() end)
+          icon(e.mode == 'hidden' and ui.Icons.Hide or ui.Icons.Eye, e.mode == 'hidden' and COLOR_DIM or COLOR_TITLE,
+            function() e.mode = Drag.EYE_NEXT[e.mode] or e.mode; Desktop.save() end)
+          icon(ui.Icons.Ghost, e.mode == 'auto' and COLOR_TITLE or COLOR_DIM,
+            function() e.mode = Drag.GHOST_NEXT[e.mode] or e.mode; Desktop.save() end)
           icon(ui.Icons.Trash, PANEL_COLORS.red, function() Desktop.remove(L[2] and 'all' or desk, g) end)
-          local onIcons = m.x >= b.x - 3 * (isz + 2 * s) - 2 * s and m.y >= iy - 1 * s
+          local onIcons = m.x >= b.x - 4 * (isz + 2 * s) - 2 * s and m.y >= iy - 1 * s
           if not drag and not move and not onIcons and ui.mouseClicked() and m.x >= a.x and m.x <= b.x
               and m.y >= a.y and m.y <= b.y then
             drag = { g = g, entry = e, dx = (m.x - a.x) / cs, dy = (m.y - a.y) / cs, base = base, size = size }
@@ -10587,7 +10886,11 @@ local drawDesktopUI = (function()
     y = y + 16 * s
     for _, r in ipairs(rows) do
       local name, cap, own, conflict = r.name, r.cap, r.own, r.conflict
-      drawText(r.label, FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y + 1 * s), COLOR_TITLE)
+      local lit = Desktop.fired(name)
+      if lit then
+        ui.drawRectFilled(vec2(p1.x + 8 * s, y - 2 * s), vec2(p2.x - 8 * s, y + 18 * s), rgbm(0.1, 0.55, 0.25, 0.35), 2 * s)
+      end
+      drawText(r.label, FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y + 1 * s), lit and PANEL_COLORS.green or COLOR_TITLE)
       drawText(own, FONT_MONO, 9.5 * s, vec2(p1.x + ownX, y + 1.5 * s), conflict and PANEL_COLORS.red
         or (cap and PANEL_COLORS.yellow or (own == '-' and COLOR_OFF or COLOR_TITLE)))
       if conflict then
@@ -12557,6 +12860,9 @@ function script.update(dt)
       ac.log('race-control: practice, car at its pit place: penalties cleared')
       rcLog('Pit', 'Practice - pending penalties cleared at the pit place')
       showNotice(TEXTS.rcTitle, TEXTS.practiceCleared)
+    end
+    if towRule.mode == 'END' and not dsqActive and not state.hold and tw.jumpPending and inPit then
+      PitRecord.endQualifying(TEXTS.qualiEndTow)
     end
     local repairing = CarRead.flagOn(car.isRepairing)
     if towOn and not dsqActive and not state.hold then

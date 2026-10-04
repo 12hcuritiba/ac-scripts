@@ -259,8 +259,13 @@ ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
     return
   end
   local answer = {}
-  for name, value in tostring(data):gmatch('([^=;]+)=(%-?%d+)') do
-    local ok, res = pcall(ac.setPitstopSpinnerValue, name, tonumber(value))
+  local preset = tonumber(tostring(data):match('^@(%d+)'))
+  if preset then
+    local okP, resP = pcall(ac.setCurrentQuickPitPreset, preset)
+    answer[#answer + 1] = '@' .. preset .. '=' .. ((okP and resP) and 'ok' or 'fail')
+  end
+  for name, value in tostring(data):gsub('^@%d+;?', ''):gmatch('([^=;]+)=(%-?%d+)') do
+    local ok, res = pcall(ac.setPitstopSpinnerValue, name, tonumber(value), preset)
     answer[#answer + 1] = name .. '=' .. ((ok and res) and 'ok' or 'fail')
   end
   local back = {}
