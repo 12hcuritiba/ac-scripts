@@ -745,7 +745,7 @@ local config = (function()
     tyreLife = structKey('tyreLife', { ok = 70, worn = 30 }),
     tyreTemp = structKey('tyreTemp', { edge = 98 }),
     wrongWay = structKey('wrongWay', { maxMeters = 60, penalty = 'DSQ', showMeters = 2, angle = 110 }),
-    parkedCar = structKey('parkedCar', { seconds = 6, distance = 24, grace = 4, fuelRaceSeconds = 60, offTrackSeconds = 20, offTrackRecent = 10 }),
+    parkedCar = structKey('parkedCar', { seconds = 10, distance = 24, grace = 4, fuelRaceSeconds = 60, moveSeconds = 10 }),
     flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
       greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30,
       redOverSeconds = 10, redNoLineSG = 120, yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
@@ -6257,11 +6257,13 @@ do
   end
 end
 do
-  local P = { count = 0, winT = nil, winPos = nil, fuelStop = false, fuelInvalid = false, invLap = nil, elapsed = 0, detected = false,
-    armed = false, offT = nil }
+  local P = { count = 0, slowT = nil, fuelStop = false, fuelInvalid = false, invLap = nil, elapsed = 0, detected = false,
+    armed = false, hist = {}, odo = 0, last = nil }
+  local JUMP_M = 50
   local ARM_KMH = 30
   function Flags.parkedReset()
-    P.count, P.winT, P.winPos, P.fuelStop, P.fuelInvalid, P.invLap, P.elapsed, P.detected, P.armed = 0, nil, nil, false, false, nil, 0, false, false
+    P.count, P.slowT, P.fuelStop, P.fuelInvalid, P.invLap, P.elapsed, P.detected, P.armed = 0, nil, false, false, nil, 0, false, false
+    P.hist, P.odo, P.last = {}, 0, nil
     Flags.parkedLine = nil
   end
   local function watched(car)
@@ -6311,36 +6313,37 @@ do
       end
     end
     Flags.parkedLine = nil
-    local slip = CarRead.slipAngle(car)
-    if CarRead.num(car.wheelsOutside) >= 4 or (slip and CarRead.num(car.speedKmh) > 5 and slip > config.cutSpinAngle) then
-      P.offT = state.ui.clock
-    end
     if car.isInPitlane or car.isInPit or CarRead.parked(car) then P.armed = false
     elseif not P.armed and CarRead.num(car.speedKmh) > ARM_KMH then P.armed = true end
     if rule.grace < 0 or not watched(car) or not car.position then
-      P.winT, P.winPos, P.elapsed, P.detected = nil, nil, 0, false
+      P.slowT, P.elapsed, P.detected, P.hist, P.last = nil, 0, false, {}, nil
       return
     end
-    local pos = car.position
     local clock = state.ui.clock
-    if not P.winT then P.winT, P.winPos = clock, { x = pos.x, z = pos.z } end
-    local moved = math.sqrt((pos.x - P.winPos.x) ^ 2 + (pos.z - P.winPos.z) ^ 2)
-    if moved >= rule.distance then
-      P.winT, P.winPos, P.fuelStop, P.detected = clock, { x = pos.x, z = pos.z }, false, false
-      P.elapsed = 0
+    local pos = car.position
+    if P.last then
+      local d = math.sqrt((pos.x - P.last.x) ^ 2 + (pos.z - P.last.z) ^ 2)
+      if d < JUMP_M then P.odo = P.odo + d end
+    end
+    P.last = { x = pos.x, z = pos.z }
+    P.hist[#P.hist + 1] = { t = clock, odo = P.odo }
+    while #P.hist > 2 and P.hist[2].t <= clock - rule.seconds do table.remove(P.hist, 1) end
+    local first = P.hist[1]
+    local stopped = first.t <= clock - rule.seconds and P.odo - first.odo < rule.distance
+    if not stopped then
+      P.slowT, P.elapsed, P.detected, P.fuelStop = nil, 0, false, false
       return
     end
     if P.detected then return end
-    P.elapsed = clock - P.winT
-    local limit = (P.offT and P.offT >= P.winT - rule.offTrackRecent) and rule.offTrackSeconds or rule.seconds
-    if P.elapsed >= limit then
+    P.slowT = P.slowT or clock
+    P.elapsed = clock - P.slowT
+    if P.elapsed >= rule.moveSeconds then
       P.detected = true
       detection(car)
       return
     end
-    if P.elapsed >= 1 and CarRead.num(car.speedKmh) < rule.distance / limit * 3.6 and state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1
-        and not (state.dtDsqActive or state.pitDsqActive) then
-      Flags.parkedLine = { string.format(TEXTS.parkedMove, math.max(math.ceil(limit - P.elapsed), 0)),
+    if state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1 and not (state.dtDsqActive or state.pitDsqActive) then
+      Flags.parkedLine = { string.format(TEXTS.parkedMove, math.max(math.ceil(rule.moveSeconds - P.elapsed), 0)),
         string.format(TEXTS.parkedLeft, math.max(rule.grace - P.count, 0), rule.grace) }
     end
   end
