@@ -301,7 +301,7 @@ local TEXTS = {
   qualiEndTow = 'tow', qualiEndHold = 'Qualifying ended - %s',
   qualiEndNotice = 'Qualifying ended (%s) - your best valid lap counts',
   repairReason = 'Repair in the pit stop',
-  parkedFlagTitle = 'CAR STOPPED ON TRACK', parkedMove = 'Move on - %d s', parkedLeft = 'Stops tolerated left: %d of %d - over: disqualified',
+  parkedFlagTitle = 'CAR STOPPED ON TRACK', parkedMove = 'Move on - %d s', parkedLeft = 'Stops tolerated left: %d of %d - over: disqualified', parkedNoGrace = 'Not moving on: disqualified',
   parkedTitle = 'Car stopped on track', parkedLog = 'stop %d of %d tolerated', parkedDsq = 'Car stopped on track',
   parkedDsqDetail = 'over %d stops of %d s', parkedTimeTitle = 'Time penalty', parkedTimeLog = '%d s - out of fuel on track',
   parkedFuelRace = 'Out of fuel on track - %d s added to your race time', parkedFuelLaps = 'Out of fuel on track - your laps are invalid from now on',
@@ -550,6 +550,7 @@ local TEXTS = {
   flagRestartSwap = 'Restart P%d - driver swap: back of the field, behind %s',
   appMissing = 'Racing Control app not running - install it from the event page - the game closes in %d s',
   teamSetup = 'Setup from your team: %s - open the setup menu in the pits to apply or refuse it',
+  remotePitStart = 'Your team started the pit stop from the Racing Room: stop at your pit place',
   realNameMissing = 'Registration incomplete - you cannot take part in this session - missing: %s - complete it in the 12h Curitiba app',
   realNameWhat = { cadastro = 'registration', steam = 'Steam account confirmed', nome = 'real name' },
   realNameOffline = 'Registration not confirmed - the base of the event does not answer - wait for it before the session starts',
@@ -1981,6 +1982,17 @@ do
       if body ~= T.setupSig then T.setupSig = body; Record.save('setup', math.floor(serverTimeMs() / 1000), body) end
     end
   end
+  local BOX_GAP = 2
+  B.box = { sig = nil, nextT = 0 }
+  function B.boxUpdate()
+    local T = B.box
+    if not on() or not B.pitBox or state.ui.clock < T.nextT then return end
+    T.nextT = state.ui.clock + BOX_GAP
+    local car = ac.getCar(0)
+    if not car then return end
+    local ok, body = pcall(B.pitBox.stateBody, car)
+    if ok and body and body ~= T.sig then T.sig = body; Record.save('box', math.floor(serverTimeMs() / 1000), body) end
+  end
   B.plan = { nextT = 0, busy = false, done = tostring(ac.storage['rc.pitplan'] or '') }
   function B.planUpdate()
     local P = B.plan
@@ -1989,16 +2001,27 @@ do
     WebQueue.request('GET', config.baseUrl .. '/v1/pitplan?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
       P.busy = false
       if err or not res or tonumber(res.status) ~= 200 then return end
-      local id, preset, list = tostring(res.body or ''):match('^OK|([%w%-]+)|(%d+)|([^\r\n]*)')
+      local id, preset, list, box = tostring(res.body or ''):match('^OK|([%w%-]+)|(%d+)|([^|\r\n]*)|?([^\r\n]*)')
       if not id or id == P.done then return end
       local changes = {}
       for name, value in list:gmatch('([^;=]+)=(%-?%d+)') do changes[#changes + 1] = { name = name, value = tonumber(value) } end
       P.done = id
       ac.storage['rc.pitplan'] = id
-      if #changes == 0 then return end
-      B.app.setPreset(changes, tonumber(preset) or 0)
-      B.strat.nextT, B.strat.sig = state.ui.clock + 2, nil
-      rcLog('Pit stop plan', string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
+      if box ~= '' and B.pitBox then
+        local f = {}
+        for k, v in box:gmatch('(%a+)=([^;]*)') do f[k] = v end
+        for _, c in ipairs(changes) do B.pitBox.preset[c.name] = c.value end
+        B.pitBox.remote({ fuel = tonumber(f.fuel), compound = tonumber(f.compound), tyres = tonumber(f.tyres), repair = f.repair,
+          preset = tonumber(f.preset), auto = f.mode == 'auto' and true or f.mode == 'manual' and false or nil, start = f.start == '1' })
+        B.box.nextT, B.box.sig = state.ui.clock + 1, nil
+        rcLog('Pit stop plan', 'box from the Racing Room: ' .. box .. (list ~= '' and ('; ' .. list) or ''))
+        if f.start == '1' then showNotice(TEXTS.rcTitle, TEXTS.remotePitStart, nil, 6) end
+      else
+        if #changes == 0 then return end
+        B.app.setPreset(changes, tonumber(preset) or 0)
+        B.strat.nextT, B.strat.sig = state.ui.clock + 2, nil
+        rcLog('Pit stop plan', string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
+      end
       WebQueue.request('POST', config.baseUrl .. '/v1/pitplan/done', { ['Content-Type'] = 'application/json' },
         '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"id":' .. jsonStr(id) .. '}', function() end)
     end)
@@ -4814,6 +4837,7 @@ do
     PitBox.preset = {}
     PitBox.touched = false
     PitBox.tab, PitBox.presetIdx, PitBox.sentSig = 'stop', nil, nil
+    PitBox.remoteUntil = 0
   end
   PitBox.reset = reset
   function PitBox.isAuto()
@@ -4915,9 +4939,47 @@ do
     if not PitBox.open then return end
     local p = PitBox.plan(car)
     if not chosen(p) then return end
-    if confirm or (PitBox.isAuto() and not wasOpen and PitBox.touched) then startStop(p) end
+    local remoteGo = PitBox.remoteUntil > state.ui.clock
+    if confirm or remoteGo or (PitBox.isAuto() and not wasOpen and PitBox.touched) then
+      if remoteGo and not confirm then ac.log('race-control: pit stop started from the Racing Room') end
+      PitBox.remoteUntil = 0
+      startStop(p)
+    end
+  end
+  local REMOTE_START_S = 120
+  PitBox.remoteUntil = 0
+  function PitBox.remote(b)
+    local car = ac.getCar(0)
+    if not car then return end
+    if b.fuel then PitBox.fuel = math.max(0, math.min(b.fuel, math.max(num(car.maxFuel) - num(car.fuel), 0))) end
+    if b.compound and compounds()[b.compound] then PitBox.compound = b.compound end
+    if b.tyres and TYRE_CHOICES[b.tyres] then PitBox.tyres = b.tyres end
+    if b.repair then
+      PitBox.repair = { suspension = b.repair:find('s') ~= nil, powertrain = b.repair:find('p') ~= nil, body = b.repair:find('b') ~= nil }
+    end
+    if b.auto ~= nil then PitBox.auto = b.auto end
+    if b.preset and b.preset >= 0 and b.preset < presetCount() then PitBox.presetIdx = b.preset end
+    PitBox.touched = true
+    if b.start then PitBox.remoteUntil = state.ui.clock + REMOTE_START_S end
+  end
+  function PitBox.stateBody(car)
+    local p = PitBox.plan(car)
+    local sv = state.pitService
+    local names, list = {}, compounds()
+    for i = 0, 15 do
+      if not list[i] then break end
+      names[#names + 1] = (tostring(list[i]):gsub('[|;,]', ' '))
+    end
+    local function groups(t) return (t.suspension and 's' or '') .. (t.powertrain and 'p' or '') .. (t.body and 'b' or '') end
+    local dmg = { suspension = damaged(car, 'suspension'), powertrain = damaged(car, 'powertrain'), body = damaged(car, 'body') }
+    return table.concat({ PitBox.open and 1 or 0, PitBox.isAuto() and 1 or 0, PitBox.touched and 1 or 0, p.presetIdx,
+      string.format('%.0f', PitBox.fuel), p.compound, num(car.compoundIndex), p.tyres, groups(p.repair), string.format('%.1f', p.total),
+      string.format('%.1f', p.times.fuel), string.format('%.1f', p.times.tyres), string.format('%.1f', p.times.suspension + p.times.powertrain + p.times.body),
+      sv and math.floor(sv.startMs) or 0, sv and math.floor(sv.untilMs) or 0, groups(dmg), table.concat(names, ','),
+      string.format('%.0f', num(car.maxFuel)), car.isInPitlane and 1 or 0, PitBox.remoteUntil > state.ui.clock and 1 or 0 }, '|')
   end
   PitRecord.onService = PitBox.resume
+  RecordSync.base.pitBox = PitBox
   PitBox.WHEELS = WHEELS
   PitBox.TYRE_CHOICES = TYRE_CHOICES
   PitBox.PAD = PAD
@@ -6474,7 +6536,7 @@ do
     end
     if state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1 and not (state.dtDsqActive or state.pitDsqActive) then
       Flags.parkedLine = { string.format(TEXTS.parkedMove, math.max(math.ceil(rule.moveSeconds - P.elapsed), 0)),
-        string.format(TEXTS.parkedLeft, math.max(rule.grace - P.count, 0), rule.grace) }
+        rule.grace > 0 and string.format(TEXTS.parkedLeft, math.max(rule.grace - P.count, 0), rule.grace) or TEXTS.parkedNoGrace }
     end
   end
   function Flags.parkedFlag()
@@ -13318,6 +13380,7 @@ function script.update(dt)
   RecordSync.base.rrUpdate()
   RecordSync.base.stratUpdate()
   RecordSync.base.planUpdate()
+  RecordSync.base.boxUpdate()
   RecordSync.base.setupPushUpdate()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
     state.hold = nil
