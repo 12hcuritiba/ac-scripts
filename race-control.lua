@@ -745,7 +745,7 @@ local config = (function()
     tyreLife = structKey('tyreLife', { ok = 70, worn = 30 }),
     tyreTemp = structKey('tyreTemp', { edge = 98 }),
     wrongWay = structKey('wrongWay', { maxMeters = 60, penalty = 'DSQ', showMeters = 2, angle = 110 }),
-    parkedCar = structKey('parkedCar', { seconds = 6, distance = 24, grace = 4, fuelRaceSeconds = 60 }),
+    parkedCar = structKey('parkedCar', { seconds = 6, distance = 24, grace = 4, fuelRaceSeconds = 60, offTrackSeconds = 20, offTrackRecent = 10 }),
     flags = structKey('flags', { slowMeters = 300, yellowMeters = 500, oilSeconds = 300, rainSlippery = 0.2,
       greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30,
       redOverSeconds = 10, redNoLineSG = 120, yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
@@ -1160,6 +1160,13 @@ function CarRead.trackAngle(car, x, z)
   if tn <= 0 then return nil end
   return math.deg(math.acos(math.min(math.max((tx * x + tz * z) / (tn * n), -1), 1)))
 end
+end
+function CarRead.slipAngle(car)
+  local v, l = car.velocity, car.look
+  if not v or not l then return nil end
+  local vn, ln = math.sqrt(v.x * v.x + v.z * v.z), math.sqrt(l.x * l.x + l.z * l.z)
+  if vn <= 0 or ln <= 0 then return nil end
+  return math.deg(math.acos(math.min(math.max((v.x * l.x + v.z * l.z) / (vn * ln), -1), 1)))
 end
 local function mmss(seconds, fixed)
   local s = math.max(math.floor(seconds + 0.5), 0)
@@ -6251,7 +6258,7 @@ do
 end
 do
   local P = { count = 0, winT = nil, winPos = nil, fuelStop = false, fuelInvalid = false, invLap = nil, elapsed = 0, detected = false,
-    armed = false }
+    armed = false, offT = nil }
   local ARM_KMH = 30
   function Flags.parkedReset()
     P.count, P.winT, P.winPos, P.fuelStop, P.fuelInvalid, P.invLap, P.elapsed, P.detected, P.armed = 0, nil, nil, false, false, nil, 0, false, false
@@ -6304,6 +6311,10 @@ do
       end
     end
     Flags.parkedLine = nil
+    local slip = CarRead.slipAngle(car)
+    if CarRead.num(car.wheelsOutside) >= 4 or (slip and CarRead.num(car.speedKmh) > 5 and slip > config.cutSpinAngle) then
+      P.offT = state.ui.clock
+    end
     if car.isInPitlane or car.isInPit or CarRead.parked(car) then P.armed = false
     elseif not P.armed and CarRead.num(car.speedKmh) > ARM_KMH then P.armed = true end
     if rule.grace < 0 or not watched(car) or not car.position then
@@ -6321,14 +6332,15 @@ do
     end
     if P.detected then return end
     P.elapsed = clock - P.winT
-    if P.elapsed >= rule.seconds then
+    local limit = (P.offT and P.offT >= P.winT - rule.offTrackRecent) and rule.offTrackSeconds or rule.seconds
+    if P.elapsed >= limit then
       P.detected = true
       detection(car)
       return
     end
-    if P.elapsed >= 1 and CarRead.num(car.speedKmh) < rule.distance / rule.seconds * 3.6 and state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1
+    if P.elapsed >= 1 and CarRead.num(car.speedKmh) < rule.distance / limit * 3.6 and state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1
         and not (state.dtDsqActive or state.pitDsqActive) then
-      Flags.parkedLine = { string.format(TEXTS.parkedMove, math.max(math.ceil(rule.seconds - P.elapsed), 0)),
+      Flags.parkedLine = { string.format(TEXTS.parkedMove, math.max(math.ceil(limit - P.elapsed), 0)),
         string.format(TEXTS.parkedLeft, math.max(rule.grace - P.count, 0), rule.grace) }
     end
   end
@@ -6990,15 +7002,8 @@ local function refAt(ref, p)
   if i >= GAIN_SAMPLES then return ref[GAIN_SAMPLES] end
   return ref[i] + (ref[i + 1] - ref[i]) * (x - i)
 end
-local function slipAngle(car)
-  local v, l = car.velocity, car.look
-  if not v or not l then return nil end
-  local vn, ln = math.sqrt(v.x * v.x + v.z * v.z), math.sqrt(l.x * l.x + l.z * l.z)
-  if vn <= 0 or ln <= 0 then return nil end
-  return math.deg(math.acos(math.min(math.max((v.x * l.x + v.z * l.z) / (vn * ln), -1), 1)))
-end
 local function spinning(car)
-  local angle = slipAngle(car)
+  local angle = CarRead.slipAngle(car)
   return car.speedKmh > SPIN_MIN_SPEED_KMH and angle ~= nil and angle > config.cutSpinAngle
 end
 local function updateZonePassages()
