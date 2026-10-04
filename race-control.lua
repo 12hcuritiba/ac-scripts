@@ -391,8 +391,8 @@ local TEXTS = {
   dirNoAnswer = 'No answer from the KMR in 5 s - login or command failed',
   dirFailed = 'Failed: %s', dirSent = 'Sent: %s - waiting for the KMR', dirAnswer = 'KMR: %s',
   dirNextSession = 'NEXT SESSION', dirRestart = 'RESTART SESSION', dirCancelDt = 'NO DT', dirToPit = 'TO PIT', dirFuel = 'FUEL', dirMenu = 'MENU 5 MIN',
-  setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', text = 'Text', app = 'App', room = 'Racing Room' },
-  setFontSample = 'RACING CONTROL  P3  Slow down', setFontMissing = 'not installed', setTextMin = 'Small text at least', setTextMinOff = 'Off', setPreset = 'Preset',
+  setTitle = 'SETTINGS', setTabs = { messages = 'Messages', controls = 'Controls', text = 'Text', design = 'Design', app = 'App', room = 'Racing Room' },
+  setFontSample = 'RACING CONTROL  P3  Slow down', setFontMissing = 'not installed', setTextMin = 'Small text at least', setTextMinOff = 'Off', setOpacity = 'Opacity', setPreset = 'Preset',
   setPresets = { verbose = 'Verbose', race = 'Race', minimal = 'Minimal', custom = 'Custom' }, setAlways = 'always - on the Racing Control panel',
   setAreas = { rc = 'Racing Control, flags, driver swap, race director', limits = 'Track limits and invalid laps',
     damage = 'Collisions and damage', points = 'Points and rating (KMR)', warnings = 'Behaviour warnings',
@@ -6302,7 +6302,7 @@ do
       detection(car)
       return
     end
-    if P.elapsed >= 1 and state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1
+    if P.elapsed >= 1 and CarRead.num(car.speedKmh) < rule.distance / rule.seconds * 3.6 and state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1
         and not (state.dtDsqActive or state.pitDsqActive) then
       Flags.parkedLine = { string.format(TEXTS.parkedMove, math.max(math.ceil(rule.seconds - P.elapsed), 0)),
         string.format(TEXTS.parkedLeft, math.max(rule.grace - P.count, 0), rule.grace) }
@@ -6617,6 +6617,7 @@ end
 local GAIN_SAMPLES = 20
 local LIFT_SMOOTH_SECONDS = 0.35
 local SPIN_MIN_SPEED_KMH = 5
+local SPIN_SETTLE_MS = 1000
 local GainRef = { seq = 0 }
 function GainRef.encode()
   local parts = {}
@@ -6663,8 +6664,15 @@ local function refAt(ref, p)
   if i >= GAIN_SAMPLES then return ref[GAIN_SAMPLES] end
   return ref[i] + (ref[i + 1] - ref[i]) * (x - i)
 end
+local function slipAngle(car)
+  local v, l = car.velocity, car.look
+  if not v or not l then return nil end
+  local vn, ln = math.sqrt(v.x * v.x + v.z * v.z), math.sqrt(l.x * l.x + l.z * l.z)
+  if vn <= 0 or ln <= 0 then return nil end
+  return math.deg(math.acos(math.min(math.max((v.x * l.x + v.z * l.z) / (vn * ln), -1), 1)))
+end
 local function spinning(car)
-  local angle = CarRead.trackAngle(car, car.look.x, car.look.z)
+  local angle = slipAngle(car)
   return car.speedKmh > SPIN_MIN_SPEED_KMH and angle ~= nil and angle > config.cutSpinAngle
 end
 local function updateZonePassages()
@@ -6724,7 +6732,12 @@ local function updateCutChecks()
     cc.shown = cc.shown and (cc.shown + (cc.margin - cc.shown) * k) or cc.margin
     cc.lastT = sim.time
     if spinning(car) then cc.spun = true end
-    local back = car.wheelsOutside == 0
+    if car.wheelsOutside == 0 and not spinning(car) then
+      if not cc.okT then cc.okT, cc.okElapsed, cc.okLimit = sim.time, elapsed, limit end
+    else
+      cc.okT = nil
+    end
+    local back = cc.okT ~= nil and sim.time - cc.okT >= SPIN_SETTLE_MS
     if cc.given then
       if cc.spun then
         state.cutChecks[zi] = nil
@@ -6737,6 +6750,7 @@ local function updateCutChecks()
       state.cutChecks[zi] = nil
     elseif back then
       state.cutChecks[zi] = nil
+      elapsed, limit = cc.okElapsed, cc.okLimit
       if cc.spun then
         ac.log(string.format('race-control: cut %s discarded: spin', zone.category))
       elseif elapsed >= limit then
@@ -8107,16 +8121,22 @@ local function textWidth(text, font, size)
   ui.popDWriteFont()
   return tw
 end
+Desktop.opacity = math.min(math.max(tonumber(ac.storage['rc.opacity'] or '') or 1, 0.2), 1)
+function Desktop.setOpacity(v)
+  Desktop.opacity = math.min(math.max(v, 0.2), 1)
+  ac.storage['rc.opacity'] = string.format('%.2f', Desktop.opacity)
+end
 local function drawPanel(p1, p2, border, s, alpha)
   Drag.hit(p1, p2)
   local a = alpha or 1
+  local f = a * Desktop.opacity
   local r = px(8 * s)
   local o = px(3 * s)
-  ui.drawRectFilled(vec2(p1.x + o, p1.y + o), vec2(p2.x + o, p2.y + o), rgbm(0, 0, 0, 0.35 * a), r)
-  ui.drawRectFilled(p1, p2, rgbm(0.04, 0.04, 0.05, 0.9 * a), r)
+  ui.drawRectFilled(vec2(p1.x + o, p1.y + o), vec2(p2.x + o, p2.y + o), rgbm(0, 0, 0, 0.35 * f), r)
+  ui.drawRectFilled(p1, p2, rgbm(0.04, 0.04, 0.05, 0.9 * f), r)
   local i = px(4 * s)
   ui.drawRectFilledMultiColor(vec2(p1.x + i, p1.y + i), vec2(p2.x - i, p2.y - i),
-    rgbm(1, 1, 1, 0.06 * a), rgbm(1, 1, 1, 0.06 * a), rgbm(1, 1, 1, 0), rgbm(1, 1, 1, 0))
+    rgbm(1, 1, 1, 0.06 * f), rgbm(1, 1, 1, 0.06 * f), rgbm(1, 1, 1, 0), rgbm(1, 1, 1, 0))
   if a < 1 then border = rgbm(border.r, border.g, border.b, (border.mult or 1) * a) end
   ui.drawRectFilled(vec2(p1.x + px(3 * s), p1.y + px(8 * s)), vec2(p1.x + px(7 * s), p2.y - px(8 * s)), border,
     px(2 * s))
@@ -11091,7 +11111,7 @@ local drawDesktopUI = (function()
     drawPanel(p1, p2, BORDER_BASE, s)
     drawText(TEXTS.setTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     local x = p1.x + 150 * s
-    for _, t in ipairs({ 'messages', 'controls', 'text', 'app', 'room' }) do
+    for _, t in ipairs({ 'messages', 'controls', 'text', 'design', 'app', 'room' }) do
       x = chip(TEXTS.setTabs[t], vec2(x, p1.y + 4 * s), s, Settings.tab == t, nil, function()
         Settings.tab = t
         Settings.appT = nil
@@ -11154,6 +11174,20 @@ local drawDesktopUI = (function()
         cx = chip(v == 0 and TEXTS.setTextMinOff or (v .. ' px'), vec2(cx, y), s, Desktop.text.min == v, nil,
           function() Desktop.textApply(Desktop.text.id, v) end)
       end
+    elseif Settings.tab == 'design' then
+      drawText(TEXTS.setOpacity, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      local ba = vec2(x0 + 110 * s, y)
+      local bb = vec2(p2.x - 14 * s, y + 14 * s)
+      local frac = (Desktop.opacity - 0.2) / 0.8
+      ui.drawRectFilled(ba, bb, rgbm(1, 1, 1, 0.10), 2 * s)
+      ui.drawRectFilled(ba, vec2(ba.x + (bb.x - ba.x) * frac, bb.y), rgbm(0.36, 0.38, 0.98, 0.9), 2 * s)
+      ui.drawRect(ba, bb, rgbm(1, 1, 1, 0.35), 2 * s)
+      local ot = string.format('%.0f %%', Desktop.opacity * 100)
+      drawText(ot, FONT_MONO, 9 * s, vec2((ba.x + bb.x) / 2 - textWidth(ot, FONT_MONO, 9 * s) / 2, y + 1.5 * s), COLOR_TITLE)
+      Drag.clickable(ba, bb, function()
+        local mx = ui.mousePos().x
+        Desktop.setOpacity(0.2 + 0.8 * math.min(math.max((mx - ba.x) / (bb.x - ba.x), 0), 1))
+      end)
     elseif Settings.tab == 'room' then
       local Rr = RecordSync.base.rr
       drawText(TEXTS.setShareSource, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
