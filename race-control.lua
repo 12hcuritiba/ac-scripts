@@ -2004,12 +2004,23 @@ do
   local COCKPIT_REQUEST = 'amxracing.race-control.cockpit'
   local COCKPIT_ANSWER = 'amxracing.race-control.cockpit.state'
   AppLink.cockpitState = {}
+  local cockpitAsk = { t = nil, answered = false, warned = false }
   function AppLink.cockpit(text)
     ac.broadcastSharedEvent(COCKPIT_REQUEST, text)
+    if text == 'state' and not cockpitAsk.t then cockpitAsk.t = state.ui.clock end
+    if cockpitAsk.t and not cockpitAsk.answered and not cockpitAsk.warned and state.ui.clock - cockpitAsk.t >= 5 then
+      cockpitAsk.warned = true
+      ac.log('race-control: cockpit: no answer of the app to the values asked 5 s ago')
+    end
   end
-  ac.onSharedEvent(COCKPIT_ANSWER, function(data)
-    local st = {}
-    for item, value in tostring(data or ''):gmatch('([%w%.]+)=(%-?[%d%.]+)') do st[item] = tonumber(value) end
+  ac.onSharedEvent(COCKPIT_ANSWER, function(data, senderName, senderType)
+    local st, n = {}, 0
+    for item, value in tostring(data or ''):gmatch('([%w%.]+)=(%-?[%d%.]+)') do st[item] = tonumber(value); n = n + 1 end
+    if not cockpitAsk.answered then
+      cockpitAsk.answered = true
+      ac.log(string.format('race-control: cockpit: first answer of the app (%s, %s): %d values, %d characters: %s', tostring(senderName),
+        tostring(senderType), n, #tostring(data or ''), tostring(data or ''):sub(1, 160)))
+    end
     AppLink.cockpitState = st
   end)
   ac.onSharedEvent(APP_ANSWER, function(data, senderName, senderType, senderID)
