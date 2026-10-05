@@ -40,6 +40,7 @@ do
 end
 local MANIFEST_URL = 'https://api.12hcuritiba.com/manifest'
 local SERVER_KEY = 'rc.server'
+local LEARNED_KEY = 'rc.serverSeen'
 local active = false
 local starts = {}
 local function hereId()
@@ -57,31 +58,24 @@ local function activate(why)
   ac.log('race-control app: server of the event (' .. tostring(HERE) .. ', ' .. why .. '): the app acts')
   for _, fn in ipairs(starts) do fn() end
 end
+local GUI_ITEMS = { { 'hideRaceFlagsBefore', 'HIDE', 'HIDE_RACE_FLAGS', 1, 0 },
+  { 'hideIconMANUAL_PIT_LIMITER', 'HIDE_ICONS', 'MANUAL_PIT_LIMITER', 1, 0 }, { 'hideIconPIT_LIMITER_WARNING', 'HIDE_ICONS', 'PIT_LIMITER_WARNING', 1, 0 },
+  { 'extraHudPIT_SPEED_LIMIT', 'EXTRA_HUD_ELEMENTS', 'PIT_SPEED_LIMIT', 0, 1 }, { 'extraHudMANUAL_PIT_SPEED_LIMITER', 'EXTRA_HUD_ELEMENTS', 'MANUAL_PIT_SPEED_LIMITER', 0, 1 },
+  { 'extraHudWARN_ABOUT_MANUAL_LIMITER', 'EXTRA_HUD_ELEMENTS', 'WARN_ABOUT_MANUAL_LIMITER', 0, 1 } }
+local function guiIni() return ac.INIConfig.load(ac.getFolder(ac.FolderID.ExtCfgUser) .. '\\gui.ini') end
+local function guiApply()
+  local ini = guiIni()
+  for _, it in ipairs(GUI_ITEMS) do
+    local was = ini:get(it[2], it[3], it[5])
+    if ac.storage[it[1]] == nil then ac.storage[it[1]] = tostring(was) end
+    if tonumber(was) ~= it[4] then
+      ini:setAndSave(it[2], it[3], it[4])
+      ac.log('race-control app: ' .. it[2] .. ' ' .. it[3] .. ' ' .. tostring(was) .. ' -> ' .. it[4])
+    end
+  end
+end
 onOurServer(function()
-  local guiPath = ac.getFolder(ac.FolderID.ExtCfgUser) .. '\\gui.ini'
-  local ini = ac.INIConfig.load(guiPath)
-  local before = ini:get('HIDE', 'HIDE_RACE_FLAGS', 0)
-  if ac.storage.hideRaceFlagsBefore == nil then ac.storage.hideRaceFlagsBefore = tostring(before) end
-  if tonumber(before) ~= 1 then
-    ini:setAndSave('HIDE', 'HIDE_RACE_FLAGS', 1)
-    ac.log('race-control app: HIDE_RACE_FLAGS ' .. tostring(before) .. ' -> 1')
-  end
-  for _, key in ipairs({ 'MANUAL_PIT_LIMITER', 'PIT_LIMITER_WARNING' }) do
-    local was = ini:get('HIDE_ICONS', key, 0)
-    if ac.storage['hideIcon' .. key] == nil then ac.storage['hideIcon' .. key] = tostring(was) end
-    if tonumber(was) ~= 1 then
-      ini:setAndSave('HIDE_ICONS', key, 1)
-      ac.log('race-control app: HIDE_ICONS ' .. key .. ' ' .. tostring(was) .. ' -> 1')
-    end
-  end
-  for _, key in ipairs({ 'PIT_SPEED_LIMIT', 'MANUAL_PIT_SPEED_LIMITER', 'WARN_ABOUT_MANUAL_LIMITER' }) do
-    local was = ini:get('EXTRA_HUD_ELEMENTS', key, 1)
-    if ac.storage['extraHud' .. key] == nil then ac.storage['extraHud' .. key] = tostring(was) end
-    if tonumber(was) ~= 0 then
-      ini:setAndSave('EXTRA_HUD_ELEMENTS', key, 0)
-      ac.log('race-control app: EXTRA_HUD_ELEMENTS ' .. key .. ' ' .. tostring(was) .. ' -> 0')
-    end
-  end
+  guiApply()
   local refused = {}
   setInterval(function()
     for _, id in ipairs({ 'sessionTime', 'startingLights', 'wrongWay' }) do
@@ -94,15 +88,11 @@ onOurServer(function()
   end, 5)
 end)
 local function guiRestore()
-  local guiPath = ac.getFolder(ac.FolderID.ExtCfgUser) .. '\\gui.ini'
-  local ini = ac.INIConfig.load(guiPath)
-  local items = { { 'hideRaceFlagsBefore', 'HIDE', 'HIDE_RACE_FLAGS', 1 } }
-  for _, key in ipairs({ 'MANUAL_PIT_LIMITER', 'PIT_LIMITER_WARNING' }) do items[#items + 1] = { 'hideIcon' .. key, 'HIDE_ICONS', key, 1 } end
-  for _, key in ipairs({ 'PIT_SPEED_LIMIT', 'MANUAL_PIT_SPEED_LIMITER', 'WARN_ABOUT_MANUAL_LIMITER' }) do items[#items + 1] = { 'extraHud' .. key, 'EXTRA_HUD_ELEMENTS', key, 0 } end
-  for _, it in ipairs(items) do
+  local ini = guiIni()
+  for _, it in ipairs(GUI_ITEMS) do
     local before = ac.storage[it[1]]
     if before ~= nil then
-      local now = ini:get(it[2], it[3], it[4])
+      local now = ini:get(it[2], it[3], it[5])
       if tonumber(now) == it[4] and tonumber(before) ~= it[4] then
         ini:setAndSave(it[2], it[3], tonumber(before))
         ac.log('race-control app: not the server of the event: ' .. it[2] .. ' ' .. it[3] .. ' back to ' .. tostring(before))
@@ -333,10 +323,15 @@ ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
   ac.broadcastSharedEvent(COCKPIT_ANSWER, now)
 end)
 ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
-  if not active or senderType ~= 'server_script' then
-    ac.log('race-control app: preset request ignored, sender ' .. tostring(senderName) .. ' / ' .. tostring(senderType) .. (active and '' or ', not the server of the event'))
+  if senderType ~= 'server_script' then
+    ac.log('race-control app: preset request ignored, sender ' .. tostring(senderName) .. ' / ' .. tostring(senderType))
     return
   end
+  if not active and HERE then
+    ac.storage[LEARNED_KEY] = HERE
+    activate('online script of the event')
+  end
+  if not active then return end
   heard = true
   if guard.on then guardEnd('online script running, ' .. guard.swallowed .. ' messages held') end
   if tostring(data or '') == '' then
@@ -477,9 +472,9 @@ local function idOf(body)
   local port = s:match('"server"%s*:%s*{.-"httpPort"%s*:%s*"?(%d+)"?')
   return ip and port and (ip .. ':' .. port) or nil
 end
-local kept = ac.storage[SERVER_KEY]
-if HERE and kept == HERE then activate('kept from the last load') end
-if not HERE then guiRestore() end
+local kept, learned = ac.storage[SERVER_KEY], ac.storage[LEARNED_KEY]
+if HERE and (kept == HERE or learned == HERE) then activate(kept == HERE and 'manifest kept from the last load' or 'last server where the online script spoke') end
+if not ac.getSim().isOnlineRace then guiRestore() end
 if HERE and web and web.get then
   web.get(MANIFEST_URL, function(err, res)
     local id = not err and res and tonumber(res.status) == 200 and idOf(res.body) or nil
@@ -487,9 +482,10 @@ if HERE and web and web.get then
       ac.log('race-control app: manifest of the base not read (' .. tostring(err or (res and res.status)) .. ')')
       return
     end
+    if ac.storage[SERVER_KEY] and ac.storage[SERVER_KEY] ~= id then ac.storage[LEARNED_KEY] = nil end
     ac.storage[SERVER_KEY] = id
     if id == HERE then activate('manifest of the base')
-    elseif not active then
+    elseif not active and ac.storage[LEARNED_KEY] ~= HERE then
       ac.log('race-control app: not the server of the event (' .. HERE .. '): nothing acts')
       guiRestore()
     end
