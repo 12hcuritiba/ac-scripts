@@ -4243,7 +4243,8 @@ do
   end
   function DamageClass.reset()
     local r = state.repair
-    r.lapsLeft, r.beyondSince, r.class = nil, nil, 'normal'
+    if r.lapsLeft then r.lapsLeft = config.damage.repairLaps end
+    r.beyondSince = nil
   end
   function DamageClass.update(car, lineFrame)
     local r = state.repair
