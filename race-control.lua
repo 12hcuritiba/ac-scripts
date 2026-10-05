@@ -265,7 +265,7 @@ local TEXTS = {
   damageRepairLast = 'REPAIR REQUIRED - LAST LAP',
   damageBent = 'Suspension bent - %s',
   damageSuspension = 'Suspension %s',
-  damageAngle = '%s +%.1f° over setup',
+  damageAngle = '%s +%.1f°',
   damageBody = 'Bodywork damage %s %d',
   damageBodyLimit = 'limit %d',
   damageTyre = 'Tyre punctured - %s',
@@ -1594,8 +1594,8 @@ do
   local SYNC_PART = 120
   local SYNC_ANSWER_WINDOW = 30
   local SYNC_REQUEST = 255
-  local SYNC_LISTS = { 'penalties', 'window', 'swap', 'track', 'car', 'gain', 'pit', 'stint', 'pass' }
-  local SYNC_CODES = { penalties = 1, window = 2, swap = 3, track = 4, car = 5, gain = 6, pit = 7, stint = 8, pass = 9 }
+  local SYNC_LISTS = { 'penalties', 'window', 'swap', 'track', 'car', 'gain', 'pit', 'stint', 'pass', 'kmr' }
+  local SYNC_CODES = { penalties = 1, window = 2, swap = 3, track = 4, car = 5, gain = 6, pit = 7, stint = 8, pass = 9, kmr = 10 }
   local sendRecordEvent = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.rec'),
     rcCar = ac.StructItem.uint8(),
@@ -3001,7 +3001,8 @@ do
     OnlineQueue.push(sendKmr, data, nil)
   end
 end
-local Diag = { inputs = {}, acts = {}, last = nil }
+local Diag = { inputs = {}, acts = {}, last = nil,
+  on = false }
 do
   local WINDOW = 1.0
   local held = {}
@@ -3081,6 +3082,7 @@ do
     engine = 'Engine', reverse = 'Gear', camera = 'Camera' }
   local ORDER = { 'headlights', 'lowBeams', 'hazard', 'limiter', 'engine', 'reverse', 'camera' }
   function Diag.update(car)
+    if not Diag.on then return end
     local clock = state.ui.clock
     local now = readInputs()
     for name in pairs(now) do
@@ -3903,7 +3905,7 @@ do
     if not w or not o then return nil end
     if num(car.suspensionDamage[i]) <= 0 then return 0, 0 end
     local pk = CarState.peak[i] or { toe = 0, camber = 0 }
-    return pk.toe, pk.camber
+    return pk.toe, pk.camber, pk.slip or 0
   end
   function CarState.suspPercent(car, i)
     local toe, camber = CarState.deviation(car, i)
@@ -4118,14 +4120,15 @@ do
         local now = state.ui.clock
         local list = CarState.held[i] or {}
         CarState.held[i] = list
-        list[#list + 1] = { t = now, toe = math.abs(num(w.toeIn) - o.toe), camber = math.abs(num(w.camber) - o.camber) }
+        list[#list + 1] = { t = now, toe = math.abs(num(w.toeIn) - o.toe), slip = math.abs(num(w.slipAngle)), camber = math.abs(num(w.camber) - o.camber) }
         local settle = config.damage.settleSeconds
         while #list > 1 and now - list[2].t >= settle do table.remove(list, 1) end
         if now - list[1].t >= settle then
           local toe, camber = math.huge, math.huge
-          for _, v in ipairs(list) do toe, camber = math.min(toe, v.toe), math.min(camber, v.camber) end
+          local slip = math.huge
+          for _, v in ipairs(list) do toe, slip, camber = math.min(toe, v.toe), math.min(slip, v.slip or 0), math.min(camber, v.camber) end
           local pk = CarState.peak[i] or { toe = 0, camber = 0 }
-          CarState.peak[i] = { toe = math.max(pk.toe, toe), camber = math.max(pk.camber, camber) }
+          CarState.peak[i] = { toe = math.max(pk.toe, toe), slip = math.max(pk.slip or 0, slip), camber = math.max(pk.camber, camber) }
         end
       end
       if not searching and CarState.suspKmh[i] and num(car.suspensionDamage[i]) ~= CarState.suspRaw[i] then
@@ -4191,9 +4194,11 @@ do
       if rank[class] > rank[worst.class] then worst = { class = class, text = text, detail = detail } end
     end
     for i = 0, 3 do
-      local toe, camber = CarState.deviation(car, i)
+      local toe, camber, slip = CarState.deviation(car, i)
       if toe then
-        local what, dev, bent, broken = 'toe', toe, config.damage.toeBent, config.damage.toeBroken
+        local what = 'toe'
+        if (slip or 0) > toe then what, toe = 'slip', slip end
+        local dev, bent, broken = toe, config.damage.toeBent, config.damage.toeBroken
         if camber / config.damage.camberBent > toe / config.damage.toeBent then
           what, dev, bent, broken = 'camber', camber, config.damage.camberBent, config.damage.camberBroken
         end
@@ -9590,7 +9595,7 @@ local drawRaceScreens = (function()
   local ROW = 13
   local FS = 10
   local PLACE = { relative = { 1572, 380, 300 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
-    race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 430 }, event = { 770, 200, 380 },
+    race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 510 }, event = { 770, 200, 380 },
     weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 },
     calc = { 380, 110, 380 } }
   local filter = Desktop.filter
@@ -9721,6 +9726,16 @@ local drawRaceScreens = (function()
     end
     Drag.icons('relative', p1, p2, s)
   end
+  local function kmrOf(r)
+    if r.index == 0 then return Audit.points, Audit.rating end
+    local c = ac.getCar(r.index)
+    local byCar = c and RecordSync.peers[c.sessionID]
+    local rec = byCar and byCar.kmr and Record.decode(byCar.kmr.text)
+    if not rec then return nil, nil end
+    local driver, points, rating = tostring(rec.body or ''):match('^(%d+)|([^|]*)|?([^|]*)$')
+    if not driver or tonumber(driver) ~= nameCode(ac.getDriverName(r.index)) then return nil, nil end
+    return tonumber(points), tonumber(rating)
+  end
   local function standingsScreen(car, w, h, s)
     local list = {}
     for _, r in ipairs(RaceTable.rows) do
@@ -9735,7 +9750,7 @@ local drawRaceScreens = (function()
     row(p1, y, s, { { 'P', 32, COLOR_AXIS, true }, { 'CL', 52, COLOR_AXIS, true }, { '#', 58, COLOR_AXIS },
       { 'DRIVER', 88, COLOR_AXIS }, { 'CLASS', 214, COLOR_AXIS }, { 'LAPS', 266, COLOR_AXIS, true },
       { 'GAP', 306, COLOR_AXIS, true }, { 'INT', 346, COLOR_AXIS, true }, { 'BEST', 398, COLOR_AXIS, true },
-      { 'PIT', 416, COLOR_AXIS, true } })
+      { 'PIT', 416, COLOR_AXIS, true }, { 'SR', 456, COLOR_AXIS, true }, { 'PTS', 492, COLOR_AXIS, true } })
     y = y + ROW * s
     local leader = list[1]
     local sessionBest = CarRead.num(sim.bestLapTimeMs)
@@ -9762,6 +9777,8 @@ local drawRaceScreens = (function()
         { gapTo(r, list[i - 1]), 346, col, true },
         { lapTime(r.best), 398, (me and cutBest[r.best]) and RED or (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
         { tostring(r.stops or 0), 416, col, true },
+        { (function() local _, sr = kmrOf(r); return sr and Audit.num(sr) or '-' end)(), 456, col, true },
+        { (function() local pts = kmrOf(r); return pts and tostring(pts) or '-' end)(), 492, col, true },
       })
       end
       y = y + ROW * s
