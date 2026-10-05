@@ -437,6 +437,13 @@ local TEXTS = {
   where = { menu = 'MENU (ESC)', box = 'BOX (LOBBY)', pit = 'PIT', pitlane = 'PIT LANE', grid = 'GRID', stopped = 'STOPPED',
     track = 'TRACK' }, redCount = 'In the pits %d / %d - over the limit %d',
   scrPerf = 'PERFORMANCE', perfRows = { fps = 'FPS', cpu = 'CPU', gpu = 'GPU' },
+  scrCalc = 'STRATEGY CALCULATOR', calcNotCar = 'not sent to the car', calcFuel = 'Fuel/lap', calcWear = 'Wear/lap (worst tyre)',
+  calcLap = 'Mean lap', calcLaps = 'Laps measured',
+  calcParams = { race = 'Race length', lap = 'Lap used', tank = 'Tank', reserve = 'Reserve (laps)', pitloss = 'Pit lane loss',
+    refuel = 'Refuel', tyres = 'Tyre change' },
+  calcRaceLaps = '%d laps', calcHead = { 'SC', 'WEAR', 'LIM', 'L/LAP', 'STP', 'L/ST', 'FUEL/ST', 'TYRE', 'PIT', 'TOTAL' },
+  calcFields = { wear = 'wear %/lap', limit = 'tyre down to %', fuel = 'fuel L/lap', stops = 'stops' },
+  calcAuto = 'AUTO', calcNo = 'NO', calcBest = 'Best scenario: %s', calcNone = 'No scenario fits in the tank and the tyre',
   scrCockpit = 'COCKPIT', cockpitCar = 'Settings of this car: %s', cockpitSave = 'SAVE', cockpitSaved = 'SAVED', cockpitNoApp = 'app not running', cockpitMore = '+ ALL', cockpitAudio = 'VOLUME - EVERY CHANNEL',
   cockpitRows = { ffb = 'Force feedback', y = 'Seat up / down', x = 'Seat left / right', pitch = 'Pitch up / down',
     fov = 'Field of view', ['vol.main'] = 'Volume (master)' },
@@ -480,7 +487,8 @@ local TEXTS = {
   edChoose = 'Click a screen to choose it and drag it to its place',
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
-    weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit', perf = 'Performance' },
+    weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit', perf = 'Performance',
+    calc = 'Strategy calculator' },
   scrTelemetry = 'TELEMETRY',
   teleChannels = { thr = 'THR', brk = 'BRK', clu = 'CLU', str = 'STR', spd = 'SPD', gear = 'GEAR', glat = 'G LAT', glon = 'G LON' },
   teleShort = { thr = 'T', brk = 'B', clu = 'C', str = 'S', spd = 'V', gear = 'G', glat = 'X', glon = 'Z' },
@@ -7677,7 +7685,7 @@ local Desktop = { current = 1, count = 1, pitOn = true, place = {}, focus = nil,
   indicatorUntil = 0, drawnOrder = {}, wasInPit = nil }
 do
   local SCREENS = { 'pitbox', 'setup', 'status', 'race', 'laps', 'standings', 'relative', 'laptime', 'delta', 'event',
-    'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf' }
+    'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local STORAGE_KEY = 'rc.desktops'
   local OFF_KEY = 'rc.desktopsOff'
@@ -7912,6 +7920,8 @@ do
       RecordSync.base.rrShare(dir > 0)
     elseif g == 'cockpit' then
       Desktop.cockpitStep(dir)
+    elseif g == 'calc' then
+      Desktop.calcStep(dir)
     end
   end
   Desktop.filter = { relative = 'ALL', standings = 'ALL', map = 'ALL', weather = 'forecast' }
@@ -7921,6 +7931,8 @@ do
   Desktop.deltaStep = function() end
   Desktop.cockpitStep = function() end
   Desktop.cockpitMove = function() end
+  Desktop.calcStep = function() end
+  Desktop.calcMove = function() end
   function Desktop.padFor(g)
     if Desktop.focus == nil then return g == 'pitbox' end
     return Desktop.focus == g
@@ -8196,6 +8208,10 @@ do
         if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.cockpitMove(-1) end
         if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.cockpitMove(1) end
       end
+      if g == 'calc' then
+        if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.calcMove(-1) end
+        if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.calcMove(1) end
+      end
     end
   end
 end
@@ -8362,8 +8378,8 @@ Desktop.commands = {
 local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
-    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf' }
-  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden' }
+    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc' }
+  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden', calc = 'hidden' }
   local MODES = { visible = true, auto = true, hidden = true }
   Drag.EYE_NEXT = { visible = 'hidden', auto = 'hidden', hidden = 'visible' }
   Drag.GHOST_NEXT = { visible = 'auto', auto = 'visible', hidden = 'auto' }
@@ -8440,7 +8456,7 @@ do
           { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
           { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.Weather, 'weather' },
           { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' }, { ui.Icons.VideoCamera, 'share' },
-          { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' } }) do
+          { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' }, { ui.Icons.Calculator, 'calc' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
       end
     end
@@ -9427,7 +9443,8 @@ local drawRaceScreens = (function()
   local FS = 10
   local PLACE = { relative = { 1572, 380, 300 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 430 }, event = { 770, 200, 380 },
-    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 } }
+    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 },
+    calc = { 380, 110, 380 } }
   local filter = Desktop.filter
   local function lapTime(ms)
     if not ms or ms <= 0 then return '-' end
@@ -10804,6 +10821,165 @@ local drawRaceScreens = (function()
     end
     Drag.icons('cockpit', p1, p2, s)
   end
+  local calcScreen = (function()
+    local PARAMS = { { k = 'race', step = 5, fmt = '%.0f min' }, { k = 'lap', step = 0.1, fmt = '%.1f s' }, { k = 'tank', step = 1, fmt = '%.0f L' },
+      { k = 'reserve', step = 1, fmt = '%.0f' }, { k = 'pitloss', step = 1, fmt = '%.0f s' }, { k = 'refuel', step = 0.05, fmt = '%.2f s/L' },
+      { k = 'tyres', step = 1, fmt = '%.0f s' } }
+    local FIELDS = { { k = 'wear', step = 0.1, fmt = '%.2f' }, { k = 'limit', step = 5, fmt = '%.0f' }, { k = 'fuel', step = 0.05, fmt = '%.2f' },
+      { k = 'stops', step = 1, fmt = '%.0f' } }
+    local NAMES = { 'A', 'B', 'C', 'D' }
+    local items = {}
+    for _, p in ipairs(PARAMS) do items[#items + 1] = { key = p.k, p = p } end
+    for i, n in ipairs(NAMES) do
+      for _, f in ipairs(FIELDS) do items[#items + 1] = { key = n .. '.' .. f.k, p = f, sc = i, name = n } end
+    end
+    local V, sel, cur = {}, 1, {}
+    for k, v in tostring(ac.storage['rc.calc'] or ''):gmatch('([%w%.]+)=(%-?[%d%.]+)') do V[k] = tonumber(v) end
+    local function save()
+      local parts = {}
+      for k, v in pairs(V) do parts[#parts + 1] = string.format('%s=%g', k, v) end
+      table.sort(parts)
+      ac.storage['rc.calc'] = table.concat(parts, ';')
+    end
+    local function measured(car)
+      local worst, wl = nil, 0
+      for wh = 0, 3 do
+        local lf = CarRead.tyreLife(car, wh, state.tyreLineKm[wh] or 0)
+        if lf and (not worst or lf < worst) then worst, wl = lf, state.tyreLaps[wh] or 0 end
+      end
+      local sum, n = 0, 0
+      for i = #RaceTable.laps, 1, -1 do
+        local l = RaceTable.laps[i]
+        if l.valid and not l.pit and l.ms > 0 then sum, n = sum + l.ms, n + 1 end
+        if n >= 10 then break end
+      end
+      local fpl = CarRead.num(car.fuelPerLap)
+      return { fuel = fpl > 0 and fpl or nil, wear = worst and wl > 0 and (100 - worst) / wl or nil, lapMs = n > 0 and sum / n or nil,
+        n = #RaceTable.laps }
+    end
+    local function raceMinutes()
+      for i = 0, (sim.sessionsCount or 0) - 1 do
+        local ss = ac.getSession(i)
+        if ss and ss.type == ac.SessionType.Race and CarRead.num(ss.durationMinutes) > 0 then return ss.durationMinutes end
+      end
+      return 60
+    end
+    local function default(it)
+      local k, m, car = it.p.k, cur.m, cur.car
+      if it.sc then
+        if k == 'wear' then return m.wear or 0 elseif k == 'fuel' then return m.fuel or 0 elseif k == 'limit' then return 70 end
+        return it.sc - 1
+      end
+      if k == 'race' then return raceMinutes() end
+      if k == 'lap' then return m.lapMs and math.floor(m.lapMs / 100 + 0.5) / 10 or 90 end
+      if k == 'tank' then return CarRead.num(car.maxFuel) > 0 and CarRead.num(car.maxFuel) or 100 end
+      return ({ reserve = 1, pitloss = 25, refuel = 0.5, tyres = 10 })[k]
+    end
+    local function value(it)
+      if V[it.key] ~= nil then return V[it.key] end
+      return default(it)
+    end
+    local function step(dir)
+      local it = items[sel]
+      if not cur.m then return end
+      local v = value(it) + dir * it.p.step
+      V[it.key] = math.max(0, math.floor(v / it.p.step + 0.5) * it.p.step)
+      save()
+    end
+    Desktop.calcStep = step
+    Desktop.calcMove = function(dir) sel = (sel - 1 + dir) % #items + 1 end
+    local function results()
+      local P = {}
+      for _, it in ipairs(items) do if not it.sc then P[it.p.k] = value(it) end end
+      local lapMs = math.max(P.lap, 1) * 1000
+      local raceLaps = math.ceil(P.race * 60000 / lapMs)
+      local out, best = {}, nil
+      for i = 1, #NAMES do
+        local f = {}
+        for j, fd in ipairs(FIELDS) do f[fd.k] = value(items[#PARAMS + (i - 1) * #FIELDS + j]) end
+        local stops = math.max(0, math.floor(f.stops + 0.5))
+        local per = math.ceil(raceLaps / (stops + 1))
+        local fuelLaps = f.fuel > 0 and math.floor(P.tank / f.fuel) - P.reserve or math.huge
+        local tyreLaps = f.wear > 0 and math.floor(f.limit / f.wear) or math.huge
+        local fuelStint = f.fuel * per
+        local pit = stops * (P.pitloss + math.min(fuelStint, P.tank) * P.refuel + P.tyres)
+        local r = { per = per, fuelLaps = fuelLaps, tyreLaps = tyreLaps, okFuel = per <= fuelLaps, okTyre = per <= tyreLaps,
+          fuelStint = fuelStint, pit = pit, total = raceLaps * lapMs + pit * 1000 }
+        r.ok = r.okFuel and r.okTyre
+        out[i] = r
+        if r.ok and (not best or r.total < out[best].total) then best = i end
+      end
+      return out, best, raceLaps
+    end
+    local function laps(v) return v == math.huge and 'inf' or tostring(v) end
+    return function(car, w, h, s)
+      cur.m, cur.car = measured(car), car
+      local m = cur.m
+      local res, best, raceLaps = results()
+      local p1, p2, y = frame('calc', w, h, s, 17.9, TEXTS.scrCalc, TEXTS.calcNotCar)
+      local function u(v, fmt) return v and string.format(fmt, v) or '-' end
+      row(p1, y, s, { { TEXTS.calcFuel, 14, COLOR_DIM, false, FONT_TEXT }, { u(m.fuel, '%.2f L'), 176, nil, true },
+        { TEXTS.calcWear, 196, COLOR_DIM, false, FONT_TEXT }, { u(m.wear, '%.2f %%'), 366, nil, true } })
+      y = y + ROW * s
+      row(p1, y, s, { { TEXTS.calcLap, 14, COLOR_DIM, false, FONT_TEXT }, { m.lapMs and lapTime(m.lapMs) or '-', 176, nil, true },
+        { TEXTS.calcLaps, 196, COLOR_DIM, false, FONT_TEXT }, { tostring(m.n), 366, nil, true } })
+      y = y + ROW * s
+      drawSeparator(p1, p2, y + 3 * s, s)
+      y = y + 8 * s
+      for i, p in ipairs(PARAMS) do
+        local it = items[i]
+        local on = sel == i
+        row(p1, y, s, { { TEXTS.calcParams[p.k], 14, on and YELLOW or COLOR_DIM, false, FONT_TEXT },
+          { string.format(p.fmt, value(it)), 250, on and YELLOW or (V[it.key] ~= nil and COLOR_TITLE or COLOR_DIM), true },
+          { p.k == 'race' and string.format(TEXTS.calcRaceLaps, raceLaps) or '', 366, COLOR_DIM, true } })
+        Drag.clickable(vec2(p1.x + 10 * s, y), vec2(p1.x + 254 * s, y + ROW * s), function() sel = i end)
+        y = y + ROW * s
+      end
+      drawSeparator(p1, p2, y + 3 * s, s)
+      y = y + 8 * s
+      local HX = { 14, 66, 96, 132, 156, 190, 252, 282, 318, 366 }
+      local head = {}
+      for k, tx in ipairs(TEXTS.calcHead) do head[k] = { tx, HX[k], COLOR_AXIS, k > 1 } end
+      row(p1, y, s, head)
+      y = y + ROW * s
+      for i, n in ipairs(NAMES) do
+        local r = res[i]
+        local cells = { { n, 14, best == i and GREEN or COLOR_TITLE } }
+        for j, fd in ipairs(FIELDS) do
+          local at = #PARAMS + (i - 1) * #FIELDS + j
+          local it = items[at]
+          cells[#cells + 1] = { string.format(fd.fmt, value(it)), HX[j + 1], sel == at and YELLOW or (V[it.key] ~= nil and COLOR_TITLE or COLOR_DIM), true }
+          Drag.clickable(vec2(p1.x + (HX[j + 1] - 28) * s, y), vec2(p1.x + HX[j + 1] * s, y + ROW * s), function() sel = at end)
+        end
+        cells[#cells + 1] = { tostring(r.per), HX[6], COLOR_TITLE, true }
+        cells[#cells + 1] = { string.format('%.1f(%s)', r.fuelStint, laps(r.fuelLaps)), HX[7], r.okFuel and COLOR_TITLE or RED, true }
+        cells[#cells + 1] = { laps(r.tyreLaps), HX[8], r.okTyre and COLOR_TITLE or RED, true }
+        cells[#cells + 1] = { string.format('%.0f', r.pit), HX[9], COLOR_TITLE, true }
+        cells[#cells + 1] = { r.ok and hms(r.total) or TEXTS.calcNo, HX[10], r.ok and (best == i and GREEN or COLOR_TITLE) or RED, true }
+        row(p1, y, s, cells)
+        y = y + ROW * s
+      end
+      drawSeparator(p1, p2, y + 3 * s, s)
+      y = y + 8 * s
+      local it = items[sel]
+      local label = it.sc and (it.name .. ' - ' .. TEXTS.calcFields[it.p.k]) or TEXTS.calcParams[it.p.k]
+      drawText(label, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), YELLOW)
+      local vx = p2.x - 14 * s - 50 * s
+      stepBox('-', vec2(vx - 84 * s, y), s, function() step(-1) end)
+      local vt = string.format(it.p.fmt, value(it))
+      local vw = textWidth(vt, FONT_MONO, FS * s)
+      drawText(vt, FONT_MONO, FS * s, vec2(vx - 35 * s - vw / 2, y), COLOR_TITLE)
+      stepBox('+', vec2(vx - 14 * s, y), s, function() step(1) end)
+      local a, b = vec2(vx + 6 * s, y), vec2(p2.x - 14 * s, y + 12 * s)
+      ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s)
+      local aw = textWidth(TEXTS.calcAuto, FONT_MONO, 9 * s)
+      drawText(TEXTS.calcAuto, FONT_MONO, 9 * s, vec2((a.x + b.x) / 2 - aw / 2, a.y + 0.5 * s), V[it.key] == nil and COLOR_DIM or COLOR_TITLE)
+      Drag.clickable(a, b, function() V[it.key] = nil; save() end)
+      y = y + ROW * s
+      drawText(best and string.format(TEXTS.calcBest, NAMES[best]) or TEXTS.calcNone, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), best and GREEN or RED)
+      Drag.icons('calc', p1, p2, s)
+    end
+  end)()
   return function(car, w, h, s)
     local line, sector = Desktop.recent('line'), Desktop.recent('sector')
     if shown('race', car.isInPitlane or line) then raceScreen(car, w, h, s) end
@@ -10819,6 +10995,7 @@ local drawRaceScreens = (function()
     if shown('share', car.isInPitlane) then shareScreen(car, w, h, s) end
     if shown('cockpit', car.isInPitlane) then cockpitScreen(car, w, h, s) end
     if shown('perf', false) then perfScreen(car, w, h, s) end
+    if shown('calc', false) then calcScreen(car, w, h, s) end
   end
 end)()
 local KmrEvents = (function()
