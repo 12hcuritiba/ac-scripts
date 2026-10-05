@@ -10783,13 +10783,14 @@ local drawRaceScreens = (function()
     drawText(text, FONT_MONO, 10 * s, vec2(a.x + (14 * s - tw) / 2, a.y), COLOR_TITLE)
     Drag.clickable(a, b, fn)
   end
+  local COCKPIT_RIGHT = 50
   local function cockpitScreen(car, w, h, s)
     if state.ui.clock - cockpit.askT >= 2 then cockpit.askT = state.ui.clock; AppLink.cockpit('state') end
     local st = AppLink.cockpitRead(car)
     local focus = Desktop.focus == 'cockpit'
     local p1, p2, y = frame('cockpit', w, h, s, #COCKPIT_ROWS + 1, TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp)
     do
-      local a = vec2(p2.x - 14 * s - 46 * s, y)
+      local a = vec2(p2.x - 14 * s - COCKPIT_RIGHT * s, y)
       local b = vec2(p2.x - 14 * s, y + 12 * s)
       local name = tostring(ac.getCarName and ac.getCarName(0) or ac.getCarID(0) or '')
       local t = string.format(TEXTS.cockpitCar, name)
@@ -10818,8 +10819,8 @@ local drawRaceScreens = (function()
       slider(r.key, st[r.key], vec2(vx - 54 * s, y), vec2(vx - 2 * s, y + 12 * s), s, on)
       stepBox('+', vec2(vx, y), s, function() cockpit.row = i; cockpitSend(r.key, 1, r.step) end)
       if r.key == 'vol.main' then
-        local a = vec2(vx + 20 * s, y)
-        local b = vec2(a.x + 46 * s, a.y + 12 * s)
+        local a = vec2(p2.x - 14 * s - COCKPIT_RIGHT * s, y)
+        local b = vec2(p2.x - 14 * s, a.y + 12 * s)
         if cockpit.audio then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s) end
         drawText(TEXTS.cockpitMore, FONT_MONO, 9 * s, vec2(a.x + 4 * s, a.y + 0.5 * s), cockpit.audio and rgbm(0.07, 0.07, 0.07, 1) or COLOR_TITLE)
         Drag.clickable(a, b, function() cockpit.audio = not cockpit.audio end)
@@ -10836,7 +10837,7 @@ local drawRaceScreens = (function()
       for _, ch in ipairs(CHANNELS) do
         local key = 'vol.' .. ch
         drawText(TEXTS.cockpitChannels[ch] or ch, FONT_TEXT, FS * s, vec2(a1.x + 14 * s, ay), COLOR_DIM)
-        local vx = a2.x - 14 * s - 14 * s
+        local vx = a2.x - 14 * s - 70 * s
         stepBox('-', vec2(vx - 70 * s, ay), s, function() cockpitSend(key, -1, 0.05) end)
         slider(key, st[key], vec2(vx - 54 * s, ay), vec2(vx - 2 * s, ay + 12 * s), s, false)
         stepBox('+', vec2(vx, ay), s, function() cockpitSend(key, 1, 0.05) end)
