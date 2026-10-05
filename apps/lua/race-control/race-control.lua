@@ -322,6 +322,27 @@ ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
   ac.log('race-control app: preset ' .. tostring(data) .. ' -> ' .. text)
   ac.broadcastSharedEvent(APP_ANSWER, text)
 end)
+local SETUP_VALUES = 'amxracing.race-control.setupvalues'
+ac.onSharedEvent(SETUP_VALUES, function(data, senderName, senderType)
+  if senderType ~= 'server_script' then
+    ac.log('race-control app: setup values ignored, sender ' .. tostring(senderName) .. ' / ' .. tostring(senderType))
+    return
+  end
+  local function tyres()
+    local car, parts = ac.getCar(0), {}
+    for i = 0, 3 do local w = car and car.wheels and car.wheels[i]; parts[#parts + 1] = string.format('%.1f', tonumber(w and w.tyrePressure) or 0) end
+    return table.concat(parts, ' / ')
+  end
+  local before, answer = tyres(), {}
+  local editable = ac.isSetupAvailableToEdit and ac.isSetupAvailableToEdit()
+  for name, value in tostring(data or ''):gmatch('([%w_]+)=(%-?%d+)') do
+    local ok, res = pcall(ac.setSetupSpinnerValue, name, tonumber(value))
+    answer[#answer + 1] = name .. '=' .. ((ok and res) and 'ok' or 'fail')
+  end
+  local text = table.concat(answer, ';')
+  ac.log('race-control app: setup values ' .. tostring(data) .. ' -> ' .. text .. ' (setup editable: ' .. tostring(editable) .. '; tyres ' .. before .. ' -> ' .. tyres() .. ' psi)')
+  ac.broadcastSharedEvent(SETUP_VALUES .. '.done', text)
+end)
 local SETUP_STORE = '.amxracing.race-control.setup'
 local SETUP_SECONDS = 15
 local function setupText()

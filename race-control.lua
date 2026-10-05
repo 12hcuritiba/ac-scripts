@@ -2065,7 +2065,7 @@ do
         for k, v in box:gmatch('(%a+)=([^;]*)') do f[k] = v end
         for _, c in ipairs(changes) do B.pitBox.preset[c.name] = c.value end
         B.pitBox.remote({ fuel = tonumber(f.fuel), compound = tonumber(f.compound), tyres = tonumber(f.tyres), repair = f.repair,
-          preset = tonumber(f.preset), auto = f.mode == 'auto' and true or f.mode == 'manual' and false or nil, start = f.start == '1' })
+          preset = tonumber(f.preset), auto = f.mode == 'auto' and true or f.mode == 'manual' and false or nil, start = f.start == '1', press = f.press })
         B.box.nextT, B.box.sig = state.ui.clock + 1, nil
         rcLog('Pit stop plan', 'box from the Racing Room: ' .. box .. (list ~= '' and ('; ' .. list) or ''))
         if f.start == '1' then showNotice(TEXTS.rcTitle, TEXTS.remotePitStart, nil, 6) end
@@ -2125,6 +2125,14 @@ RecordSync.base.app = AppLink
 do
   local APP_REQUEST = 'amxracing.race-control.preset'
   local APP_ANSWER = 'amxracing.race-control.preset.done'
+  function AppLink.setSetup(values)
+    local parts = {}
+    for name, v in pairs(values) do parts[#parts + 1] = name .. '=' .. math.floor(v) end
+    table.sort(parts)
+    local text = table.concat(parts, ';')
+    ac.broadcastSharedEvent('amxracing.race-control.setupvalues', text)
+    ac.log('race-control: pit stop pressure sent to the app (setup): ' .. text)
+  end
   function AppLink.setPreset(changes, preset)
     local parts = { '@' .. math.floor(preset or 0) }
     for _, c in ipairs(changes) do parts[#parts + 1] = c.name .. '=' .. math.floor(c.value) end
@@ -4576,6 +4584,7 @@ do
   local ALL_TYRES = #TYRE_CHOICES
   local ROWS = { 'fuel', 'compound', 'tyres', 'suspension', 'powertrain', 'body', 'mode' }
   PitBox.preset = {}
+  PitBox.setupPress = {}
   PitBox.tab = 'stop'
   PitBox.presetIdx = nil
   local function presetCount()
@@ -4783,6 +4792,8 @@ do
     for _, c in ipairs(presetChanges()) do
       if c.type == 'wing' or #TYRE_CHOICES[tyres][2] > 0 then p.preset[#p.preset + 1] = c end
     end
+    p.setupPress = {}
+    if #TYRE_CHOICES[tyres][2] > 0 then for k, v in pairs(PitBox.setupPress) do p.setupPress[k] = v end end
     p.presetIdx = PitBox.presetIndex()
     p.switch = presetCount() > 1 and p.presetIdx ~= num(sim.currentQuickPitPreset)
     return p
@@ -4875,6 +4886,7 @@ do
     state.pitService = { startMs = serverTimeMs(), untilMs = serverTimeMs() + p.total * 1000, plan = planText(p) }
     PitStops.markService()
     if gameNeeded(p) then writePreset(p, 'preset written by the app', CarRead.parked(ac.getCar(0))) end
+    if next(p.setupPress) then AppLink.setSetup(p.setupPress) end
     physics.lockUserControlsFor(p.total + SERVICE_LOCK_EXTRA)
     PitRecord.save()
     ac.log(string.format('race-control: pit stop started, %.1f s (%s)', p.total, planText(p)))
@@ -4888,7 +4900,7 @@ do
   end
   local function reset()
     PitBox.row, PitBox.fuel, PitBox.compound, PitBox.tyres, PitBox.repair = 1, 0, nil, 1, {}
-    PitBox.preset = {}
+    PitBox.preset, PitBox.setupPress = {}, {}
     PitBox.touched = false
     PitBox.tab, PitBox.presetIdx, PitBox.sentSig = 'stop', nil, nil
     PitBox.remoteUntil = 0
@@ -5012,6 +5024,10 @@ do
       PitBox.repair = { suspension = b.repair:find('s') ~= nil, powertrain = b.repair:find('p') ~= nil, body = b.repair:find('b') ~= nil }
     end
     if b.auto ~= nil then PitBox.auto = b.auto end
+    if b.press then
+      PitBox.setupPress = {}
+      for k, v in tostring(b.press):gmatch('([%w_]+):(%-?%d+)') do PitBox.setupPress[k] = tonumber(v) end
+    end
     if b.preset and b.preset >= 0 and b.preset < presetCount() then PitBox.presetIdx = b.preset end
     PitBox.touched = true
     if b.start then PitBox.remoteUntil = state.ui.clock + REMOTE_START_S end
