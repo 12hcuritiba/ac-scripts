@@ -2014,6 +2014,23 @@ do
       Record.save('elec', math.floor(serverTimeMs() / 1000), settings .. '|' .. ers)
     end
   end
+  B.stab = { done = nil, nextT = 0 }
+  function B.setupTabUpdate()
+    local T = B.stab
+    local key = tostring(ac.getCarID and ac.getCarID(0) or '')
+    if not on() or key == '' or T.done == key or state.ui.clock < T.nextT then return end
+    T.nextT = state.ui.clock + 30
+    local ok, ini = pcall(ac.INIConfig.carData, 0, 'setup.ini')
+    if not ok or not ini or type(ini.sections) ~= 'table' then return end
+    local parts = {}
+    for _, keys in pairs(ini.sections) do
+      local name = type(keys) == 'table' and type(keys.NAME) == 'table' and keys.NAME[1]
+      local tab = type(keys) == 'table' and type(keys.TAB) == 'table' and keys.TAB[1]
+      if name and tab then parts[#parts + 1] = (tostring(name):gsub('[|;=%c]', ' ')) .. '=' .. (tostring(tab):gsub('[|;=%c]', ' ')) end
+    end
+    table.sort(parts)
+    if #parts > 0 then T.done = key; Record.save('setuptab', math.floor(serverTimeMs() / 1000), table.concat(parts, ';')) end
+  end
   B.plan = { nextT = 0, busy = false, done = tostring(ac.storage['rc.pitplan'] or '') }
   local PLAN_PIT_GAP = 2
   function B.planUpdate()
@@ -13405,6 +13422,7 @@ function script.update(dt)
   RecordSync.base.planUpdate()
   RecordSync.base.boxUpdate()
   RecordSync.base.elecUpdate()
+  RecordSync.base.setupTabUpdate()
   RecordSync.base.setupPushUpdate()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
     state.hold = nil
