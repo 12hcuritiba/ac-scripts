@@ -38,7 +38,26 @@ do
     if io.fileSize(dst) ~= io.fileSize(src) then io.copyFile(src, dst, false) end
   end
 end
-if ac.getSim().isOnlineRace then
+local MANIFEST_URL = 'https://api.12hcuritiba.com/manifest'
+local SERVER_KEY = 'rc.server'
+local active = false
+local starts = {}
+local function hereId()
+  if not ac.getSim().isOnlineRace then return nil end
+  local okI, ip = pcall(ac.getServerIP)
+  local okP, port = pcall(ac.getServerPortHTTP)
+  if not okI or type(ip) ~= 'string' or ip == '' or not okP or tonumber(port) == nil or tonumber(port) < 0 then return nil end
+  return ip .. ':' .. math.floor(tonumber(port))
+end
+local HERE = hereId()
+local function onOurServer(fn) starts[#starts + 1] = fn end
+local function activate(why)
+  if active then return end
+  active = true
+  ac.log('race-control app: server of the event (' .. tostring(HERE) .. ', ' .. why .. '): the app acts')
+  for _, fn in ipairs(starts) do fn() end
+end
+onOurServer(function()
   local guiPath = ac.getFolder(ac.FolderID.ExtCfgUser) .. '\\gui.ini'
   local ini = ac.INIConfig.load(guiPath)
   local before = ini:get('HIDE', 'HIDE_RACE_FLAGS', 0)
@@ -73,6 +92,24 @@ if ac.getSim().isOnlineRace then
       end
     end
   end, 5)
+end)
+local function guiRestore()
+  local guiPath = ac.getFolder(ac.FolderID.ExtCfgUser) .. '\\gui.ini'
+  local ini = ac.INIConfig.load(guiPath)
+  local items = { { 'hideRaceFlagsBefore', 'HIDE', 'HIDE_RACE_FLAGS', 1 } }
+  for _, key in ipairs({ 'MANUAL_PIT_LIMITER', 'PIT_LIMITER_WARNING' }) do items[#items + 1] = { 'hideIcon' .. key, 'HIDE_ICONS', key, 1 } end
+  for _, key in ipairs({ 'PIT_SPEED_LIMIT', 'MANUAL_PIT_SPEED_LIMITER', 'WARN_ABOUT_MANUAL_LIMITER' }) do items[#items + 1] = { 'extraHud' .. key, 'EXTRA_HUD_ELEMENTS', key, 0 } end
+  for _, it in ipairs(items) do
+    local before = ac.storage[it[1]]
+    if before ~= nil then
+      local now = ini:get(it[2], it[3], it[4])
+      if tonumber(now) == it[4] and tonumber(before) ~= it[4] then
+        ini:setAndSave(it[2], it[3], tonumber(before))
+        ac.log('race-control app: not the server of the event: ' .. it[2] .. ' ' .. it[3] .. ' back to ' .. tostring(before))
+      end
+      ac.storage[it[1]] = nil
+    end
+  end
 end
 local APP_REQUEST = 'amxracing.race-control.preset'
 local APP_ANSWER = 'amxracing.race-control.preset.done'
@@ -132,7 +169,8 @@ local function guardBox()
   line(ping, 'Consolas', 11, 50, bad and rgbm(1, 0.3, 0.3, 1) or rgbm(0.6, 0.63, 0.65, 1))
   line(string.format('%d messages held for the Racing Control', guard.swallowed), 'Consolas', 10, 68, rgbm(0.6, 0.63, 0.65, 1))
 end
-if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
+onOurServer(function()
+  if tostring(ac.getTrackID() or ''):lower() ~= TRACK_ID then return end
   local mode = 'hide'
   local okX, extras = pcall(ac.INIConfig.onlineExtras)
   local function key(name)
@@ -202,7 +240,7 @@ if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK
       ac.shutdownAssettoCorsa()
     end
   end, 1)
-end
+end)
 local COCKPIT_REQUEST = 'amxracing.race-control.cockpit'
 local COCKPIT_ANSWER = 'amxracing.race-control.cockpit.state'
 local CHANNELS = { 'main', 'engine', 'transmission', 'tyres', 'surfaces', 'dirt', 'wind', 'opponents', 'carComponents',
@@ -244,7 +282,8 @@ local function cockpitApply(text)
   if seat then pcall(ac.setOnboardCameraParams, 0, seat, true) end
   return n
 end
-if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
+onOurServer(function()
+  if tostring(ac.getTrackID() or ''):lower() ~= TRACK_ID then return end
   local waited, applied = 0, false
   setInterval(function()
     if applied then return end
@@ -256,9 +295,9 @@ if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK
       ac.log(string.format('race-control app: cockpit values saved for %s applied: %d', cockpitKey(), cockpitApply(saved)))
     end
   end, 1)
-end
+end)
 ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
-  if senderType ~= 'server_script' then return end
+  if not active or senderType ~= 'server_script' then return end
   if tostring(data or '') == 'save' then
     local now = cockpitState()
     ac.storage[cockpitKey()] = now
@@ -294,8 +333,8 @@ ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
   ac.broadcastSharedEvent(COCKPIT_ANSWER, now)
 end)
 ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
-  if senderType ~= 'server_script' then
-    ac.log('race-control app: preset request ignored, sender ' .. tostring(senderName) .. ' / ' .. tostring(senderType))
+  if not active or senderType ~= 'server_script' then
+    ac.log('race-control app: preset request ignored, sender ' .. tostring(senderName) .. ' / ' .. tostring(senderType) .. (active and '' or ', not the server of the event'))
     return
   end
   heard = true
@@ -324,8 +363,8 @@ ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
 end)
 local SETUP_VALUES = 'amxracing.race-control.setupvalues'
 ac.onSharedEvent(SETUP_VALUES, function(data, senderName, senderType)
-  if senderType ~= 'server_script' then
-    ac.log('race-control app: setup values ignored, sender ' .. tostring(senderName) .. ' / ' .. tostring(senderType))
+  if not active or senderType ~= 'server_script' then
+    ac.log('race-control app: setup values ignored, sender ' .. tostring(senderName) .. ' / ' .. tostring(senderType) .. (active and '' or ', not the server of the event'))
     return
   end
   local function tyres()
@@ -390,14 +429,16 @@ local function keepSetup(why)
   if raw ~= '' then ac.store(SETUP_RAW_STORE, raw) end
   if why then ac.log('race-control app: setup kept (' .. why .. '): ' .. #text .. ' characters') end
 end
-if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
+onOurServer(function()
+  if tostring(ac.getTrackID() or ''):lower() ~= TRACK_ID then return end
   setTimeout(function() keepSetup('load') end, 3)
   setInterval(function() keepSetup() end, SETUP_SECONDS)
   if ac.onSetupFile then ac.onSetupFile(function(op) keepSetup(tostring(op)) end) end
-end
+end)
 local PUSH_STORE, PUSH_DONE = '.amxracing.race-control.setuppush', '.amxracing.race-control.setuppush.done'
 local PUSH_TOLD_SECONDS = 15
-if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
+onOurServer(function()
+  if tostring(ac.getTrackID() or ''):lower() ~= TRACK_ID then return end
   local push = { id = nil, answered = {}, toldT = -1e9, clock = 0 }
   local function answer(id, st, why)
     push.answered[id] = true
@@ -429,4 +470,28 @@ if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK
       if not push.answered[id] then answer(id, 'recusado', 'refused by the driver') end
     end)
   end, 1)
+end)
+local function idOf(body)
+  local s = tostring(body or '')
+  local ip = s:match('"server"%s*:%s*{.-"ip"%s*:%s*"([^"]+)"')
+  local port = s:match('"server"%s*:%s*{.-"httpPort"%s*:%s*"?(%d+)"?')
+  return ip and port and (ip .. ':' .. port) or nil
+end
+local kept = ac.storage[SERVER_KEY]
+if HERE and kept == HERE then activate('kept from the last load') end
+if not HERE then guiRestore() end
+if HERE and web and web.get then
+  web.get(MANIFEST_URL, function(err, res)
+    local id = not err and res and tonumber(res.status) == 200 and idOf(res.body) or nil
+    if not id then
+      ac.log('race-control app: manifest of the base not read (' .. tostring(err or (res and res.status)) .. ')')
+      return
+    end
+    ac.storage[SERVER_KEY] = id
+    if id == HERE then activate('manifest of the base')
+    elseif not active then
+      ac.log('race-control app: not the server of the event (' .. HERE .. '): nothing acts')
+      guiRestore()
+    end
+  end)
 end
