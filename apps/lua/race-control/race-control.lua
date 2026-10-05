@@ -63,19 +63,7 @@ local GUI_ITEMS = { { 'hideRaceFlagsBefore', 'HIDE', 'HIDE_RACE_FLAGS', 1, 0 },
   { 'extraHudPIT_SPEED_LIMIT', 'EXTRA_HUD_ELEMENTS', 'PIT_SPEED_LIMIT', 0, 1 }, { 'extraHudMANUAL_PIT_SPEED_LIMITER', 'EXTRA_HUD_ELEMENTS', 'MANUAL_PIT_SPEED_LIMITER', 0, 1 },
   { 'extraHudWARN_ABOUT_MANUAL_LIMITER', 'EXTRA_HUD_ELEMENTS', 'WARN_ABOUT_MANUAL_LIMITER', 0, 1 } }
 local function guiIni() return ac.INIConfig.load(ac.getFolder(ac.FolderID.ExtCfgUser) .. '\\gui.ini') end
-local function guiApply()
-  local ini = guiIni()
-  for _, it in ipairs(GUI_ITEMS) do
-    local was = ini:get(it[2], it[3], it[5])
-    if ac.storage[it[1]] == nil then ac.storage[it[1]] = tostring(was) end
-    if tonumber(was) ~= it[4] then
-      ini:setAndSave(it[2], it[3], it[4])
-      ac.log('race-control app: ' .. it[2] .. ' ' .. it[3] .. ' ' .. tostring(was) .. ' -> ' .. it[4])
-    end
-  end
-end
 onOurServer(function()
-  guiApply()
   local refused = {}
   setInterval(function()
     for _, id in ipairs({ 'sessionTime', 'startingLights', 'wrongWay' }) do
