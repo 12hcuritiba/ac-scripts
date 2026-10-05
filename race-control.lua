@@ -2031,10 +2031,12 @@ do
     local ok, ini = pcall(ac.INIConfig.carData, 0, 'setup.ini')
     if not ok or not ini or type(ini.sections) ~= 'table' then return end
     local parts = {}
-    for _, keys in pairs(ini.sections) do
+    for sec, keys in pairs(ini.sections) do
       local name = type(keys) == 'table' and type(keys.NAME) == 'table' and keys.NAME[1]
       local tab = type(keys) == 'table' and type(keys.TAB) == 'table' and keys.TAB[1]
-      if name and tab then parts[#parts + 1] = (tostring(name):gsub('[|;=%c]', ' ')) .. '=' .. (tostring(tab):gsub('[|;=%c]', ' ')) end
+      if name and tab then
+        parts[#parts + 1] = (tostring(name):gsub('[|;=%c]', ' ')) .. '=' .. (tostring(tab):gsub('[|;=%c]', ' ')) .. '|' .. (tostring(sec):gsub('[|;=%c]', ' '))
+      end
     end
     table.sort(parts)
     if #parts > 0 then T.done = key; Record.save('setuptab', math.floor(serverTimeMs() / 1000), table.concat(parts, ';')) end
