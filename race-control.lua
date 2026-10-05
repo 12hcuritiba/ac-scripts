@@ -2012,6 +2012,8 @@ do
     end
     local raw = ac.load and ac.load('.amxracing.race-control.setupraw')
     if type(raw) == 'string' and raw ~= '' and raw ~= T.rawSig then T.rawSig = raw; Record.save('setupraw', math.floor(serverTimeMs() / 1000), raw) end
+    local def = ac.load and ac.load('.amxracing.race-control.setupdef')
+    if type(def) == 'string' and def ~= '' and def ~= T.defSig then T.defSig = def; Record.save('setupdef', math.floor(serverTimeMs() / 1000), def) end
   end
   local BOX_GAP = 2
   B.box = { sig = nil, nextT = 0 }

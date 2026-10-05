@@ -370,7 +370,20 @@ local function setupRaw()
   end
   return table.concat(out, ';')
 end
+local SETUP_DEF_STORE = '.amxracing.race-control.setupdef'
+local function setupDefault()
+  local ok, list = pcall(ac.getSetupSpinners)
+  if not ok or type(list) ~= 'table' then return '' end
+  local out = {}
+  for _, s in ipairs(list) do
+    local name = tostring(s.name or ''):gsub('[|;=%c]', ' ')
+    if name ~= '' and tonumber(s.defaultValue) then out[#out + 1] = name .. '=' .. string.format('%d', math.floor(tonumber(s.defaultValue))) end
+  end
+  return table.concat(out, ';')
+end
 local function keepSetup(why)
+  local def = setupDefault()
+  if def ~= '' then ac.store(SETUP_DEF_STORE, def) end
   local text = setupText()
   if text ~= '' then ac.store(SETUP_STORE, text) end
   local raw = setupRaw()
