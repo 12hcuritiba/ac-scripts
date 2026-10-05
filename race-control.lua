@@ -1992,6 +1992,8 @@ do
       local body = legal .. '|' .. why .. '|' .. kept
       if body ~= T.setupSig then T.setupSig = body; Record.save('setup', math.floor(serverTimeMs() / 1000), body) end
     end
+    local raw = ac.load and ac.load('.amxracing.race-control.setupraw')
+    if type(raw) == 'string' and raw ~= '' and raw ~= T.rawSig then T.rawSig = raw; Record.save('setupraw', math.floor(serverTimeMs() / 1000), raw) end
   end
   local BOX_GAP = 2
   B.box = { sig = nil, nextT = 0 }

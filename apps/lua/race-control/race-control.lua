@@ -359,9 +359,22 @@ local function setupText()
   end
   return table.concat(out, ';')
 end
+local SETUP_RAW_STORE = '.amxracing.race-control.setupraw'
+local function setupRaw()
+  local ok, list = pcall(ac.getSetupSpinners)
+  if not ok or type(list) ~= 'table' then return '' end
+  local out = {}
+  for _, s in ipairs(list) do
+    local name = tostring(s.name or ''):gsub('[|;=%c]', ' ')
+    if name ~= '' then out[#out + 1] = name .. '=' .. string.format('%d', math.floor(tonumber(s.value) or 0)) end
+  end
+  return table.concat(out, ';')
+end
 local function keepSetup(why)
   local text = setupText()
   if text ~= '' then ac.store(SETUP_STORE, text) end
+  local raw = setupRaw()
+  if raw ~= '' then ac.store(SETUP_RAW_STORE, raw) end
   if why then ac.log('race-control app: setup kept (' .. why .. '): ' .. #text .. ' characters') end
 end
 if ac.getSim().isOnlineRace and tostring(ac.getTrackID() or ''):lower() == TRACK_ID then
