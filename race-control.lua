@@ -1330,6 +1330,41 @@ do
   WebQueue.update = pump
   OnlineQueue.web = WebQueue
 end
+ServerGuard = { state = 'wait', waited = 0, asked = false }
+do
+  local MANIFEST_URL = 'https://api.12hcuritiba.com/manifest'
+  local WAIT_SECONDS = 10
+  local G = ServerGuard
+  local function decide(st, why)
+    G.state = st
+    ac.log('race-control: server of the session ' .. tostring(ac.getServerIP() or '') .. ':' .. tostring(ac.getServerPortTCP() or '') .. ' - ' .. why)
+  end
+  local function onAnswer(err, res)
+    if G.state ~= 'wait' then return end
+    local body = not err and res and tonumber(res.status) == 200 and tostring(res.body or '') or nil
+    if not body then decide('unknown', 'manifest of the base not read (' .. tostring(err or (res and res.status)) .. '): the script acts') return end
+    local ip = body:match('"server"%s*:%s*{.-"ip"%s*:%s*"([^"]+)"')
+    local port = body:match('"server"%s*:%s*{.-"tcpPort"%s*:%s*"?(%d+)"?')
+    if not ip then decide('unknown', 'manifest without the server: the script acts') return end
+    local hereIp, herePort = tostring(ac.getServerIP() or ''), tostring(ac.getServerPortTCP() or '')
+    if hereIp == ip and (not port or herePort == port) then decide('ours', 'the server of the event: the script acts')
+    else decide('other', 'not the server of the event (' .. ip .. (port and (':' .. port) or '') .. '): the script stays still') end
+  end
+  function ServerGuard.check(dt)
+    if G.state == 'ours' or G.state == 'unknown' then return true end
+    if G.state == 'other' then return false end
+    if not G.asked then
+      G.asked = true
+      if not (web and web.request) then decide('unknown', 'no web: the script acts') return true end
+      web.request('GET', MANIFEST_URL, nil, nil, onAnswer)
+      if G.state ~= 'wait' then return G.state ~= 'other' end
+    end
+    G.waited = G.waited + (dt or 0)
+    if G.waited >= WAIT_SECONDS then decide('unknown', 'no answer of the manifest in ' .. WAIT_SECONDS .. ' s: the script acts') return true end
+    return false
+  end
+  function ServerGuard.ok() return G.state == 'ours' or G.state == 'unknown' end
+end
 local Connection = { cars = {}, menu = {}, kicks = {}, hudMode = nil }
 do
   local PING_WARN = 250
@@ -3236,6 +3271,7 @@ do
   local LOG_ONLY = { 'SERVER', 'ABS', 'TC', 'TC2', 'Engine Map', 'Pit limiter' }
   if ac.onMessage then
     ac.onMessage(function(title, description)
+      if not ServerGuard.ok() then return end
       local t, d = tostring(title or ''), tostring(description or '')
       local text = d ~= '' and (t ~= '' and (t .. ' - ' .. d) or d) or t
       if Audit.blank(text) then return end
@@ -3254,6 +3290,7 @@ do
   end
 end
 ac.onChatMessage(function(message, senderCarIndex)
+  if not ServerGuard.ok() then return end
   if type(message) ~= 'string' then return false end
   local server = fromServer(senderCarIndex)
   if server and Audit.blank(message) then return true end
@@ -13197,6 +13234,7 @@ local drawDesktopUI = (function()
     if not lobbyHud and ui.onExclusiveHUD then
       lobbyHud = true
       ui.onExclusiveHUD(function(mode)
+        if not ServerGuard.ok() then return end
         Connection.hudMode = mode
         if mode == 'menu' then
           local size = ac.getUI().windowSize
@@ -13319,6 +13357,7 @@ local drawDesktopUI = (function()
   end
 end)()
 function script.drawUI(exclusive)
+  if not ServerGuard.ok() then return end
   if not exclusive and Desktop.hudDrawn then
     Desktop.hudDrawn = false
     if not Desktop.hudBoth then
@@ -13738,6 +13777,7 @@ function CarControls.update(dt)
   ac.setCurrentCamera(CarControls.mode)
 end
 function script.update(dt)
+  if not ServerGuard.check(dt) then return end
   local car = ac.getCar(0)
   local l = state.list
   local g = { t = car.currentPenaltyType, p = car.currentPenaltyParameter }
