@@ -2026,6 +2026,17 @@ do
     local ok, body = pcall(B.pitBox.stateBody, car)
     if ok and body and body ~= T.sig then T.sig = body; Record.save('box', math.floor(serverTimeMs() / 1000), body) end
   end
+  local STATUS_GAP = 5
+  B.status = { sig = nil, nextT = 0 }
+  function B.statusUpdate()
+    local T = B.status
+    if not on() or not B.statusBody or state.ui.clock < T.nextT then return end
+    T.nextT = state.ui.clock + STATUS_GAP
+    local car = ac.getCar(0)
+    if not car then return end
+    local ok, body = pcall(B.statusBody, car)
+    if ok and body and body ~= T.sig then T.sig = body; Record.save('status', math.floor(serverTimeMs() / 1000), body) end
+  end
   local ELEC_GAP, ELEC_ERS_GAP = 2, 60
   B.elec = { sig = nil, nextT = 0, ersT = 0 }
   function B.elecUpdate()
@@ -10679,6 +10690,15 @@ local drawRaceScreens = (function()
     end
     Drag.icons('race', p1, p2, s)
   end
+  RecordSync.base.statusBody = function(car)
+    local ws, we = PitStops.window()
+    local rule = config.driverStint
+    local life = CarRead.tyreLife(car, 0, state.tyreLineKm[0] or 0)
+    return string.format('%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d', config.pitStopsEnabled and 1 or 0, config.pitStopsRequired or 0,
+      (config.swapOn() and config.swapRequired) and 1 or 0, config.swapRequired or 0, rule.minMinutes or 0, rule.maxMinutes or 0,
+      math.floor(ws or 0), math.floor(we or 0), math.floor(math.max(sessionElapsedMs() - PitStops.windowTime(), 0) / 1000) * 1000,
+      state.tyreLaps[0] or 0, life and math.floor(life) or -1, CarRead.num(sim.rainWetness) > 0.05 and 1 or 0, math.floor(CarRead.num(sim.roadGrip) * 100))
+  end
   local Tele = { WINDOW = 8, RATE = 30, n = 0, at = 0, t = -1, buf = {} }
   local TELE_ORDER = { 'thr', 'brk', 'clu', 'str', 'spd', 'gear', 'glat', 'glon' }
   local TELE_COLOR = { thr = rgbm(0.16, 1, 0, 1), brk = rgbm(1, 0.16, 0, 1), clu = rgbm(0.16, 0.6, 1, 1),
@@ -13820,6 +13840,7 @@ function script.update(dt)
   RecordSync.base.stratUpdate()
   RecordSync.base.planUpdate()
   RecordSync.base.boxUpdate()
+  RecordSync.base.statusUpdate()
   RecordSync.base.elecUpdate()
   RecordSync.base.setupTabUpdate()
   RecordSync.base.setupPushUpdate()
