@@ -10888,8 +10888,8 @@ local drawRaceScreens = (function()
     for i, line in ipairs(lines) do
       drawText(line, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + (13 + 13 * i) * s), ({ warn = YELLOW, bad = RED })[askLevel] or COLOR_DIM)
     end
-    local function mark(row, ry) if shareRow == row then ui.drawRectFilled(vec2(p1.x + 6 * s, ry + 4 * s), vec2(p1.x + 9 * s, ry + 18 * s), YELLOW) end end
-    mark(1, y)
+    local function mark(row, ry, rh) if shareRow == row then ui.drawRectFilled(vec2(p1.x + 9 * s, ry + 2 * s), vec2(p1.x + 11 * s, ry + (rh - 2) * s), YELLOW) end end
+    mark(1, y, 22)
     local fy = y + (2 + #lines) * ROW * s
     local fa = vec2(p1.x + 14 * s, fy)
     local fb = vec2(fa.x + isz, fa.y + isz)
@@ -10897,7 +10897,7 @@ local drawRaceScreens = (function()
     ui.drawRectFilled(fa, fb, fon and rgbm(0.2, 0.6, 0.3, 0.9) or rgbm(1, 1, 1, 0.08), 3 * s)
     ui.drawIcon(ui.Icons.Headphones, vec2(fa.x + 3 * s, fa.y + 3 * s), vec2(fb.x - 3 * s, fb.y - 3 * s), fon and COLOR_TITLE or COLOR_DIM)
     Drag.clickable(fa, fb, function() if fo and fo.room then RecordSync.base.rrFocus(not fon, fo.with) end end)
-    mark(2, fy)
+    mark(2, fy, 22)
     local chosen
     if fo then for _, p in ipairs(fo.people) do if p.steam == fo.with then chosen = p.name end end end
     drawText(fon and TEXTS.focusOn or TEXTS.focusOff, FONT_TITLE, 10 * s, vec2(fb.x + 10 * s, fy), fon and GREEN or COLOR_DIM)
@@ -10913,7 +10913,7 @@ local drawRaceScreens = (function()
         while #nm > 1 and textWidth(nm, FONT_TEXT, FS * s) > subW do nm = nm:sub(1, -2) end
         drawText(nm, FONT_TEXT, FS * s, vec2(fb.x + 10 * s, ny), on and GREEN or COLOR_TITLE)
         if on then drawText('>', FONT_MONO, FS * s, vec2(fa.x + 6 * s, ny), GREEN) end
-        mark(2 + i, ny)
+        mark(2 + i, ny, ROW)
         Drag.clickable(vec2(p1.x + 10 * s, ny), vec2(p2.x - 10 * s, ny + ROW * s), function() shareRow = 2 + i; RecordSync.base.rrFocus(true, p.steam) end)
         ny = ny + ROW * s
       end
