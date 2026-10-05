@@ -479,6 +479,7 @@ local TEXTS = {
   setShareSource = 'Source', setShareLayout = 'Screens', setShareVr = 'VR: Game window (the mirror of the headset on the PC)',
   setShareSources = { game = 'Game window', screen1 = 'Screen 1', screen2 = 'Screen 2', screen3 = 'Screen 3' },
   setShareLayouts = { single = 'Single', triple = 'Triple (all)', center = 'Triple (middle)' },
+  setShareScope = 'Show in', setShareScopes = { all = 'Every room with Screens', room = 'Only your room' },
   setShareGo = 'SHARE GAME SCREEN', setShareStop = 'STOP SHARING',
   menuDesktops = 'Desktops', menuAudit = 'Audit', auditTitle = 'AUDIT', auditPoints = 'KMR points %d / %d',
   auditRating = 'KMR rating %s',
@@ -1898,11 +1899,13 @@ do
   end
   local RR_GAP = 5
   B.rr = { state = 'unknown', nextT = 0, busy = false, garage = '', area = '', screen = false, game = false, logged = nil, err = '',
-    source = tostring(ac.storage['rc.share.source'] or 'game'), layout = tostring(ac.storage['rc.share.layout'] or 'single') }
-  function B.rrSet(source, layout)
+    source = tostring(ac.storage['rc.share.source'] or 'game'), layout = tostring(ac.storage['rc.share.layout'] or 'single'),
+    scope = tostring(ac.storage['rc.share.scope'] or 'all') == 'room' and 'room' or 'all' }
+  function B.rrSet(source, layout, scope)
     local R = B.rr
     if source then R.source = source; ac.storage['rc.share.source'] = source end
     if layout then R.layout = layout; ac.storage['rc.share.layout'] = layout end
+    if scope then R.scope = scope; ac.storage['rc.share.scope'] = scope end
   end
   function B.rrUpdate()
     local R = B.rr
@@ -1942,7 +1945,7 @@ do
     local R = B.rr
     if not on() then return end
     local body = '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"share":' .. (share and 'true' or 'false')
-      .. ',"source":' .. jsonStr(R.source) .. ',"layout":' .. jsonStr(R.layout) .. '}'
+      .. ',"source":' .. jsonStr(R.source) .. ',"layout":' .. jsonStr(R.layout) .. ',"scope":' .. jsonStr(R.scope) .. '}'
     R.asked, R.answer, R.askedT = share, 'wait', state.ui.clock
     ac.log('race-control: game screen ' .. (share and 'on' or 'off') .. ' asked to the Racing Room (' .. R.source .. ', ' .. R.layout .. ')')
     WebQueue.request('POST', config.baseUrl .. '/v1/rr/share', { ['Content-Type'] = 'application/json' }, body, function(err, res)
@@ -2045,7 +2048,7 @@ do
   local PLAN_PIT_GAP = 2
   function B.planUpdate()
     local P = B.plan
-    if not on() or P.busy or state.ui.clock < P.nextT or not (B.app and B.app.alive) then return end
+    if not on() or P.busy or state.ui.clock < P.nextT then return end
     local car = ac.getCar(0)
     P.busy, P.nextT = true, state.ui.clock + ((car and car.isInPitlane) and PLAN_PIT_GAP or PLAN_GAP)
     WebQueue.request('GET', config.baseUrl .. '/v1/pitplan?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
@@ -2068,6 +2071,7 @@ do
         if f.start == '1' then showNotice(TEXTS.rcTitle, TEXTS.remotePitStart, nil, 6) end
       else
         if #changes == 0 then return end
+        if not (B.app and B.app.alive) then P.done = nil; ac.storage['rc.pitplan'] = ''; return end
         B.app.setPreset(changes, tonumber(preset) or 0)
         B.strat.nextT, B.strat.sig = state.ui.clock + 2, nil
         rcLog('Pit stop plan', string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
@@ -11969,6 +11973,12 @@ local drawDesktopUI = (function()
       cx = x0 + 70 * s
       for _, k in ipairs({ 'single', 'triple', 'center' }) do
         cx = chip(TEXTS.setShareLayouts[k], vec2(cx, y), s, Rr.layout == k, nil, function() RecordSync.base.rrSet(nil, k) end)
+      end
+      y = y + 22 * s
+      drawText(TEXTS.setShareScope, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      cx = x0 + 70 * s
+      for _, k in ipairs({ 'all', 'room' }) do
+        cx = chip(TEXTS.setShareScopes[k], vec2(cx, y), s, Rr.scope == k, nil, function() RecordSync.base.rrSet(nil, nil, k) end)
       end
       y = y + 22 * s
       drawText(TEXTS.setShareVr, FONT_MONO, 9 * s, vec2(x0, y), COLOR_DIM)
