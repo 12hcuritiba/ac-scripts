@@ -419,7 +419,7 @@ local TEXTS = {
   dirPenNone = 'Penalties  none', dirPenTitle = 'Penalties  ', dirPenDt = '%s DT%d', dirPenSg = 'S&G %d s', dirPenDsq = 'DSQ',
   dirPenUnknown = 'Penalties  no list from this driver yet',
   dirDriver = 'Driver',
-  dirWebLine = 'money %s - %s - infr %s (%s/100km) - crashes %s (%s/100km) - laps %d best %s',
+  dirWebLine = 'points %s - %s - infr %s (%s/100km) - crashes %s (%s/100km) - laps %d best %s',
   dirWebOthers = 'Registered in the KMR',
   dirWebErr = 'KMR web stats not read: %s', dirWebOff = 'KMR web stats: key kmrStatsUrl empty', dirValue = 'Value', dirBallast = 'BALLAST', dirRestrictor = 'RESTRICTOR',
   kmrEvBtn = 'KMR EVENTS', kmrEvTitle = 'KMR EVENTS - RACE CONTROL OF THE SESSION', kmrEvConnecting = 'Connecting to the KMR race control...',
