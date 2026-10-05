@@ -468,6 +468,8 @@ local TEXTS = {
   lobbyTitle = 'RACING CONTROL', lobbyStops = 'Stops', lobbyKmr = 'KMR points / rating', lobbyWeather = 'Air / track',
   lobbyMessages = 'MESSAGES', lobbyWindow = 'Racing Control - lobby',
   scrShare = 'RACING ROOM', shareOn = 'GAME SCREEN SHARED', shareOff = 'GAME SCREEN NOT SHARED', shareHint = '< off   on >',
+  focusOn = 'FOCUS ON', focusOff = 'FOCUS OFF', focusWith = 'Talking to you: %s', focusNobody = 'Choose who talks to you', focusHint = 'Only one person talks to you',
+  focusNoRoom = 'Focus: Racing Room in a private room',
   rrRoom = '%s - %s', rrNone = 'Not connected - no voice/video', rrOther = 'On another PC - no voice/video',
   rrOffline = 'Base of the event not answering', shareAsking = 'Asking the Racing Room...', shareSent = 'Asked - the Racing Room is opening the capture',
   shareNoRoom = 'Racing Room not in a room - open a room there', shareNoAnswer = 'The Racing Room did not share the game screen',
@@ -1921,8 +1923,12 @@ do
         if garage then
           R.state, R.garage, R.area, R.screen, R.game = 'on', garage, area, screen == '1', game == '1'
           R.err = body:match('^OK|[^|]*|[^|]*|%d|%d|([^\r\n]*)') or ''
+          local fr, fon, fwith, flist = body:match('\nFOCUS|(%d)|(%d)|(%d*)|([^\r\n]*)')
+          R.focus = { room = fr == '1', on = fon == '1', with = fwith or '', people = {} }
+          for st, nm in tostring(flist or ''):gmatch('(%d+):([^;]*)') do R.focus.people[#R.focus.people + 1] = { steam = st, name = nm } end
         else
           R.state, R.screen, R.game, R.err = body:find('^OTHER') and 'other' or 'none', false, false, ''
+          R.focus = nil
         end
       end
       local now = R.state .. '|' .. R.garage .. '|' .. R.area .. '|' .. tostring(R.game) .. '|' .. R.err
@@ -1952,6 +1958,17 @@ do
     WebQueue.request('POST', config.baseUrl .. '/v1/rr/share', { ['Content-Type'] = 'application/json' }, body, function(err, res)
       R.answer = (not err and res and tostring(res.body or '')) or 'offline'
       ac.log('race-control: game screen ask answered: ' .. R.answer)
+      R.nextT = 0
+    end)
+  end
+  function B.rrFocus(isOn, withSteam)
+    local R = B.rr
+    if not on() then return end
+    local body = '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"on":' .. (isOn and 'true' or 'false') .. ',"with":' .. jsonStr(withSteam or '') .. '}'
+    if R.focus then R.focus.on, R.focus.with = isOn, withSteam or '' end
+    ac.log('race-control: focus ' .. (isOn and 'on' or 'off') .. ' asked to the Racing Room' .. ((withSteam or '') ~= '' and (' with ' .. withSteam) or ''))
+    WebQueue.request('POST', config.baseUrl .. '/v1/rr/focus', { ['Content-Type'] = 'application/json' }, body, function(err, res)
+      R.focusAnswer = (not err and res and tostring(res.body or '')) or 'offline'
       R.nextT = 0
     end)
   end
@@ -8039,7 +8056,7 @@ do
     elseif g == 'delta' then
       Desktop.deltaStep(dir)
     elseif g == 'share' then
-      RecordSync.base.rrShare(dir > 0)
+      Desktop.shareStep(dir)
     elseif g == 'cockpit' then
       Desktop.cockpitStep(dir)
     elseif g == 'calc' then
@@ -8055,6 +8072,8 @@ do
   Desktop.cockpitMove = function() end
   Desktop.calcStep = function() end
   Desktop.calcMove = function() end
+  Desktop.shareStep = function(dir) RecordSync.base.rrShare(dir > 0) end
+  Desktop.shareMove = function() end
   function Desktop.padFor(g)
     if Desktop.focus == nil then return g == 'pitbox' end
     return Desktop.focus == g
@@ -8329,6 +8348,10 @@ do
       if g == 'cockpit' then
         if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.cockpitMove(-1) end
         if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.cockpitMove(1) end
+      end
+      if g == 'share' then
+        if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.shareMove(-1) end
+        if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.shareMove(1) end
       end
       if g == 'calc' then
         if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.calcMove(-1) end
@@ -10781,8 +10804,25 @@ local drawRaceScreens = (function()
     end
     Drag.icons('perf', p1, p2, s)
   end
+  local shareRow = 1
+  local function shareRows()
+    local f = RecordSync.base.rr.focus
+    return f and f.room and (2 + #f.people) or 2
+  end
+  Desktop.shareMove = function(dir) shareRow = (shareRow - 1 + dir) % shareRows() + 1 end
+  Desktop.shareStep = function(dir)
+    local B, f = RecordSync.base, RecordSync.base.rr.focus
+    if shareRow > shareRows() then shareRow = 1 end
+    if shareRow == 1 then B.rrShare(dir > 0)
+    elseif shareRow == 2 then if f and f.room then B.rrFocus(dir > 0, dir > 0 and f.with or '') end
+    elseif f then
+      local p = f.people[shareRow - 2]
+      if p then B.rrFocus(true, dir > 0 and p.steam or '') end
+    end
+  end
   local function shareScreen(car, w, h, s)
     local Rr = RecordSync.base.rr
+    local fo = Rr.focus
     local ask, askLevel = RecordSync.base.rrAsk()
     local lines = {}
     if ask then
@@ -10801,7 +10841,9 @@ local drawRaceScreens = (function()
         lines[2] = lines[2] .. '...'
       end
     end
-    local p1, p2, y, noTitle = frame('share', w, h, s, 2 + #lines, TEXTS.scrShare, TEXTS.shareHint)
+    if shareRow > shareRows() then shareRow = 1 end
+    local focusRows = 2 + (fo and fo.room and #fo.people or 0)
+    local p1, p2, y, noTitle = frame('share', w, h, s, 2 + #lines + focusRows, TEXTS.scrShare, TEXTS.shareHint)
     if not noTitle then
       local hw = textWidth(TEXTS.shareHint, FONT_MONO, 11 * s)
       local hx = p2.x - 14 * s - hw
@@ -10825,6 +10867,36 @@ local drawRaceScreens = (function()
     drawText(room, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + 13 * s), ({ ok = COLOR_TITLE, warn = YELLOW, bad = RED })[level] or COLOR_DIM)
     for i, line in ipairs(lines) do
       drawText(line, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + (13 + 13 * i) * s), ({ warn = YELLOW, bad = RED })[askLevel] or COLOR_DIM)
+    end
+    local function mark(row, ry) if shareRow == row then ui.drawRectFilled(vec2(p1.x + 6 * s, ry + 4 * s), vec2(p1.x + 9 * s, ry + 18 * s), YELLOW) end end
+    mark(1, y)
+    local fy = y + (2 + #lines) * ROW * s
+    local fa = vec2(p1.x + 14 * s, fy)
+    local fb = vec2(fa.x + isz, fa.y + isz)
+    local fon = fo and fo.on
+    ui.drawRectFilled(fa, fb, fon and rgbm(0.2, 0.6, 0.3, 0.9) or rgbm(1, 1, 1, 0.08), 3 * s)
+    ui.drawIcon(ui.Icons.Headphones, vec2(fa.x + 3 * s, fa.y + 3 * s), vec2(fb.x - 3 * s, fb.y - 3 * s), fon and COLOR_TITLE or COLOR_DIM)
+    Drag.clickable(fa, fb, function() if fo and fo.room then RecordSync.base.rrFocus(not fon, fo.with) end end)
+    mark(2, fy)
+    local chosen
+    if fo then for _, p in ipairs(fo.people) do if p.steam == fo.with then chosen = p.name end end end
+    drawText(fon and TEXTS.focusOn or TEXTS.focusOff, FONT_TITLE, 10 * s, vec2(fb.x + 10 * s, fy), fon and GREEN or COLOR_DIM)
+    local sub = not (fo and fo.room) and TEXTS.focusNoRoom or fon and (chosen and string.format(TEXTS.focusWith, chosen) or TEXTS.focusNobody) or TEXTS.focusHint
+    local subW = p2.x - 14 * s - (fb.x + 10 * s)
+    while #sub > 1 and textWidth(sub, FONT_TEXT, 9 * s) > subW do sub = sub:sub(1, -5) .. '...' end
+    drawText(sub, FONT_TEXT, 9 * s, vec2(fb.x + 10 * s, fy + 13 * s), (fo and fo.room) and COLOR_DIM or YELLOW)
+    if fo and fo.room then
+      local ny = fy + 2 * ROW * s
+      for i, p in ipairs(fo.people) do
+        local on = fon and p.steam == fo.with
+        local nm = p.name
+        while #nm > 1 and textWidth(nm, FONT_TEXT, FS * s) > subW do nm = nm:sub(1, -2) end
+        drawText(nm, FONT_TEXT, FS * s, vec2(fb.x + 10 * s, ny), on and GREEN or COLOR_TITLE)
+        if on then drawText('>', FONT_MONO, FS * s, vec2(fa.x + 6 * s, ny), GREEN) end
+        mark(2 + i, ny)
+        Drag.clickable(vec2(p1.x + 10 * s, ny), vec2(p2.x - 10 * s, ny + ROW * s), function() shareRow = 2 + i; RecordSync.base.rrFocus(true, p.steam) end)
+        ny = ny + ROW * s
+      end
     end
     Drag.icons('share', p1, p2, s)
   end
@@ -11037,7 +11109,7 @@ local drawRaceScreens = (function()
         { TEXTS.calcWear, 196, COLOR_DIM, false, FONT_TEXT }, { u(m.wear, '%.2f %%'), 366, nil, true } })
       y = y + ROW * s
       row(p1, y, s, { { TEXTS.calcLap, 14, COLOR_DIM, false, FONT_TEXT }, { m.lapMs and lapTime(m.lapMs) or '-', 176, nil, true },
-        { TEXTS.calcLaps, 196, COLOR_DIM, false, FONT_TEXT }, { string.format('%d/%d', m.flying, RaceTable.MIN_FLYING), 366, m.lapMs and nil or RED, true } })
+        { TEXTS.calcLaps, 196, COLOR_DIM, false, FONT_TEXT }, { string.format('%d/%d', m.flying, RaceTable.MIN_FLYING), 366, m.lapMs and COLOR_TITLE or RED, true } })
       y = y + ROW * s
       drawSeparator(p1, p2, y + 3 * s, s)
       y = y + 8 * s
