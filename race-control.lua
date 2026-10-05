@@ -412,7 +412,7 @@ local TEXTS = {
   msgTitle = 'MESSAGES', setMissing = 'missing', setChecking = 'checking', setAllGood = 'All good - closes in %d s', setNotGood = 'Not all good - close it yourself',
   redTitle = 'RED FLAG CONTROL', redNone = 'no red flag', redConfirm = 'CONFIRM RED FLAG', redVsc = 'RESUME VSC %d s',
   dirLightsRed = 'LIGHTS RED', dirLightsGreen = 'LIGHTS GREEN', dirLightsAuto = 'LIGHTS AUTO',
-  redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET MONEY', dirStats = 'RESET STATS', dirBan = 'BAN', dirUnban = 'UNBAN', dirNoSg = 'NO S&G', dirNoDsq = 'NO DSQ',
+  redGreen = 'GREEN', dirVsc = 'VSC %d s', dirMoney = 'RESET POINTS', dirStats = 'RESET STATS', dirBan = 'BAN', dirUnban = 'UNBAN', dirNoSg = 'NO S&G', dirNoDsq = 'NO DSQ',
   dirKmrLine = 'KMR  points %s / %d  -  safety %s  -  %s  -  infractions %s (%s / 100 km)',
   dirPrompt = 'Prompt', dirPromptSent = 'Sent: %s', dirKmrCrashes = 'crashes %s (%s / 100 km)', dirBalRes = 'ballast %.0f kg  restrictor %.0f', dirKmrLaps = '  -  laps %d best %s', dirKmrNoStats = 'stats: none yet (not driven enough)',
   dirKmrNone = 'KMR  no numbers from this driver yet',
@@ -3342,7 +3342,8 @@ ac.onChatMessage(function(message, senderCarIndex)
       Audit.add('KMR', message)
       return true
     end
-    local area = DICT.area(low)
+    local fromDirection = message:match('^%s*%b()') ~= nil
+    local area = (not fromDirection) and DICT.area(low) or nil
     if area == 'director' then area = mine and 'rc' or 'others' end
     if low:find('logged in as kissmyrank admin', 1, true) or low:find('logado como kissmyrank admin', 1, true) then
       state.kmrAdmin = true
@@ -3352,10 +3353,9 @@ ac.onChatMessage(function(message, senderCarIndex)
     if area then
       Audit.add('KMR', message, true, area)
     else
-      local direction = message:match('^%s*%b()') ~= nil
       ac.log(string.format('race-control: server message of no area (sender %s, %s): %s', tostring(senderCarIndex),
-        direction and 'race direction' or 'server', message))
-      Audit.add('SERVER', message, true, direction and 'rc' or 'server')
+        fromDirection and 'race direction' or 'server', message))
+      Audit.add('SERVER', message, true, fromDirection and 'rc' or 'server')
     end
     return true
   end
