@@ -438,9 +438,10 @@ local TEXTS = {
     track = 'TRACK' }, redCount = 'In the pits %d / %d - over the limit %d',
   scrPerf = 'PERFORMANCE', perfRows = { fps = 'FPS', cpu = 'CPU', gpu = 'GPU' },
   scrCalc = 'STRATEGY CALCULATOR', calcNotCar = 'not sent to the car', calcFuel = 'Fuel/lap', calcWear = 'Wear/lap (worst tyre)',
-  calcLap = 'Mean lap', calcLaps = 'Laps measured',
+  calcLap = 'Mean lap', calcLaps = 'Flying laps',
+  calcNoData = 'no data', calcNeedFlying = 'No data: %d of %d flying laps', calcMissing = 'No data: %s',
   calcParams = { race = 'Race length', lap = 'Lap used', tank = 'Tank', reserve = 'Reserve (laps)', pitloss = 'Pit lane loss',
-    refuel = 'Refuel', tyres = 'Tyre change' },
+    refuel = 'Refuel', tyres = 'Tyre change (each)' },
   calcRaceLaps = '%d laps', calcHead = { 'SC', 'WEAR', 'LIM', 'L/LAP', 'STP', 'L/ST', 'FUEL/ST', 'TYRE', 'PIT', 'TOTAL' },
   calcFields = { wear = 'wear %/lap', limit = 'tyre down to %', fuel = 'fuel L/lap', stops = 'stops' },
   calcAuto = 'AUTO', calcNo = 'NO', calcBest = 'Best scenario: %s', calcNone = 'No scenario fits in the tank and the tyre',
@@ -4734,6 +4735,14 @@ do
     if inGroup then total = total + group end
     return total
   end
+  function PitBox.calcRates()
+    local ini = ac.INIConfig.carData(0, 'car.ini')
+    local f = ini and ini:get('PIT_STOP', 'FUEL_LITER_TIME_SEC', -1) or -1
+    local ty = ini and ini:get('PIT_STOP', 'TYRE_CHANGE_TIME_SEC', -1) or -1
+    return { fuel = f >= 0 and f or nil, tyre = ty >= 0 and ty or nil }
+  end
+  function PitBox.stopTime(fuelS, tyresS) return orderTotal({ F = fuelS, T = tyresS, R = 0 }) end
+  PitBox.calcData = function() return nil end
   function PitBox.starts(times)
     local starts, total, groupStart, group, inGroup = {}, 0, 0, 0, false
     for ch in tostring(config.pitStopOrder):upper():gmatch('.') do
@@ -5048,7 +5057,13 @@ do
       string.format('%.0f', PitBox.fuel), p.compound, num(car.compoundIndex), p.tyres, groups(p.repair), string.format('%.1f', p.total),
       string.format('%.1f', p.times.fuel), string.format('%.1f', p.times.tyres), string.format('%.1f', p.times.suspension + p.times.powertrain + p.times.body),
       sv and math.floor(sv.startMs) or 0, sv and math.floor(sv.untilMs) or 0, groups(dmg), table.concat(names, ','),
-      string.format('%.0f', num(car.maxFuel)), car.isInPitlane and 1 or 0, PitBox.remoteUntil > state.ui.clock and 1 or 0 }, '|')
+      string.format('%.0f', num(car.maxFuel)), car.isInPitlane and 1 or 0, PitBox.remoteUntil > state.ui.clock and 1 or 0, PitBox.calcBody(car) }, '|')
+  end
+  function PitBox.calcBody(car)
+    local d = PitBox.calcData(car) or {}
+    local function f(v, fmt) return v and string.format(fmt, v) or '' end
+    return table.concat({ f(d.rateFuel, '%.3f'), f(d.rateTyre, '%.2f'), (tostring(config.pitStopOrder):gsub('[|;]', '')), f(d.lapMs, '%.0f'), tostring(d.flying or 0),
+      f(d.fuel, '%.3f'), f(d.wear, '%.3f'), f(d.pitLoss, '%.0f'), tostring(d.losses or 0), f(d.raceMin, '%.0f') }, '|')
   end
   PitRecord.onService = PitBox.resume
   RecordSync.base.pitBox = PitBox
@@ -7119,6 +7134,7 @@ do
     RaceTable.stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0 }
     if body then stintApply(body, seq) end
     RaceTable.stintDone, RaceTable.maxDsq, RaceTable.prevParked = false, false, nil
+    RaceTable.passReset()
   end
   function RaceTable.stintMs()
     local st = RaceTable.stint
@@ -7154,7 +7170,85 @@ do
       carDsq(1, string.format(TEXTS.stintMaxDsq, rule.maxMinutes))
     end
   end
+  local MIN_FLYING = 2
+  RaceTable.MIN_FLYING = MIN_FLYING
+  local touched = false
+  local PL = { was = nil, on = false, ms = {}, park = 0, out = false, tow = false, t = nil }
+  local LOSS_KEY = 'rc.pitloss'
+  local function lossKey() return RecordSync.base.trackKey() .. '|' .. RecordSync.base.carKey() end
+  local function lossLoad()
+    local key, body = tostring(ac.storage[LOSS_KEY] or ''):match('^([^\n]*)\n(.*)$')
+    local out = {}
+    if key == lossKey() then for v in body:gmatch('%d+') do out[#out + 1] = tonumber(v) end end
+    return out
+  end
+  RaceTable.losses = nil
+  function RaceTable.flying()
+    local laps, sum, n = RaceTable.laps, 0, 0
+    for i = #laps, 2, -1 do
+      local l, p = laps[i], laps[i - 1]
+      if l.valid and not l.pit and not l.touched and l.ms > 0 and p.lap == l.lap - 1 and not p.pit then sum, n = sum + l.ms, n + 1 end
+      if n >= 10 then break end
+    end
+    return n >= MIN_FLYING and sum / n or nil, n
+  end
+  local function raceMinutes()
+    for i = 0, (sim.sessionsCount or 0) - 1 do
+      local ss = ac.getSession(i)
+      if ss and ss.type == ac.SessionType.Race and CarRead.num(ss.durationMinutes) > 0 then return ss.durationMinutes end
+    end
+    return nil
+  end
+  function RaceTable.calcData(car)
+    RaceTable.losses = RaceTable.losses or lossLoad()
+    local lapMs, n = RaceTable.flying()
+    local worst, wl = nil, 0
+    for wh = 0, 3 do
+      local lf = CarRead.tyreLife(car, wh, state.tyreLineKm[wh] or 0)
+      if lf and (not worst or lf < worst) then worst, wl = lf, state.tyreLaps[wh] or 0 end
+    end
+    local fpl = CarRead.num(car.fuelPerLap)
+    local L = RaceTable.losses
+    local loss
+    if #L > 0 then loss = 0; for _, v in ipairs(L) do loss = loss + v end; loss = loss / #L end
+    local r = PitBox.calcRates()
+    local enough = lapMs ~= nil
+    return { lapMs = lapMs, flying = n, fuel = enough and fpl > 0 and fpl or nil, wear = enough and worst and wl > 0 and (100 - worst) / wl or nil,
+      pitLoss = loss, losses = #L, rateFuel = r.fuel, rateTyre = r.tyre, raceMin = raceMinutes(), tank = CarRead.num(car.maxFuel) > 0 and CarRead.num(car.maxFuel) or nil }
+  end
+  PitBox.calcData = RaceTable.calcData
+  function RaceTable.passReset() PL.was, PL.on, touched = nil, false, false end
+  local function passUpdate(car)
+    local inPL = car.isInPitlane == true
+    local now = state.ui.clock
+    if PL.was == false and inPL then PL.on, PL.ms, PL.park, PL.out, PL.tow = true, {}, 0, false, false end
+    if PL.on and inPL then
+      if CarRead.parked(car) and PL.t then PL.park = PL.park + (now - PL.t) end
+      if state.tow.jumpPending or (PitStops.pass and PitStops.pass.jumped) then PL.tow = true end
+    end
+    if PL.on and PL.was and not inPL then PL.out = true end
+    PL.was, PL.t = inPL, now
+  end
+  local function passLap(ms)
+    if not PL.on then return end
+    PL.ms[#PL.ms + 1] = ms
+    if not PL.out then return end
+    PL.on = false
+    local mean = RaceTable.flying()
+    if not mean or PL.tow then return end
+    local sum = 0
+    for _, v in ipairs(PL.ms) do sum = sum + v end
+    local loss = sum - #PL.ms * mean - PL.park * 1000
+    if loss <= 0 then return end
+    RaceTable.losses = RaceTable.losses or lossLoad()
+    local L = RaceTable.losses
+    L[#L + 1] = math.floor(loss + 0.5)
+    while #L > 5 do table.remove(L, 1) end
+    ac.storage[LOSS_KEY] = lossKey() .. '\n' .. table.concat(L, ',')
+    ac.log(string.format('race-control: pit lane loss measured %.1f s (%d laps, parked %.1f s)', loss / 1000, #PL.ms, PL.park))
+  end
   function RaceTable.update(car, lineFrame, viaPit)
+    if car.isInPitlane then touched = true end
     if lineFrame and CarRead.num(car.previousLapTimeMs) > 0 then
       local s = {}
       local splits = car.lastSplits or {}
@@ -7166,6 +7260,9 @@ do
       laps[#laps + 1] = { lap = leaderboardLaps() or car.lapCount, ms = math.floor(CarRead.num(car.previousLapTimeMs)),
         valid = car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0 and not state.lapCut, pit = viaPit == true, s = s,
         driver = tostring(ac.getDriverName(0) or ''):gsub('[,;|]', ' ') }
+      laps[#laps].touched = touched
+      touched = car.isInPitlane == true
+      passLap(laps[#laps].ms)
       if #laps > MAX_LAPS then table.remove(laps, 1) end
       lapsSave()
       if config.baseUrl ~= '' then
@@ -7184,6 +7281,7 @@ do
       end
       state.lapCut = false
     end
+    passUpdate(car)
     stintUpdate(car)
     if state.ui.clock >= RaceTable.nextT then
       RaceTable.nextT = state.ui.clock + REFRESH
@@ -10848,8 +10946,8 @@ local drawRaceScreens = (function()
   end
   local calcScreen = (function()
     local PARAMS = { { k = 'race', step = 5, fmt = '%.0f min' }, { k = 'lap', step = 0.1, fmt = '%.1f s' }, { k = 'tank', step = 1, fmt = '%.0f L' },
-      { k = 'reserve', step = 1, fmt = '%.0f' }, { k = 'pitloss', step = 1, fmt = '%.0f s' }, { k = 'refuel', step = 0.05, fmt = '%.2f s/L' },
-      { k = 'tyres', step = 1, fmt = '%.0f s' } }
+      { k = 'reserve', step = 1, fmt = '%.0f' }, { k = 'pitloss', step = 0.5, fmt = '%.1f s' }, { k = 'refuel', step = 0.05, fmt = '%.2f s/L' },
+      { k = 'tyres', step = 0.1, fmt = '%.1f s' } }
     local FIELDS = { { k = 'wear', step = 0.1, fmt = '%.2f' }, { k = 'limit', step = 5, fmt = '%.0f' }, { k = 'fuel', step = 0.05, fmt = '%.2f' },
       { k = 'stops', step = 1, fmt = '%.0f' } }
     local NAMES = { 'A', 'B', 'C', 'D' }
@@ -10866,39 +10964,20 @@ local drawRaceScreens = (function()
       table.sort(parts)
       ac.storage['rc.calc'] = table.concat(parts, ';')
     end
-    local function measured(car)
-      local worst, wl = nil, 0
-      for wh = 0, 3 do
-        local lf = CarRead.tyreLife(car, wh, state.tyreLineKm[wh] or 0)
-        if lf and (not worst or lf < worst) then worst, wl = lf, state.tyreLaps[wh] or 0 end
-      end
-      local sum, n = 0, 0
-      for i = #RaceTable.laps, 1, -1 do
-        local l = RaceTable.laps[i]
-        if l.valid and not l.pit and l.ms > 0 then sum, n = sum + l.ms, n + 1 end
-        if n >= 10 then break end
-      end
-      local fpl = CarRead.num(car.fuelPerLap)
-      return { fuel = fpl > 0 and fpl or nil, wear = worst and wl > 0 and (100 - worst) / wl or nil, lapMs = n > 0 and sum / n or nil,
-        n = #RaceTable.laps }
-    end
-    local function raceMinutes()
-      for i = 0, (sim.sessionsCount or 0) - 1 do
-        local ss = ac.getSession(i)
-        if ss and ss.type == ac.SessionType.Race and CarRead.num(ss.durationMinutes) > 0 then return ss.durationMinutes end
-      end
-      return 60
-    end
+    local function measured(car) return RaceTable.calcData(car) end
     local function default(it)
-      local k, m, car = it.p.k, cur.m, cur.car
+      local k, m = it.p.k, cur.m
       if it.sc then
-        if k == 'wear' then return m.wear or 0 elseif k == 'fuel' then return m.fuel or 0 elseif k == 'limit' then return 70 end
-        return it.sc - 1
+        if k == 'wear' then return m.wear elseif k == 'fuel' then return m.fuel end
+        return nil
       end
-      if k == 'race' then return raceMinutes() end
-      if k == 'lap' then return m.lapMs and math.floor(m.lapMs / 100 + 0.5) / 10 or 90 end
-      if k == 'tank' then return CarRead.num(car.maxFuel) > 0 and CarRead.num(car.maxFuel) or 100 end
-      return ({ reserve = 1, pitloss = 25, refuel = 0.5, tyres = 10 })[k]
+      if k == 'race' then return m.raceMin end
+      if k == 'lap' then return m.lapMs and math.floor(m.lapMs / 100 + 0.5) / 10 end
+      if k == 'tank' then return m.tank end
+      if k == 'pitloss' then return m.pitLoss and math.floor(m.pitLoss / 100 + 0.5) / 10 end
+      if k == 'refuel' then return m.rateFuel end
+      if k == 'tyres' then return m.rateTyre end
+      return nil
     end
     local function value(it)
       if V[it.key] ~= nil then return V[it.key] end
@@ -10907,47 +10986,58 @@ local drawRaceScreens = (function()
     local function step(dir)
       local it = items[sel]
       if not cur.m then return end
-      local v = value(it) + dir * it.p.step
+      local v = (value(it) or 0) + dir * it.p.step
       V[it.key] = math.max(0, math.floor(v / it.p.step + 0.5) * it.p.step)
       save()
     end
     Desktop.calcStep = step
     Desktop.calcMove = function(dir) sel = (sel - 1 + dir) % #items + 1 end
     local function results()
-      local P = {}
-      for _, it in ipairs(items) do if not it.sc then P[it.p.k] = value(it) end end
-      local lapMs = math.max(P.lap, 1) * 1000
-      local raceLaps = math.ceil(P.race * 60000 / lapMs)
+      local P, missing = {}, {}
+      for _, it in ipairs(items) do
+        if not it.sc then
+          P[it.p.k] = value(it)
+          if P[it.p.k] == nil then missing[#missing + 1] = TEXTS.calcParams[it.p.k] end
+        end
+      end
+      local raceLaps = P.race and P.lap and P.lap > 0 and math.ceil(P.race * 60000 / (P.lap * 1000)) or nil
       local out, best = {}, nil
       for i = 1, #NAMES do
-        local f = {}
-        for j, fd in ipairs(FIELDS) do f[fd.k] = value(items[#PARAMS + (i - 1) * #FIELDS + j]) end
-        local stops = math.max(0, math.floor(f.stops + 0.5))
-        local per = math.ceil(raceLaps / (stops + 1))
-        local fuelLaps = f.fuel > 0 and math.floor(P.tank / f.fuel) - P.reserve or math.huge
-        local tyreLaps = f.wear > 0 and math.floor(f.limit / f.wear) or math.huge
-        local fuelStint = f.fuel * per
-        local pit = stops * (P.pitloss + math.min(fuelStint, P.tank) * P.refuel + P.tyres)
-        local r = { per = per, fuelLaps = fuelLaps, tyreLaps = tyreLaps, okFuel = per <= fuelLaps, okTyre = per <= tyreLaps,
-          fuelStint = fuelStint, pit = pit, total = raceLaps * lapMs + pit * 1000 }
-        r.ok = r.okFuel and r.okTyre
+        local f, miss = {}, {}
+        for j, fd in ipairs(FIELDS) do
+          f[fd.k] = value(items[#PARAMS + (i - 1) * #FIELDS + j])
+          if f[fd.k] == nil then miss[#miss + 1] = TEXTS.calcFields[fd.k] end
+        end
+        local r = { miss = miss }
+        if #missing == 0 and #miss == 0 then
+          local lapMs = P.lap * 1000
+          local stops = math.max(0, math.floor(f.stops + 0.5))
+          local per = math.ceil(raceLaps / (stops + 1))
+          local fuelLaps = f.fuel > 0 and math.floor(P.tank / f.fuel) - P.reserve or math.huge
+          local tyreLaps = f.wear > 0 and math.floor(f.limit / f.wear) or math.huge
+          local fuelStint = f.fuel * per
+          local pit = stops * (P.pitloss + PitBox.stopTime(math.min(fuelStint, P.tank) * P.refuel, 4 * P.tyres))
+          r = { per = per, fuelLaps = fuelLaps, tyreLaps = tyreLaps, okFuel = per <= fuelLaps, okTyre = per <= tyreLaps,
+            fuelStint = fuelStint, pit = pit, total = raceLaps * lapMs + pit * 1000, miss = miss }
+          r.ok = r.okFuel and r.okTyre
+          if r.ok and (not best or r.total < out[best].total) then best = i end
+        end
         out[i] = r
-        if r.ok and (not best or r.total < out[best].total) then best = i end
       end
-      return out, best, raceLaps
+      return out, best, raceLaps, missing
     end
     local function laps(v) return v == math.huge and 'inf' or tostring(v) end
     return function(car, w, h, s)
       cur.m, cur.car = measured(car), car
       local m = cur.m
-      local res, best, raceLaps = results()
+      local res, best, raceLaps, missing = results()
       local p1, p2, y = frame('calc', w, h, s, 17.9, TEXTS.scrCalc, TEXTS.calcNotCar)
       local function u(v, fmt) return v and string.format(fmt, v) or '-' end
       row(p1, y, s, { { TEXTS.calcFuel, 14, COLOR_DIM, false, FONT_TEXT }, { u(m.fuel, '%.2f L'), 176, nil, true },
         { TEXTS.calcWear, 196, COLOR_DIM, false, FONT_TEXT }, { u(m.wear, '%.2f %%'), 366, nil, true } })
       y = y + ROW * s
       row(p1, y, s, { { TEXTS.calcLap, 14, COLOR_DIM, false, FONT_TEXT }, { m.lapMs and lapTime(m.lapMs) or '-', 176, nil, true },
-        { TEXTS.calcLaps, 196, COLOR_DIM, false, FONT_TEXT }, { tostring(m.n), 366, nil, true } })
+        { TEXTS.calcLaps, 196, COLOR_DIM, false, FONT_TEXT }, { string.format('%d/%d', m.flying, RaceTable.MIN_FLYING), 366, m.lapMs and nil or RED, true } })
       y = y + ROW * s
       drawSeparator(p1, p2, y + 3 * s, s)
       y = y + 8 * s
@@ -10955,8 +11045,8 @@ local drawRaceScreens = (function()
         local it = items[i]
         local on = sel == i
         row(p1, y, s, { { TEXTS.calcParams[p.k], 14, on and YELLOW or COLOR_DIM, false, FONT_TEXT },
-          { string.format(p.fmt, value(it)), 250, on and YELLOW or (V[it.key] ~= nil and COLOR_TITLE or COLOR_DIM), true },
-          { p.k == 'race' and string.format(TEXTS.calcRaceLaps, raceLaps) or '', 366, COLOR_DIM, true } })
+          { value(it) and string.format(p.fmt, value(it)) or TEXTS.calcNoData, 250, on and YELLOW or (value(it) == nil and RED or V[it.key] ~= nil and COLOR_TITLE or COLOR_DIM), true },
+          { p.k == 'race' and raceLaps and string.format(TEXTS.calcRaceLaps, raceLaps) or '', 366, COLOR_DIM, true } })
         Drag.clickable(vec2(p1.x + 10 * s, y), vec2(p1.x + 254 * s, y + ROW * s), function() sel = i end)
         y = y + ROW * s
       end
@@ -10973,14 +11063,18 @@ local drawRaceScreens = (function()
         for j, fd in ipairs(FIELDS) do
           local at = #PARAMS + (i - 1) * #FIELDS + j
           local it = items[at]
-          cells[#cells + 1] = { string.format(fd.fmt, value(it)), HX[j + 1], sel == at and YELLOW or (V[it.key] ~= nil and COLOR_TITLE or COLOR_DIM), true }
+          cells[#cells + 1] = { value(it) and string.format(fd.fmt, value(it)) or '-', HX[j + 1], sel == at and YELLOW or (value(it) == nil and RED or V[it.key] ~= nil and COLOR_TITLE or COLOR_DIM), true }
           Drag.clickable(vec2(p1.x + (HX[j + 1] - 28) * s, y), vec2(p1.x + HX[j + 1] * s, y + ROW * s), function() sel = at end)
         end
-        cells[#cells + 1] = { tostring(r.per), HX[6], COLOR_TITLE, true }
-        cells[#cells + 1] = { string.format('%.1f(%s)', r.fuelStint, laps(r.fuelLaps)), HX[7], r.okFuel and COLOR_TITLE or RED, true }
-        cells[#cells + 1] = { laps(r.tyreLaps), HX[8], r.okTyre and COLOR_TITLE or RED, true }
-        cells[#cells + 1] = { string.format('%.0f', r.pit), HX[9], COLOR_TITLE, true }
-        cells[#cells + 1] = { r.ok and hms(r.total) or TEXTS.calcNo, HX[10], r.ok and (best == i and GREEN or COLOR_TITLE) or RED, true }
+        if r.per then
+          cells[#cells + 1] = { tostring(r.per), HX[6], COLOR_TITLE, true }
+          cells[#cells + 1] = { string.format('%.1f(%s)', r.fuelStint, laps(r.fuelLaps)), HX[7], r.okFuel and COLOR_TITLE or RED, true }
+          cells[#cells + 1] = { laps(r.tyreLaps), HX[8], r.okTyre and COLOR_TITLE or RED, true }
+          cells[#cells + 1] = { string.format('%.0f', r.pit), HX[9], COLOR_TITLE, true }
+          cells[#cells + 1] = { r.ok and hms(r.total) or TEXTS.calcNo, HX[10], r.ok and (best == i and GREEN or COLOR_TITLE) or RED, true }
+        else
+          cells[#cells + 1] = { TEXTS.calcNoData, HX[10], COLOR_DIM, true }
+        end
         row(p1, y, s, cells)
         y = y + ROW * s
       end
@@ -10991,7 +11085,7 @@ local drawRaceScreens = (function()
       drawText(label, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), YELLOW)
       local vx = p2.x - 14 * s - 50 * s
       stepBox('-', vec2(vx - 84 * s, y), s, function() step(-1) end)
-      local vt = string.format(it.p.fmt, value(it))
+      local vt = value(it) and string.format(it.p.fmt, value(it)) or TEXTS.calcNoData
       local vw = textWidth(vt, FONT_MONO, FS * s)
       drawText(vt, FONT_MONO, FS * s, vec2(vx - 35 * s - vw / 2, y), COLOR_TITLE)
       stepBox('+', vec2(vx - 14 * s, y), s, function() step(1) end)
@@ -11001,7 +11095,12 @@ local drawRaceScreens = (function()
       drawText(TEXTS.calcAuto, FONT_MONO, 9 * s, vec2((a.x + b.x) / 2 - aw / 2, a.y + 0.5 * s), V[it.key] == nil and COLOR_DIM or COLOR_TITLE)
       Drag.clickable(a, b, function() V[it.key] = nil; save() end)
       y = y + ROW * s
-      drawText(best and string.format(TEXTS.calcBest, NAMES[best]) or TEXTS.calcNone, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), best and GREEN or RED)
+      local msg
+      if not m.lapMs then msg = string.format(TEXTS.calcNeedFlying, m.flying, RaceTable.MIN_FLYING)
+      elseif #missing > 0 then msg = string.format(TEXTS.calcMissing, table.concat(missing, ', '))
+      elseif not best and #res[1].miss > 0 then msg = string.format(TEXTS.calcMissing, NAMES[1] .. ': ' .. table.concat(res[1].miss, ', '))
+      else msg = best and string.format(TEXTS.calcBest, NAMES[best]) or TEXTS.calcNone end
+      drawText(msg, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), best and GREEN or RED)
       Drag.icons('calc', p1, p2, s)
     end
   end)()
