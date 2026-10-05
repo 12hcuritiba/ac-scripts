@@ -1993,6 +1993,27 @@ do
     local ok, body = pcall(B.pitBox.stateBody, car)
     if ok and body and body ~= T.sig then T.sig = body; Record.save('box', math.floor(serverTimeMs() / 1000), body) end
   end
+  local ELEC_GAP, ELEC_ERS_GAP = 2, 60
+  B.elec = { sig = nil, nextT = 0, ersT = 0 }
+  function B.elecUpdate()
+    local T = B.elec
+    if not on() or state.ui.clock < T.nextT then return end
+    T.nextT = state.ui.clock + ELEC_GAP
+    local car = ac.getCar(0)
+    if not car then return end
+    local n = function(v) return math.floor(tonumber(v) or 0) end
+    local hybrid = n(car.mgukDeliveryCount) > 0 or car.kersPresent == true
+    local settings = table.concat({ n(car.absMode), n(car.absModes), n(car.tractionControlMode), n(car.tractionControlModes), string.format('%g', tonumber(car.tractionControl2) or 0),
+      n(car.tractionControl2Modes), n(car.fuelMap), n(car.fuelMaps), n(car.currentEngineBrakeSetting), n(car.engineBrakeSettingsCount),
+      string.format('%.1f', (tonumber(car.brakeBias) or 0) * 100), hybrid and 1 or 0, n(car.mgukDelivery), n(car.mgukDeliveryCount), n(car.mgukRecovery),
+      car.mguhChargingBatteries and 1 or 0 }, '|')
+    local ers = hybrid and string.format('%.0f', (tonumber(car.kersCharge) or 0) * 100) or ''
+    local ersDue = hybrid and state.ui.clock >= T.ersT
+    if settings ~= T.sig or ersDue then
+      T.sig, T.ersT = settings, state.ui.clock + ELEC_ERS_GAP
+      Record.save('elec', math.floor(serverTimeMs() / 1000), settings .. '|' .. ers)
+    end
+  end
   B.plan = { nextT = 0, busy = false, done = tostring(ac.storage['rc.pitplan'] or '') }
   local PLAN_PIT_GAP = 2
   function B.planUpdate()
@@ -13383,6 +13404,7 @@ function script.update(dt)
   RecordSync.base.stratUpdate()
   RecordSync.base.planUpdate()
   RecordSync.base.boxUpdate()
+  RecordSync.base.elecUpdate()
   RecordSync.base.setupPushUpdate()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
     state.hold = nil
