@@ -29,6 +29,23 @@
 --
 -- Authorization requests: amxracingg@gmail.com / 12hcuritiba@gmail.com / suporte@codice-ti.com.br
 -- ============================================================================================================
+local LANG_KEY, LANG_CHANNEL = 'rc.lang', 'amxracing.race-control.lang'
+local APP_TEXTS = {
+  en = { loading = 'RACING CONTROL - LOADING', waiting = 'Waiting for the Racing Control of the event - please wait (the game closes in %d s if it does not load)',
+    pingUnknown = 'Connection: ping not known yet', pingHigh = 'Connection problem: ping %d ms, over the limit of %d ms of the server - check your internet',
+    pingUnstable = 'Connection problem: unstable ping (%d ms, varying %d ms) - check your internet', pingOk = 'Connection: ping %d ms',
+    held = '%d messages held for the Racing Control', notRunning = 'RACING CONTROL NOT RUNNING',
+    notRunningText = 'The online script of the event did not start - the game closes in %d s. Tell the organizer.',
+    teamSetup = 'Setup from your team: %s', apply = 'Apply', refuse = 'Refuse' },
+  pt = { loading = 'RACING CONTROL - CARREGANDO', waiting = 'Esperando o Racing Control do evento - aguarde (o jogo fecha em %d s se ele não carregar)',
+    pingUnknown = 'Conexão: ping ainda desconhecido', pingHigh = 'Problema de conexão: ping %d ms, acima do limite de %d ms do servidor - confira sua internet',
+    pingUnstable = 'Problema de conexão: ping instável (%d ms, variando %d ms) - confira sua internet', pingOk = 'Conexão: ping %d ms',
+    held = '%d mensagens retidas para o Racing Control', notRunning = 'RACING CONTROL NÃO ESTÁ RODANDO',
+    notRunningText = 'O script online do evento não começou - o jogo fecha em %d s. Avise a organização.',
+    teamSetup = 'Setup da sua equipe: %s', apply = 'Aplicar', refuse = 'Recusar' },
+}
+local function T(key) return APP_TEXTS[ac.storage[LANG_KEY] == 'en' and 'en' or 'pt'][key] end
+ac.onSharedEvent(LANG_CHANNEL, function(data) if data == 'pt' or data == 'en' then ac.storage[LANG_KEY] = data end end)
 do
   local root = ac.getFolder(ac.FolderID.Root)
   local from = root .. '\\apps\\lua\\race-control\\fonts'
@@ -136,16 +153,16 @@ local function guardBox()
     ui.popDWriteFont()
   end
   local left = math.max(CHECK_SECONDS - elapsed, 0)
-  line('RACING CONTROL - LOADING', 'Segoe UI;Weight=Bold', 14, 6, rgbm(0.96, 0.96, 0.96, 1))
-  line(string.format('Waiting for the Racing Control of the event - please wait (the game closes in %d s if it does not load)', left + CLOSE_SECONDS),
+  line(T('loading'), 'Segoe UI;Weight=Bold', 14, 6, rgbm(0.96, 0.96, 0.96, 1))
+  line(string.format(T('waiting'), left + CLOSE_SECONDS),
     'Segoe UI;Weight=SemiBold', 11, 28, rgbm(1, 0.85, 0.25, 1))
   local ping
-  if not now or now < 0 then ping = 'Connection: ping not known yet'
-  elseif high then ping = string.format('Connection problem: ping %d ms, over the limit of %d ms of the server - check your internet', now, guard.pingLimit)
-  elseif unstable then ping = string.format('Connection problem: unstable ping (%d ms, varying %d ms) - check your internet', now, math.floor(dev + 0.5))
-  else ping = string.format('Connection: ping %d ms', now) end
+  if not now or now < 0 then ping = T('pingUnknown')
+  elseif high then ping = string.format(T('pingHigh'), now, guard.pingLimit)
+  elseif unstable then ping = string.format(T('pingUnstable'), now, math.floor(dev + 0.5))
+  else ping = string.format(T('pingOk'), now) end
   line(ping, 'Consolas', 11, 50, bad and rgbm(1, 0.3, 0.3, 1) or rgbm(0.6, 0.63, 0.65, 1))
-  line(string.format('%d messages held for the Racing Control', guard.swallowed), 'Consolas', 10, 68, rgbm(0.6, 0.63, 0.65, 1))
+  line(string.format(T('held'), guard.swallowed), 'Consolas', 10, 68, rgbm(0.6, 0.63, 0.65, 1))
 end
 onOurServer(function()
   if tostring(ac.getTrackID() or ''):lower() ~= TRACK_ID then return end
@@ -210,8 +227,7 @@ onOurServer(function()
       ac.log(string.format('race-control app: the online script is not running: the game closes (ping %s ms, deviation %.0f ms)',
         tostring(now or '-'), dev))
     end
-    ac.setMessage('RACING CONTROL NOT RUNNING', string.format('The online script of the event did not start - the game '
-      .. 'closes in %d s. Tell the organizer.', left), 'illegal', 1.5)
+    ac.setMessage(T('notRunning'), string.format(T('notRunningText'), left), 'illegal', 1.5)
     pcall(physics.lockUserControlsFor, 3)
     if left <= 0 then
       closed = true
@@ -442,14 +458,14 @@ onOurServer(function()
     local okE, editable = pcall(ac.isSetupAvailableToEdit)
     if not (okE and editable) or push.clock - push.toldT < PUSH_TOLD_SECONDS then return end
     push.toldT = push.clock
-    local toast = ui.toast(ui.Icons.Wrench, 'Setup from your team: ' .. name .. '###rc-team-setup')
-    toast:button(ui.Icons.Confirm, 'Apply', function()
+    local toast = ui.toast(ui.Icons.Wrench, string.format(T('teamSetup'), name) .. '###rc-team-setup')
+    toast:button(ui.Icons.Confirm, T('apply'), function()
       if push.answered[id] then return end
       local ok, res = pcall(ac.loadSetup, ini)
       if ok and res then answer(id, 'aplicado', '')
       else answer(id, 'falhou', ok and 'refused by the game: not in the setup menu or the setup is fixed' or tostring(res)) end
     end)
-    toast:button(ui.Icons.Cancel, 'Refuse', function()
+    toast:button(ui.Icons.Cancel, T('refuse'), function()
       if not push.answered[id] then answer(id, 'recusado', 'refused by the driver') end
     end)
   end, 1)
