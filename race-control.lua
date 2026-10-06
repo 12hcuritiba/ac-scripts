@@ -440,7 +440,7 @@ local TEXTS = {
   scrPerf = 'PERFORMANCE', perfRows = { fps = 'FPS', cpu = 'CPU', gpu = 'GPU' },
   scrCalc = 'STRATEGY CALCULATOR', calcNotCar = 'not sent to the car', calcFuel = 'Fuel/lap', calcWear = 'Wear/lap (worst tyre)',
   calcLap = 'Mean lap', calcLaps = 'Flying laps',
-  calcNoData = 'no data', calcNeedFlying = 'No data: %d of %d flying laps', calcMissing = 'No data: %s',
+  calcNoData = 'no data', calcNoDataShort = 'no data', calcNeedFlying = 'No data: %d of %d flying laps', calcMissing = 'No data: %s',
   calcParams = { race = 'Race length', lap = 'Lap used', tank = 'Tank', reserve = 'Reserve (laps)', pitloss = 'Pit lane loss',
     refuel = 'Refuel', tyres = 'Tyre change (each)' },
   calcRaceLaps = '%d laps', calcHead = { 'SC', 'WEAR', 'LIM', 'L/LAP', 'STP', 'L/ST', 'FUEL/ST', 'TYRE', 'PIT', 'TOTAL' },
@@ -791,7 +791,7 @@ Lang.PT = {
   setupKm = 'Km',
   setupLaps = 'Voltas',
   setupLapsOf = '%d/%s',
-  statusTitle = 'ESTADO DO CARRO',
+  statusTitle = 'EST. DO CARRO',
   statusRepair = 'REPARO',
   statusBeyond = 'INSEGURO',
   statusWheels = 'RODAS E SUSPENSÃO',
@@ -998,7 +998,7 @@ Lang.PT = {
   scrPerf = 'DESEMPENHO', perfRows = { fps = 'FPS', cpu = 'CPU', gpu = 'GPU' },
   scrCalc = 'CALCULADORA DE ESTRATÉGIA', calcNotCar = 'não enviado ao carro', calcFuel = 'Combustível/volta', calcWear = 'Desgaste/volta (pior pneu)',
   calcLap = 'Volta média', calcLaps = 'Voltas lançadas',
-  calcNoData = 'sem dados', calcNeedFlying = 'Sem dados: %d de %d voltas lançadas', calcMissing = 'Sem dados: %s',
+  calcNoData = 'sem dados', calcNoDataShort = 's/ dados', calcNeedFlying = 'Sem dados: %d de %d voltas lançadas', calcMissing = 'Sem dados: %s',
   calcParams = { race = 'Duração da prova', lap = 'Volta usada', tank = 'Tanque', reserve = 'Reserva (voltas)', pitloss = 'Perda no pit lane',
     refuel = 'Reabastecer', tyres = 'Troca de pneu (cada)' },
   calcRaceLaps = '%d voltas', calcHead = { 'CEN', 'DESG', 'LIM', 'L/V', 'PAR', 'V/ST', 'COMB/ST', 'PNEU', 'BOX', 'TOTAL' },
@@ -10232,11 +10232,10 @@ local drawStatus
     local rp = state.repair
     drawPanel(p1, p2, Desktop.focus == 'status' and BORDER_YELLOW or BORDER_BASE, s)
     drawText(TEXTS.statusTitle, FONT_TITLE, 12 * s, vec2(p1.x + L.side * s, p1.y + 4 * s), COLOR_TITLE)
-    local badge = rp.class == 'repair' and { TEXTS.statusRepair, COLOR_ORANGE } or rp.class == 'beyond' and { TEXTS.statusBeyond, BORDER_RED } or nil
-    if badge then
-      local room = p2.x - L.side * s - (p1.x + L.side * s + textWidth(TEXTS.statusTitle, FONT_TITLE, 12 * s) + 6 * s)
-      local by = textWidth(badge[1], FONT_MONO, 11 * s) <= room and p1.y + 5 * s or p1.y + (L.head + L.gap) * s
-      drawTextRight(badge[1], FONT_MONO, 11 * s, p2.x - L.side * s, by, badge[2])
+    if rp.class == 'repair' then
+      drawTextRight(TEXTS.statusRepair, FONT_MONO, 11 * s, p2.x - L.side * s, p1.y + 5 * s, COLOR_ORANGE)
+    elseif rp.class == 'beyond' then
+      drawTextRight(TEXTS.statusBeyond, FONT_MONO, 11 * s, p2.x - L.side * s, p1.y + 5 * s, BORDER_RED)
     end
     drawSeparator(p1, p2, p1.y + L.head * s, s)
     local x1, x2 = p1.x + L.side * s, p2.x - L.side * s
@@ -10497,9 +10496,9 @@ local drawRaceScreens = (function()
     chips('standings', p1, p2, s)
     local H = TEXTS.hdr
     row(p1, y, s, { { H.pos, 32, COLOR_AXIS, true }, { H.classPos, 52, COLOR_AXIS, true }, { '#', 58, COLOR_AXIS },
-      { H.driver, 88, COLOR_AXIS }, { H.class, 214, COLOR_AXIS }, { H.laps, 266, COLOR_AXIS, true },
+      { H.driver, 88, COLOR_AXIS }, { H.class, 214, COLOR_AXIS }, { H.laps, 270, COLOR_AXIS, true },
       { H.gap, 306, COLOR_AXIS, true }, { H.int, 346, COLOR_AXIS, true }, { H.best, 398, COLOR_AXIS, true },
-      { H.pit, 416, COLOR_AXIS, true }, { H.sr, 456, COLOR_AXIS, true }, { H.pts, 492, COLOR_AXIS, true } })
+      { H.pit, 424, COLOR_AXIS, true }, { H.sr, 456, COLOR_AXIS, true }, { H.pts, 492, COLOR_AXIS, true } })
     y = y + ROW * s
     local leader = list[1]
     local sessionBest = CarRead.num(sim.bestLapTimeMs)
@@ -10522,10 +10521,10 @@ local drawRaceScreens = (function()
       row(p1, y, s, {
         { tostring(r.pos), 32, col, true }, { tostring(r.classPos or '-'), 52, COLOR_DIM, true },
         { '#' .. r.number, 58, col }, { r.name, 88, col, false, me and FONT_TITLE or FONT_TEXT },
-        { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 266, col, true }, { gapTo(r, leader), 306, col, true },
+        { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 270, col, true }, { gapTo(r, leader), 306, col, true },
         { gapTo(r, list[i - 1]), 346, col, true },
         { lapTime(r.best), 398, (me and cutBest[r.best]) and RED or (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
-        { tostring(r.stops or 0), 416, col, true },
+        { tostring(r.stops or 0), 424, col, true },
         { (function() local _, sr = kmrOf(r); return sr and Audit.num(sr) or '-' end)(), 456, col, true },
         { (function() local pts = kmrOf(r); return pts and tostring(pts) or '-' end)(), 492, col, true },
       })
@@ -10649,7 +10648,7 @@ local drawRaceScreens = (function()
       local cur = car.currentSplits and CarRead.num(car.currentSplits[k]) or 0
       local rs = refSplit and CarRead.num(refSplit[k]) * scale or 0
       local v = (cur > 0 and rs > 0) and (cur - rs) / 1000 or nil
-      cells[#cells + 1] = { v and string.format('%+.2f', v) or '-', 106 + k * 46, v and (v > 0 and RED or GREEN) or nil, true }
+      cells[#cells + 1] = { v and string.format('%+.2f', v) or '-', 94 + k * 46, v and (v > 0 and RED or GREEN) or nil, true }
     end
     row(p1, y, s, cells)
     Drag.icons('delta', p1, p2, s)
@@ -12198,9 +12197,9 @@ float4 main(PS_IN pin) {
       drawText(label, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), YELLOW)
       local vx = p2.x - 14 * s - 50 * s
       stepBox('-', vec2(vx - 84 * s, y), s, function() step(-1) end)
-      local vt = value(it) and string.format(it.p.fmt, value(it)) or TEXTS.calcNoData
+      local vt = value(it) and string.format(it.p.fmt, value(it)) or TEXTS.calcNoDataShort
       local vw = textWidth(vt, FONT_MONO, FS * s)
-      drawText(vt, FONT_MONO, FS * s, vec2(vx - 35 * s - vw / 2, y), COLOR_TITLE)
+      drawText(vt, FONT_MONO, FS * s, vec2(vx - 42 * s - vw / 2, y), COLOR_TITLE)
       stepBox('+', vec2(vx - 14 * s, y), s, function() step(1) end)
       local a, b = vec2(vx + 6 * s, y), vec2(p2.x - 14 * s, y + 12 * s)
       ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s)
