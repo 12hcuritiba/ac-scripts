@@ -502,7 +502,7 @@ local TEXTS = {
   scrCompare = 'COMPARE', scrDriverSel = '< DRIVER: %s >', scrStintShort = 'ST %d', scrMap = 'TRACK MAP', scrNoMap = 'No map of this track',
   scrMapLegend = { 'yellow you - blue lap ahead - beige lap down', 'grey pit - red stopped' },
   scrWeather = 'WEATHER', scrWeatherModes = { forecast = 'FORECAST', map = 'RADAR' }, scrRadarZoom = '%g KM',scrRadarBig = '+', scrRadarSmall = '-',
-  scrRadarPrec = 'PRECIPITATION', scrRadarLight = 'light', scrRadarHeavy = 'heavy', scrRadarExtreme = 'extreme', scrRadarClouds = 'clouds: share by the cover of the forecast; white = light, grey = thick',
+  scrRadarPrec = 'PRECIPITATION', scrRadarLight = 'light', scrRadarHeavy = 'heavy', scrRadarExtreme = 'extreme', scrRadarClouds = 'clouds: white = light, grey = thick',
   scrRadarLoop = '%s - 1 hour in 6 segments of 10 min, one a second', scrRadarNoTrack = 'No AI spline on this track',
   scrWeatherAnim = 'forecast in segments of 10 min', scrWeatherStatic = 'no forecast', scrWxPage = '< %d/%d >',
   scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
@@ -598,7 +598,7 @@ local TEXTS = {
     dt = 'DT %s', cancelDt = 'cancel DT %s', relaxSg = 'relax S&G %s', kick = 'kick %s', ban60 = 'ban 60 min %s', toPit = 'to the pits %s',
     dsq = 'DSQ %s', relaxDsq = 'relax DSQ %s', fuel = 'fuel unlocked %s', menu = 'menu free %s' },
   wheelCode = { FL = 'FL', FR = 'FR', RL = 'RL', RR = 'RR', F = 'F', R = 'R' },
-  wheelNames = { [0] = 'front left', 'front right', 'rear left', 'rear right' },
+  wheelNames = { [0] = 'front left', 'front right', 'rear left', 'rear right' }, bodySides = { [0] = 'front', 'rear', 'left', 'right' },
   side = { front = 'F', back = 'B', left = 'L', right = 'R' },
   dtLine = '%s - Drive-through - %s', holdTowRepair = 'Tow %s + Repair %s', holdRepair = 'Repair %s', dirDsqNotice = 'Disqualified - %s',
   dsqWhy = { repairNotDone = 'Mandatory repair not done', sgInterrupted = 'Stop & go interrupted', swapPending = 'Driver swap with pending penalties',
@@ -1004,7 +1004,7 @@ Lang.PT = {
   calcFields = { wear = 'desgaste %/volta', limit = 'pneu até %', fuel = 'comb. L/volta', stops = 'paradas' },
   calcAuto = 'AUTO', calcNo = 'NÃO', calcBest = 'Melhor cenário: %s', calcNone = 'Nenhum cenário cabe no tanque e no pneu',
   scrCockpit = 'COCKPIT', cockpitCar = 'Ajustes deste carro: %s', cockpitSave = 'SALVAR', cockpitSaved = 'SALVO', cockpitNoApp = 'app não está rodando', cockpitMore = '+ TODOS', cockpitAudio = 'VOLUME - CADA CANAL',
-  cockpitRows = { ffb = 'Force feedback', y = 'Banco cima / baixo', x = 'Banco esquerda / direita', pitch = 'Inclinação cima / baixo',
+  cockpitRows = { ffb = 'Force feedback', y = 'Banco cima / baixo', x = 'Banco esq. / dir.', pitch = 'Inclin. cima / baixo',
     fov = 'Campo de visão', ['vol.main'] = 'Volume (geral)' },
   cockpitChannels = { engine = 'Motor', transmission = 'Transmissão', tyres = 'Pneus', surfaces = 'Superfícies', dirt = 'Terra',
     wind = 'Vento', opponents = 'Adversários', carComponents = 'Peças do carro', track = 'Pista', weather = 'Clima',
@@ -1059,7 +1059,7 @@ Lang.PT = {
   scrCompare = 'COMPARAR', scrDriverSel = '< PILOTO: %s >', scrStintShort = 'ST %d', scrMap = 'MAPA DA PISTA', scrNoMap = 'Sem mapa desta pista',
   scrMapLegend = { 'amarelo você - azul volta à frente - bege volta atrás', 'cinza box - vermelho parado' },
   scrWeather = 'CLIMA', scrWeatherModes = { forecast = 'PREVISÃO', map = 'RADAR' }, scrRadarZoom = '%g KM', scrRadarBig = '+', scrRadarSmall = '-',
-  scrRadarPrec = 'PRECIPITAÇÃO', scrRadarLight = 'leve', scrRadarHeavy = 'forte', scrRadarExtreme = 'extrema', scrRadarClouds = 'nuvens: área pela cobertura da previsão; branca = leve, cinza = densa',
+  scrRadarPrec = 'PRECIPITAÇÃO', scrRadarLight = 'leve', scrRadarHeavy = 'forte', scrRadarExtreme = 'extrema', scrRadarClouds = 'nuvens: branca = leve, cinza = densa',
   scrRadarLoop = '%s - 1 hora em 6 segmentos de 10 min, um por segundo', scrRadarNoTrack = 'Sem a linha da IA nesta pista',
   scrWeatherAnim = 'previsão em segmentos de 10 min', scrWeatherStatic = 'sem previsão', scrWxPage = '< %d/%d >',
   scrWxTime = 'Hora local', scrWxSky = 'Céu', scrWxAir = 'Ar / pista', scrWxWind = 'Vento', scrWxRain = 'Chuva', scrWxNext = 'Próximo',
@@ -1155,7 +1155,7 @@ Lang.PT = {
     dt = 'DT %s', cancelDt = 'cancelar DT %s', relaxSg = 'retirar S&G %s', kick = 'kick %s', ban60 = 'ban 60 min %s', toPit = 'ao box %s',
     dsq = 'DSQ %s', relaxDsq = 'retirar DSQ %s', fuel = 'combustível liberado %s', menu = 'menu livre %s' },
   wheelCode = { FL = 'DE', FR = 'DD', RL = 'TE', RR = 'TD', F = 'D', R = 'T' },
-  wheelNames = { [0] = 'dianteira esquerda', 'dianteira direita', 'traseira esquerda', 'traseira direita' },
+  wheelNames = { [0] = 'dianteira esquerda', 'dianteira direita', 'traseira esquerda', 'traseira direita' }, bodySides = { [0] = 'dianteira', 'traseira', 'esquerda', 'direita' },
   side = { front = 'F', back = 'T', left = 'E', right = 'D' },
   dtLine = '%s - Drive-through - %s', holdTowRepair = 'Reboque %s + Reparo %s', holdRepair = 'Reparo %s', dirDsqNotice = 'Desclassificado - %s',
   dsqWhy = { repairNotDone = 'Reparo obrigatório não feito', sgInterrupted = 'Stop & go interrompido', swapPending = 'Troca de piloto com penalidades pendentes',
@@ -4879,7 +4879,6 @@ do
 end
 local DamageClass = {}
 do
-  local BODY_SIDES = { [0] = 'front', 'rear', 'left', 'right' }
   local num = CarRead.num
   local function wheelMissing(car, i) return false end
   local function classify(car)
@@ -4908,7 +4907,7 @@ do
     for i = 0, 3 do
       local d = num(car.damage[i])
       if d > config.damage.bodyRepair then
-        consider('repair', string.format(TEXTS.damageBody, BODY_SIDES[i], d),
+        consider('repair', string.format(TEXTS.damageBody, TEXTS.bodySides[i], d),
           string.format(TEXTS.damageBodyLimit, config.damage.bodyRepair))
       end
     end
@@ -9850,10 +9849,10 @@ do
       drawText(r[2], FONT_TEXT, fs, vec2(p1.x + BOX.side * s, y), (r[1] and not r.off) and COLOR_TITLE or COLOR_OFF)
       if r[1] == 'tyres' then
         for wIdx = 0, 3 do
-          drawText(PitBox.WHEELS[wIdx], FONT_MONO, fs, vec2(vx + wIdx * 26 * s, y),
+          drawText(TEXTS.wheelCode[PitBox.WHEELS[wIdx]], FONT_MONO, fs, vec2(vx + wIdx * 26 * s, y),
             chips[wIdx] and (sel and COLOR_SEL or COLOR_SWAP) or COLOR_OFF)
         end
-        if sel then cursorLine(vx, vx + 3 * 26 * s + textWidth(PitBox.WHEELS[3], FONT_MONO, fs), y) end
+        if sel then cursorLine(vx, vx + 3 * 26 * s + textWidth(TEXTS.wheelCode[PitBox.WHEELS[3]], FONT_MONO, fs), y) end
       elseif r[1] == 'suspension' or r[1] == 'powertrain' or r[1] == 'body' then
         local value = p.repair[r[1]] and TEXTS.pitRepairYes
           or (PitBox.damaged(car, r[1]) and (PitBox.repairLocked() and TEXTS.pitRepairLocked or TEXTS.pitRepairNo)
@@ -11284,13 +11283,18 @@ float4 main(PS_IN pin) {
         drawText(TEXTS.scrRadarLight, FONT_MONO, 8 * s, vec2(bx1, ly + 11 * s), COLOR_DIM)
         drawText(TEXTS.scrRadarHeavy, FONT_MONO, 8 * s, vec2(bx1 + (bx2 - bx1) * 0.55 - 12 * s, ly + 11 * s), COLOR_DIM)
         drawTextRight(TEXTS.scrRadarExtreme, FONT_MONO, 8 * s, bx2, ly + 11 * s, COLOR_DIM)
-        drawText(TEXTS.scrRadarClouds, FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 25 * s), COLOR_DIM)
-        local lp, lroom = string.format(TEXTS.scrRadarLoop, #fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic), p2.x - 14 * s - (p1.x + 14 * s)
-        if textWidth(lp, FONT_MONO, 8 * s) > lroom then
-          while #lp > 1 and textWidth(lp .. '...', FONT_MONO, 8 * s) > lroom do lp = lp:sub(1, -2) end
-          lp = lp .. '...'
+        local lroom = p2.x - 14 * s - (p1.x + 14 * s)
+        local function fit(text)
+          if textWidth(text, FONT_MONO, 8 * s) <= lroom then return text end
+          local function cut(t)
+            repeat local c = t:byte(-1); t = t:sub(1, -2) until #t == 0 or c < 0x80 or c >= 0xC0
+            return t
+          end
+          while #text > 1 and textWidth(text .. '...', FONT_MONO, 8 * s) > lroom do text = cut(text) end
+          return text .. '...'
         end
-        drawText(lp, FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 37 * s), COLOR_DIM)
+        drawText(fit(TEXTS.scrRadarClouds), FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 25 * s), COLOR_DIM)
+        drawText(fit(string.format(TEXTS.scrRadarLoop, #fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic)), FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 37 * s), COLOR_DIM)
       end
     else
       local kmhW = CarRead.num(sim.windSpeedKmh)
