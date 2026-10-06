@@ -355,8 +355,8 @@ local TEXTS = {
   pitStopRowInPits = 'in the pits',
   pitStopRowNoService = 'no service',
   pitStopRowNoPenalty = 'no penalty',
-  stintMinDsq = 'Stint under the minimum (%s of %d min)',
-  stintMaxDsq = 'Stint over the maximum (%d min)',
+  stintMinDsq = 'Driving time under the minimum (%s of %d min, whole race)',
+  stintMaxDsq = 'Driving time over the maximum (%d min, whole race)',
   kmrRatingDsq = 'KMR safety rating %s (limit %s)',
   scrRelative = 'RELATIVE', scrStandings = 'STANDINGS', scrLapTime = 'LAP TIME', scrDelta = 'DELTA', scrVsBest = 'vs BEST',
   scrLaps = 'LAPS', scrLapN = 'Lap %d', scrStint = 'STINT - %s - %d laps', scrRace = 'RACE STATUS',
@@ -365,7 +365,7 @@ local TEXTS = {
   scrLeader = 'Leader', scrAhead = 'Ahead', scrBehind = 'Behind', scrStops = 'STOPS', scrSwaps = 'SWAPS',
   scrWindow = 'PIT WINDOW', scrStintLine = 'STINT', scrTyres = 'Tyres', scrPending = 'Pending',
   scrOpt = 'Opt.', scrCarBest = 'Car best', scrStintN = 'STINT %d - %s', scrStintInfo = '%d laps - %s',
-  scrStintMin = ' / min %d', scrBestAvg = 'Best %s - avg %s', scrDeltaButton = 'Δ',
+  scrStintMin = ' / min %d', scrDriveTotal = 'race %s', scrBestAvg = 'Best %s - avg %s', scrDeltaButton = 'Δ',
   scrDeltaRefs = { best = 'BEST', session = 'SESS', optimal = 'OPT', alltime = 'ALL' }, scrDeltaSectors = 'SECTORS',
   cmWatch = 'WATCH ON BOARD', cmMine = 'MY CAR', cmNoWatch = 'watch on board: off on this server (roles watch:1)',
   scrGaps = 'GAPS', scrObligations = 'OBLIGATIONS', scrTrack = 'Track', scrKmr = 'KMR points',
@@ -382,6 +382,7 @@ local TEXTS = {
   edButtons = 'Next screen %s - Previous screen %s - Next desktop %s - Previous desktop %s (CSP controls)',
   edIndicator = 'DESKTOP %d / %d - %s',
   menuButtons = 'Buttons', navTitle = 'BUTTONS', navOwn = 'RECORDED BY THE TOOL', navCsp = 'CSP CONTROLS',
+  navTabs = { nav = 'Navigation', screens = 'Open / close screens' },
   navNextScreen = 'Next screen', navPrevScreen = 'Previous screen', navNextDesktop = 'Next desktop',
   navPrevDesktop = 'Previous desktop', navShowPanel = 'Show panel (5 s)', navSet = 'Set', navClear = 'Clear', navPress = 'Press a button... %d s',
   navInUseAc = 'in use by the AC: %s - choose another', navInUseOwn = 'in use by %s of this tool - choose another',
@@ -468,6 +469,7 @@ local TEXTS = {
   lobbyTitle = 'RACING CONTROL', lobbyStops = 'Stops', lobbyKmr = 'KMR points / rating', lobbyWeather = 'Air / track',
   lobbyMessages = 'MESSAGES', lobbyWindow = 'Racing Control - lobby',
   scrShare = 'RACING ROOM', shareOn = 'GAME SCREEN SHARED', shareOff = 'GAME SCREEN NOT SHARED', shareHint = '< off   on >',
+  ownOn = 'MY SCREENS SHOWN TO ME', ownOff = 'MY SCREENS HIDDEN FROM ME', ownHint = 'Hidden: less traffic and load; the others still see them',
   focusOn = 'FOCUS ON', focusOff = 'FOCUS OFF', focusWith = 'Talking to you: %s', focusNobody = 'Choose who talks to you', focusHint = 'Only one person talks to you',
   focusNoRoom = 'Focus: Racing Room in a private room',
   rrRoom = '%s - %s', rrNone = 'Not connected - no voice/video', rrOther = 'On another PC - no voice/video',
@@ -1958,6 +1960,7 @@ do
         if garage then
           R.state, R.garage, R.area, R.screen, R.game = 'on', garage, area, screen == '1', game == '1'
           R.err = body:match('^OK|[^|]*|[^|]*|%d|%d|([^\r\n]*)') or ''
+          R.own = body:match('\nOWN|(%d)') == '1'
           local fr, fon, fwith, flist = body:match('\nFOCUS|(%d)|(%d)|(%d*)|([^\r\n]*)')
           R.focus = { room = fr == '1', on = fon == '1', with = fwith or '', people = {} }
           for st, nm in tostring(flist or ''):gmatch('(%d+):([^;]*)') do R.focus.people[#R.focus.people + 1] = { steam = st, name = nm } end
@@ -1995,6 +1998,13 @@ do
       ac.log('race-control: game screen ask answered: ' .. R.answer)
       R.nextT = 0
     end)
+  end
+  function B.rrOwn(hide)
+    local R = B.rr
+    if not on() then return end
+    local body = '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"hideOwn":' .. (hide and 'true' or 'false') .. '}'
+    ac.log('race-control: own screens ' .. (hide and 'hidden' or 'shown') .. ' asked to the Racing Room')
+    WebQueue.request('POST', config.baseUrl .. '/v1/rr/share', { ['Content-Type'] = 'application/json' }, body, function() R.nextT = 0 end)
   end
   function B.rrFocus(isOn, withSteam)
     local R = B.rr
@@ -7079,7 +7089,7 @@ do
   RecordSync.restorers.pass = function(body, seq) apply(body, seq, 'other drivers') end
 end
 local RaceTable = { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, stops = {}, passes = {}, seen = {},
-  stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0 }, stintDone = false, maxDsq = false, prevParked = nil }
+  stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0, totals = {} }, stintDone = false, maxDsq = false, minDone = false, prevParked = nil }
 do
   local REFRESH = 0.25
   local MAX_LAPS = 600
@@ -7189,12 +7199,17 @@ do
   local function stintSave()
     local st = RaceTable.stint
     st.seq = st.seq + 1
-    Record.save('stint', st.seq, string.format('%d|%d|%d', st.driver, math.floor(st.startMs), math.floor(st.parkMs)))
+    local parts = {}
+    for code, ms in pairs(st.totals) do parts[#parts + 1] = string.format('%d:%d', code, math.floor(ms)) end
+    table.sort(parts)
+    Record.save('stint', st.seq, string.format('%d|%d|%d|%s', st.driver, math.floor(st.startMs), math.floor(st.parkMs), table.concat(parts, ',')))
   end
   local function stintApply(body, seq)
-    local d, s, p = tostring(body or ''):match('^(%d+)|(%-?%d+)|(%-?%d+)$')
+    local d, s, p, rest = tostring(body or ''):match('^(%d+)|(%-?%d+)|(%-?%d+)|?([%d:,]*)$')
     if not d then return end
-    RaceTable.stint = { driver = tonumber(d), startMs = tonumber(s), parkMs = tonumber(p), seq = seq or 0 }
+    local totals = {}
+    for code, ms in rest:gmatch('(%d+):(%d+)') do totals[tonumber(code)] = tonumber(ms) end
+    RaceTable.stint = { driver = tonumber(d), startMs = tonumber(s), parkMs = tonumber(p), seq = seq or 0, totals = totals }
   end
   RecordSync.restorers.stint = function(body, seq)
     if not RaceTable.stintDone then stintApply(body, seq) end
@@ -7204,15 +7219,20 @@ do
     stopsLoad()
     seenLoad()
     local body, seq = Record.load('stint')
-    RaceTable.stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0 }
+    RaceTable.stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0, totals = {} }
     if body then stintApply(body, seq) end
-    RaceTable.stintDone, RaceTable.maxDsq, RaceTable.prevParked = false, false, nil
+    RaceTable.stintDone, RaceTable.maxDsq, RaceTable.minDone, RaceTable.prevParked = false, false, false, nil
     RaceTable.passReset()
   end
   function RaceTable.stintMs()
     local st = RaceTable.stint
     if not RaceTable.stintDone or st.startMs < 0 then return nil end
     return serverTimeMs() - st.startMs
+  end
+  function RaceTable.driveMs()
+    local ms = RaceTable.stintMs()
+    if not ms then return nil end
+    return (RaceTable.stint.totals[RaceTable.stint.driver] or 0) + ms
   end
   local function stintUpdate(car)
     local rule = config.driverStint
@@ -7223,10 +7243,9 @@ do
       local me = nameCode(ac.getDriverName(0))
       if st.driver ~= me then
         local prev = st.driver ~= 0 and st.startMs >= 0 and st.parkMs >= st.startMs and (st.parkMs - st.startMs) or nil
-        if prev and rule.minMinutes > 0 and sim.raceSessionType == ac.SessionType.Race and prev < rule.minMinutes * 60000 then
-          carDsq(1, string.format(TEXTS.stintMinDsq, mmss(prev / 1000), rule.minMinutes))
-        end
-        RaceTable.stint = { driver = me, startMs = serverTimeMs(), parkMs = -1, seq = st.seq }
+        local totals = st.totals or {}
+        if prev then totals[st.driver] = (totals[st.driver] or 0) + prev end
+        RaceTable.stint = { driver = me, startMs = serverTimeMs(), parkMs = -1, seq = st.seq, totals = totals }
         stintSave()
       end
     end
@@ -7236,11 +7255,20 @@ do
       stintSave()
     end
     RaceTable.prevParked = parked
-    local ms = RaceTable.stintMs()
-    if ms and rule.maxMinutes > 0 and sim.raceSessionType == ac.SessionType.Race and not parked
-        and ms > rule.maxMinutes * 60000 and not RaceTable.maxDsq then
+    local race = sim.raceSessionType == ac.SessionType.Race
+    local ms = RaceTable.driveMs()
+    if ms and rule.maxMinutes > 0 and race and not parked and ms > rule.maxMinutes * 60000 and not RaceTable.maxDsq then
       RaceTable.maxDsq = true
       carDsq(1, string.format(TEXTS.stintMaxDsq, rule.maxMinutes))
+    end
+    if race and rule.minMinutes > 0 and Flags.ending == 'finished' and not RaceTable.minDone and RaceTable.stintDone then
+      RaceTable.minDone = true
+      local sums = {}
+      for code, v in pairs(RaceTable.stint.totals) do sums[code] = v end
+      sums[RaceTable.stint.driver] = ms or sums[RaceTable.stint.driver] or 0
+      local low
+      for _, v in pairs(sums) do if v < rule.minMinutes * 60000 and (not low or v < low) then low = v end end
+      if low then carDsq(1, string.format(TEXTS.stintMinDsq, mmss(low / 1000), rule.minMinutes)) end
     end
   end
   local MIN_FLYING = 2
@@ -7890,6 +7918,7 @@ do
   local NAV = { nextScreen = button('Next screen'), prevScreen = button('Previous screen'),
     nextDesktop = button('Next desktop'), prevDesktop = button('Previous desktop'), showPanel = button('Show panel') }
   Desktop.panelUntil = 0
+  for _, g in ipairs(SCREENS) do NAV['scr' .. g] = button('Screen ' .. g) end
   local TITLE_KEY = 'rc.titleBars'
   Desktop.TITLE_HIDE = { delta = true, telemetry = true, map = true, weather = true, share = true, perf = true }
   Desktop.titleHidden = {}
@@ -8331,7 +8360,8 @@ do
     elseif kind == 'g' then key = 'x:' .. tostring(XBOX[tonumber(c) or 0]) end
     if acUsed[key] then return string.format(TEXTS.navInUseAc, acUsed[key]) end
     for other, ob in pairs(Desktop.binds) do
-      if other ~= name and ob == b then return string.format(TEXTS.navInUseOwn, other) end
+      local scr = other:match('^scr(%a+)$')
+      if other ~= name and ob == b then return string.format(TEXTS.navInUseOwn, scr and TEXTS.screenNames[scr] or other) end
     end
     return nil
   end
@@ -8395,6 +8425,9 @@ do
     if given('nextScreen') then moveFocus(1) end
     if given('prevScreen') then moveFocus(-1) end
     if given('showPanel') then Desktop.panelUntil = state.ui.clock + config.screens.autoSeconds end
+    for _, g in ipairs(SCREENS) do
+      if given('scr' .. g) then Desktop.setMode(g, Desktop.mode(g) == 'hidden' and 'visible' or 'hidden') end
+    end
     if car.isInPitlane and Desktop.wasInPit == false then Desktop.focus, Desktop.focusByNav = 'pitbox', false end
     Desktop.wasInPit = car.isInPitlane
     local g = Desktop.focus
@@ -10595,11 +10628,13 @@ local drawRaceScreens = (function()
     local function sum(list) local t = 0; for _, l in ipairs(list) do t = t + l.ms end; return t end
     local ms = RaceTable.stintMs() or sum(now.laps)
     local rule = config.driverStint
-    local stintCol = (rule.minMinutes <= 0) and COLOR_DIM or (ms < rule.minMinutes * 60000 and YELLOW)
-      or ((rule.maxMinutes > 0 and ms > rule.maxMinutes * 60000) and RED) or GREEN
+    local tot = RaceTable.driveMs() or ms
+    local stintCol = (rule.minMinutes <= 0 and rule.maxMinutes <= 0) and COLOR_DIM or ((rule.maxMinutes > 0 and tot > rule.maxMinutes * 60000) and RED)
+      or ((rule.minMinutes > 0 and tot < rule.minMinutes * 60000) and YELLOW) or GREEN
     drawText(string.format(TEXTS.scrStintN, #stints, now.driver), FONT_TITLE, 10.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
-    drawTextRight(string.format(TEXTS.scrStintInfo, #now.laps, hms(ms)) .. (rule.minMinutes > 0 and
-      string.format(TEXTS.scrStintMin, rule.minMinutes) or ''), FONT_MONO, 10 * s, p2.x - 14 * s, y, stintCol)
+    drawTextRight(string.format(TEXTS.scrStintInfo, #now.laps, hms(ms)) .. ((rule.minMinutes > 0 or rule.maxMinutes > 0) and
+      (' - ' .. string.format(TEXTS.scrDriveTotal, hms(tot)) .. (rule.minMinutes > 0 and string.format(TEXTS.scrStintMin, rule.minMinutes) or '')) or ''),
+      FONT_MONO, 10 * s, p2.x - 14 * s, y, stintCol)
     y = y + ROW * 1.5 * s
     row(p1, y, s, { { 'LAP', 14, COLOR_AXIS }, { 'TIME', 118, COLOR_AXIS, true }, { 'DELTA', 172, COLOR_AXIS, true },
       { 'S1', 220, COLOR_AXIS, true }, { 'S2', 268, COLOR_AXIS, true }, { 'S3', 316, COLOR_AXIS, true } })
@@ -10694,7 +10729,7 @@ local drawRaceScreens = (function()
     local swapsLight = (not swapReq or swapReq <= 0) and COLOR_OFF or (SwapRecord.validNow() >= swapReq and GREEN or YELLOW)
     local pit = Panel.cellPit()
     local pitLight = not pit and COLOR_OFF or (pit.color == 'red' and RED or pit.color == 'yellow' and YELLOW or GREEN)
-    local ms = RaceTable.stintMs()
+    local ms = RaceTable.driveMs()
     local rule = config.driverStint
     local stint = ms and (mmss(ms / 1000) .. (rule.minMinutes > 0 and string.format(' / min %d', rule.minMinutes) or '')) or '-'
     local stintLight = (not ms or (rule.minMinutes <= 0 and rule.maxMinutes <= 0)) and COLOR_OFF
@@ -10884,16 +10919,17 @@ local drawRaceScreens = (function()
   local shareRow = 1
   local function shareRows()
     local f = RecordSync.base.rr.focus
-    return f and f.room and (2 + #f.people) or 2
+    return f and f.room and (3 + #f.people) or 3
   end
   Desktop.shareMove = function(dir) shareRow = (shareRow - 1 + dir) % shareRows() + 1 end
   Desktop.shareStep = function(dir)
     local B, f = RecordSync.base, RecordSync.base.rr.focus
     if shareRow > shareRows() then shareRow = 1 end
     if shareRow == 1 then B.rrShare(dir > 0)
-    elseif shareRow == 2 then if f and f.room then B.rrFocus(dir > 0, dir > 0 and f.with or '') end
+    elseif shareRow == 2 then B.rrOwn(dir < 0)
+    elseif shareRow == 3 then if f and f.room then B.rrFocus(dir > 0, dir > 0 and f.with or '') end
     elseif f then
-      local p = f.people[shareRow - 2]
+      local p = f.people[shareRow - 3]
       if p then B.rrFocus(true, dir > 0 and p.steam or '') end
     end
   end
@@ -10919,7 +10955,7 @@ local drawRaceScreens = (function()
       end
     end
     if shareRow > shareRows() then shareRow = 1 end
-    local focusRows = 2 + (fo and fo.room and #fo.people or 0)
+    local focusRows = 4 + (fo and fo.room and #fo.people or 0)
     local p1, p2, y, noTitle = frame('share', w, h, s, 2 + #lines + focusRows, TEXTS.scrShare, TEXTS.shareHint)
     if not noTitle then
       local hw = textWidth(TEXTS.shareHint, FONT_MONO, 11 * s)
@@ -10947,14 +10983,27 @@ local drawRaceScreens = (function()
     end
     local function mark(row, ry, rh) if shareRow == row then ui.drawRectFilled(vec2(p1.x + 9 * s, ry + 2 * s), vec2(p1.x + 11 * s, ry + (rh - 2) * s), YELLOW) end end
     mark(1, y, 22)
-    local fy = y + (2 + #lines) * ROW * s
+    local oy = y + (2 + #lines) * ROW * s
+    local oa = vec2(p1.x + 14 * s, oy)
+    local ob = vec2(oa.x + isz, oa.y + isz)
+    local hidden = Rr.own == true
+    ui.drawRectFilled(oa, ob, hidden and rgbm(1, 1, 1, 0.08) or rgbm(0.2, 0.6, 0.3, 0.9), 3 * s)
+    ui.drawIcon(hidden and ui.Icons.Hide or ui.Icons.Eye, vec2(oa.x + 3 * s, oa.y + 3 * s), vec2(ob.x - 3 * s, ob.y - 3 * s), hidden and COLOR_DIM or COLOR_TITLE)
+    Drag.clickable(oa, ob, function() RecordSync.base.rrOwn(not hidden) end)
+    drawText(hidden and TEXTS.ownOff or TEXTS.ownOn, FONT_TITLE, 10 * s, vec2(ob.x + 10 * s, oy), hidden and COLOR_DIM or GREEN)
+    local osub = TEXTS.ownHint
+    local osubW = p2.x - 14 * s - (ob.x + 10 * s)
+    while #osub > 1 and textWidth(osub, FONT_TEXT, 9 * s) > osubW do osub = osub:sub(1, -5) .. '...' end
+    drawText(osub, FONT_TEXT, 9 * s, vec2(ob.x + 10 * s, oy + 13 * s), COLOR_DIM)
+    mark(2, oy, 22)
+    local fy = oy + 2 * ROW * s
     local fa = vec2(p1.x + 14 * s, fy)
     local fb = vec2(fa.x + isz, fa.y + isz)
     local fon = fo and fo.on
     ui.drawRectFilled(fa, fb, fon and rgbm(0.2, 0.6, 0.3, 0.9) or rgbm(1, 1, 1, 0.08), 3 * s)
     ui.drawIcon(ui.Icons.Headphones, vec2(fa.x + 3 * s, fa.y + 3 * s), vec2(fb.x - 3 * s, fb.y - 3 * s), fon and COLOR_TITLE or COLOR_DIM)
     Drag.clickable(fa, fb, function() if fo and fo.room then RecordSync.base.rrFocus(not fon, fo.with) end end)
-    mark(2, fy, 22)
+    mark(3, fy, 22)
     local chosen
     if fo then for _, p in ipairs(fo.people) do if p.steam == fo.with then chosen = p.name end end end
     drawText(fon and TEXTS.focusOn or TEXTS.focusOff, FONT_TITLE, 10 * s, vec2(fb.x + 10 * s, fy), fon and GREEN or COLOR_DIM)
@@ -10970,8 +11019,8 @@ local drawRaceScreens = (function()
         while #nm > 1 and textWidth(nm, FONT_TEXT, FS * s) > subW do nm = nm:sub(1, -2) end
         drawText(nm, FONT_TEXT, FS * s, vec2(fb.x + 10 * s, ny), on and GREEN or COLOR_TITLE)
         if on then drawText('>', FONT_MONO, FS * s, vec2(fa.x + 6 * s, ny), GREEN) end
-        mark(2 + i, ny, ROW)
-        Drag.clickable(vec2(p1.x + 10 * s, ny), vec2(p2.x - 10 * s, ny + ROW * s), function() shareRow = 2 + i; RecordSync.base.rrFocus(true, p.steam) end)
+        mark(3 + i, ny, ROW)
+        Drag.clickable(vec2(p1.x + 10 * s, ny), vec2(p2.x - 10 * s, ny + ROW * s), function() shareRow = 3 + i; RecordSync.base.rrFocus(true, p.steam) end)
         ny = ny + ROW * s
       end
     end
@@ -11941,9 +11990,13 @@ local drawDesktopUI = (function()
   local NAV_ROWS = { { 'nextScreen', TEXTS.navNextScreen }, { 'prevScreen', TEXTS.navPrevScreen },
     { 'nextDesktop', TEXTS.navNextDesktop }, { 'prevDesktop', TEXTS.navPrevDesktop },
     { 'showPanel', TEXTS.navShowPanel }, { 'up', TEXTS.navUp }, { 'down', TEXTS.navDown }, { 'left', TEXTS.navLeft }, { 'right', TEXTS.navRight } }
+  local SCREEN_ROWS = {}
+  for _, g in ipairs(Desktop.SCREENS) do SCREEN_ROWS[#SCREEN_ROWS + 1] = { 'scr' .. g, TEXTS.screenNames[g] or g } end
+  Desktop.buttonsTab = 'nav'
   local function buttonsScreen(w, h, s)
+    local LIST = Desktop.buttonsTab == 'screens' and SCREEN_ROWS or NAV_ROWS
     local rows, ownW, cspW = {}, textWidth(TEXTS.navOwn, FONT_TITLE, 9 * s), textWidth(TEXTS.navCsp, FONT_TITLE, 9 * s)
-    for _, r in ipairs(NAV_ROWS) do
+    for _, r in ipairs(LIST) do
       local name = r[1]
       local cap = Desktop.capture and Desktop.capture.name == name
       local own = cap and string.format(TEXTS.navPress, math.max(math.ceil(Desktop.capture.untilT - state.ui.clock), 0))
@@ -11959,7 +12012,7 @@ local drawDesktopUI = (function()
     local ownX = 150 * s
     local setX = ownX + ownW + 14 * s
     local cspX = setX + chipsW + 14 * s
-    local W3, H3 = math.max(560, (cspX + cspW + 16 * s) / s), 44 + #NAV_ROWS * 22 + 22
+    local W3, H3 = math.max(560, (cspX + cspW + 16 * s) / s), 44 + #LIST * 22 + 22
     local p1, p2 = windowAt('buttons', W3, H3, w, h, s)
     Drag.group = nil
     Drag.modal = { p1, p2 }
@@ -11967,6 +12020,13 @@ local drawDesktopUI = (function()
     if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
     drawPanel(p1, p2, BORDER_BASE, s)
     drawText(TEXTS.navTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    local tx = p1.x + 150 * s
+    for _, k in ipairs({ 'nav', 'screens' }) do
+      tx = chip(TEXTS.navTabs[k], vec2(tx, p1.y + 4 * s), s, Desktop.buttonsTab == k, nil, function()
+        Desktop.buttonsTab = k
+        Desktop.capture = nil
+      end)
+    end
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.buttons = false; Desktop.capture = nil end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 30 * s
