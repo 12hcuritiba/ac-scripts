@@ -502,7 +502,7 @@ local TEXTS = {
   scrCompare = 'COMPARE', scrDriverSel = '< DRIVER: %s >', scrStintShort = 'ST %d', scrMap = 'TRACK MAP', scrNoMap = 'No map of this track',
   scrMapLegend = { 'yellow you - blue lap ahead - beige lap down', 'grey pit - red stopped' },
   scrWeather = 'WEATHER', scrWeatherModes = { forecast = 'FORECAST', map = 'RADAR' }, scrRadarZoom = '%g KM',scrRadarBig = '+', scrRadarSmall = '-',
-  scrRadarPrec = 'PRECIPITATION', scrRadarLight = 'light', scrRadarHeavy = 'heavy', scrRadarExtreme = 'extreme', scrRadarClouds = 'clouds: share by METAR (FEW, SCT, BKN, OVC); white = light, grey = heavy',
+  scrRadarPrec = 'PRECIPITATION', scrRadarLight = 'light', scrRadarHeavy = 'heavy', scrRadarExtreme = 'extreme', scrRadarClouds = 'clouds: share by the cover of the forecast; white = light, grey = thick',
   scrRadarLoop = '%s - 1 hour in 6 segments of 10 min, one a second', scrRadarNoTrack = 'No AI spline on this track',
   scrWeatherAnim = 'forecast in segments of 10 min', scrWeatherStatic = 'no forecast', scrWxPage = '< %d/%d >',
   scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
@@ -1919,7 +1919,7 @@ do
     if F.index ~= index then F.index, F.list, F.nextT = index, nil, 0 end
     if not on() or F.busy or state.ui.clock < F.nextT then return end
     F.busy, F.nextT = true, state.ui.clock + FORECAST_GAP
-    WebQueue.request('GET', config.baseUrl .. '/v1/forecast?session=' .. index, nil, nil, function(err, res)
+    WebQueue.request('GET', config.baseUrl .. '/v1/forecast?session=' .. index .. '&all=1', nil, nil, function(err, res)
       F.busy = false
       if err or not res or tonumber(res.status) ~= 200 or F.index ~= index then return end
       local body = tostring(res.body or '')
@@ -1931,7 +1931,7 @@ do
         for v in (line .. '|'):gmatch('([^|]*)|') do f[#f + 1] = v end
         if #f >= 9 and f[1]:match('^%d+:%d+$') then
           list[#list + 1] = { time = f[1], type = f[2], sky = f[3]:gsub('%s*%(Sol%)', ''), wind = f[4], road = tonumber(f[5]),
-            air = tonumber(f[6]), rain = tonumber(f[7]), wet = tonumber(f[8]), water = tonumber(f[9]) }
+            air = tonumber(f[6]), rain = tonumber(f[7]), wet = tonumber(f[8]), water = tonumber(f[9]), trans = tonumber(f[10]) or 0 }
         end
       end
       F.list, F.race, F.session = list, race, session
@@ -10119,56 +10119,63 @@ local drawRaceScreens = (function()
     Radar.geo = { Q = Q, L = L, R = R }
     return Radar.geo
   end
-  function Radar.sky(name)
-    local n = tostring(name or ''):lower()
-    if n:find('thunder') or n:find('heavy') then return 1, 0.9 end
-    if n:find('rain') and n:find('light') then return 0.92, 0.7 end
-    if n:find('rain') then return 0.95, 0.8 end
-    if n:find('drizzle') then return 0.85, 0.6 end
-    if n:find('overcast') then return 0.9, 0.45 end
-    if n:find('broken') then return 0.7, 0.35 end
-    if n:find('scattered') then return 0.45, 0.2 end
-    if n:find('few') then return 0.2, 0.1 end
-    if n:find('clear') then return 0, 0 end
-    return 0.5, 0.3
+  local OKTA_PCT = { [0] = { 0, 0 }, { 1, 12 }, { 13, 25 }, { 26, 38 }, { 39, 50 }, { 51, 62 }, { 63, 75 }, { 76, 99 }, { 100, 100 } }
+  local function low(name) return (tostring(name or ''):lower():gsub('_', ' ')) end
+  function Radar.scheme(name)
+    local n = low(name)
+    local function s(o1, o2, wet, conv, vv) return { o1 = o1, o2 = o2, wet = wet, conv = conv and 1 or 0, vv = vv and 1 or 0 } end
+    if n:find('thunder', 1, true) then return s(8, 8, n:find('heavy', 1, true) and 'heavyThunder' or n:find('light', 1, true) and 'lightThunder' or 'thunder', true, true) end
+    if n:find('shower', 1, true) or n:find('squall', 1, true) then return s(5, 7, 'showers', true) end
+    if n:find('drizzle', 1, true) then
+      if n:find('heavy', 1, true) then return s(8, 8, 'heavyDrizzle') end
+      return s(5, 7, n:find('light', 1, true) and 'lightDrizzle' or 'drizzle')
+    end
+    if n:find('rain', 1, true) then return s(8, 8, n:find('heavy', 1, true) and 'heavyRain' or n:find('light', 1, true) and 'lightRain' or 'rain') end
+    if n:find('overcast', 1, true) then return s(8, 8) end
+    if n:find('broken', 1, true) then return s(5, 7) end
+    if n:find('scattered', 1, true) then return s(3, 4) end
+    if n:find('few', 1, true) then return s(1, 2) end
+    if n:find('clear', 1, true) or n:find('no clouds', 1, true) then return s(0, 0) end
+    return s(4, 4)
+  end
+  local function oktaMid(o) return (OKTA_PCT[o][1] + OKTA_PCT[o][2]) / 200 end
+  function Radar.slotCover(name, nextName)
+    local a, b = Radar.scheme(name), Radar.scheme(nextName or name)
+    local la, lb = (a.o1 + a.o2) / 2, (b.o1 + b.o2) / 2
+    return oktaMid(lb > la and a.o2 or a.o1)
+  end
+  local MMH = { lightDrizzle = { 0, 0.30 }, drizzle = { 0.30, 0.50 }, heavyDrizzle = { 0.50, 1.0 }, lightRain = { 0, 2.5 }, rain = { 2.6, 10.0 },
+    heavyRain = { 10.1, 50.0 }, showers = { 1.0, 30.0 }, lightThunder = { 15, 40 }, thunder = { 15, 70 }, heavyThunder = { 15, 100 } }
+  function Radar.intensity(name, rainPct)
+    local c = Radar.scheme(name).wet
+    if not c then return 0 end
+    local r = MMH[c]
+    return r[1] + (r[2] - r[1]) * math.min(math.max(CarRead.num(rainPct), 0), 100) / 100
   end
   function Radar.slots(fc)
     local out = {}
     for _, f in ipairs(fc or {}) do
       local h, m = tostring(f.time or ''):match('^(%d+):(%d+)$')
       if h then
-        local cov, grey = Radar.sky(f.sky or f.type)
         local w = tostring(f.wind or '')
         local v1, v2 = w:match('(%d+%.?%d*)%s*%-%s*(%d+%.?%d*)%s*m/s')
-        local dir = tonumber(w:match('(%d+)%s*°') or w:match('at%s*(%d+)')) or 0
-        out[#out + 1] = { minute = tonumber(h) * 60 + tonumber(m), name = f.sky or f.type or '', cov = cov, grey = grey, rain = CarRead.num(f.rain),
-          air = CarRead.num(f.air), road = CarRead.num(f.road), vmin = tonumber(v1) or 0, vmax = tonumber(v2) or tonumber(v1) or 0, dir = dir }
+        out[#out + 1] = { minute = tonumber(h) * 60 + tonumber(m), name = f.sky or f.type or '', rain = CarRead.num(f.rain), air = CarRead.num(f.air),
+          road = CarRead.num(f.road), vmin = tonumber(v1) or 0, vmax = tonumber(v2) or tonumber(v1) or 0,
+          dir = tonumber(w:match('(%d+)%s*°') or w:match('at%s*(%d+)')) or 0, trans = CarRead.num(f.trans) }
       end
     end
-    table.sort(out, function(a, b) return a.minute < b.minute end)
     if #out == 0 then
       local name
       for k, v in pairs(ac.WeatherType or {}) do if v == sim.weatherType then name = k end end
-      local cov, grey = Radar.sky(name and name:gsub('(%l)(%u)', '%1 %2') or '')
       local v = CarRead.num(sim.windSpeedKmh) / 3.6
-      out[1] = { minute = 0, name = name or '-', cov = cov, grey = grey, rain = CarRead.num(sim.rainIntensity) * 100, vmin = v, vmax = v,
-        air = CarRead.num(sim.ambientTemperature), road = CarRead.num(sim.roadTemperature),
-        dir = CarRead.num(sim.windDirectionDeg) % 360 }
+      out[1] = { minute = 0, name = name and name:gsub('(%l)(%u)', '%1 %2') or '-', rain = CarRead.num(sim.rainIntensity) * 100, vmin = v, vmax = v,
+        dir = CarRead.num(sim.windDirectionDeg) % 360, air = CarRead.num(sim.ambientTemperature), road = CarRead.num(sim.roadTemperature), trans = 0 }
     end
     return out
   end
-  local COVER_OF = { { 'no clouds', 0 }, { 'clear', 0 }, { 'few', 0.25 }, { 'scattered', 0.5 }, { 'broken', 0.75 }, { 'overcast', 1 },
-    { 'heavy thunder', 1 }, { 'hurricane', 1 }, { 'hail', 1 }, { 'tornado', 1 }, { 'squall', 1 }, { 'light thunder', 0.9 }, { 'thunder', 1 },
-    { 'heavy drizzle', 0.9 }, { 'light drizzle', 0.7 }, { 'drizzle', 0.8 }, { 'heavy rain', 0.9 }, { 'light rain', 0.5 }, { 'rain', 0.7 },
-    { 'heavy snow', 0.85 }, { 'heavy sleet', 0.85 }, { 'light snow', 0.55 }, { 'light sleet', 0.55 }, { 'snow', 0.7 }, { 'sleet', 0.7 },
-    { 'windy', 0.6 }, { 'fog', 0 }, { 'mist', 0.2 }, { 'haze', 0.2 }, { 'dust', 0.2 }, { 'smoke', 0.8 }, { 'sand', 0.9 } }
-  function Radar.coverOf(name)
-    local n = tostring(name or ''):lower():gsub('_', ' '):gsub('%s+', ' ')
-    for _, e in ipairs(COVER_OF) do if n:find(e[1], 1, true) then return e[2] end end
-    return 0.5
-  end
-  function Radar.metar(c) return c <= 0 and 'SKC' or c <= 0.25 and 'FEW' or c <= 0.5 and 'SCT' or c < 1 and 'BKN' or 'OVC' end
-  function Radar.segments(slots, m0, count)
+  local function lerp(a, b, u) return a + (b - a) * u end
+  local function turn(a, b, u) return (a + ((b - a + 540) % 360 - 180) * u + 360) % 360 end
+  local function line(slots)
     local sl, add = {}, 0
     for _, x in ipairs(slots) do
       local m = x.minute + add
@@ -10178,68 +10185,173 @@ local drawRaceScreens = (function()
       y.minute = m
       sl[#sl + 1] = y
     end
+    for i, s in ipairs(sl) do
+      local nx = sl[math.min(i + 1, #sl)]
+      local sc = Radar.scheme(s.name)
+      s.q = { cover = Radar.slotCover(s.name, nx.name), wet = sc.wet and 1 or 0, mmh = Radar.intensity(s.name, s.rain), conv = sc.conv, vv = sc.vv }
+      local tr = math.min(math.max(CarRead.num(s.trans), 0), 99) / 100
+      s.trFrom = (tr > 0 and nx ~= s) and (nx.minute - (nx.minute - s.minute) / (1 - tr)) or nil
+      s.idx = i
+    end
+    return sl
+  end
+  local function mixQ(a, b, w)
+    return { cover = lerp(a.cover, b.cover, w), wet = lerp(a.wet, b.wet, w), mmh = lerp(a.mmh, b.mmh, w), conv = lerp(a.conv, b.conv, w), vv = lerp(a.vv, b.vv, w) }
+  end
+  local function stateAt(sl, M)
+    local i = 1
+    while i + 1 <= #sl and sl[i + 1].minute <= M do i = i + 1 end
+    local a, b = sl[i], sl[math.min(i + 1, #sl)]
+    local span = b.minute - a.minute
+    local u = span > 0 and math.min(math.max((M - a.minute) / span, 0), 1) or 0
+    local q, name = a.q, a.name
+    if a.trFrom and b ~= a then
+      local w = math.min(math.max((M - a.trFrom) / (b.minute - a.trFrom), 0), 1)
+      q = mixQ(a.q, b.q, w)
+      if w >= 0.5 then name = b.name end
+    elseif b.trFrom and b ~= a then
+      local c = sl[math.min(b.idx + 1, #sl)]
+      if c ~= b and M >= b.trFrom then q = mixQ(a.q, c.q, math.min(math.max((M - b.trFrom) / (c.minute - b.trFrom), 0), 1)) end
+    end
+    return { cover = q.cover, wet = q.wet, mmh = q.mmh, conv = q.conv, vv = q.vv, name = name, air = lerp(a.air or 0, b.air or 0, u),
+      road = lerp(a.road or 0, b.road or 0, u), vmin = lerp(a.vmin, b.vmin, u), vmax = lerp(a.vmax, b.vmax, u), dir = turn(a.dir, b.dir, u) }
+  end
+  local NEAR, TAU = 60, 10
+  local function nearness(d) return math.max(0, 1 - math.log(1 + d / TAU) / math.log(1 + NEAR / TAU)) end
+  local function windowOf(sl, M0)
+    local wet, cover, conv, vv, inMm = 0, 0, 0, 0, 0
+    for m = 0, 9 do
+      local s = stateAt(sl, M0 + m + 0.5)
+      wet, cover, conv, vv = wet + s.wet / 10, cover + s.cover / 10, conv + s.conv / 10, vv + s.vv / 10
+      if s.wet > 0 then inMm = inMm + s.mmh / 10 end
+    end
+    local g, nearMm, after = 0, 0, false
+    for d = 0, NEAR do
+      local before, aft = stateAt(sl, M0 - d - 0.5), stateAt(sl, M0 + 10 + d + 0.5)
+      for _, x in ipairs({ before, aft }) do
+        local v = nearness(d) * x.wet
+        if x.wet > 0 and v > g then g, nearMm = v, x.mmh / x.wet end
+      end
+      if aft.wet > 0 and d <= 20 then after = true end
+    end
+    local ref = wet > 0 and (inMm + nearMm * (1 - wet)) or nearMm
+    local dryAfter = (wet > 0 and not after) and 1 or 0
+    local p = math.floor(math.min(math.max(0.9 * wet + 0.45 * g * (1 - wet) - 0.15 * wet * dryAfter, 0), 0.95) * 20 + 1e-9) / 20
+    local s0 = stateAt(sl, M0)
+    return { minute = M0 % 1440, cover = cover, conv = conv, vv = vv, chance = p, mmh = p * ref, ref = ref, air = s0.air, road = s0.road, vmin = s0.vmin,
+      vmax = s0.vmax, dir = s0.dir, name = stateAt(sl, M0 + 5).name }
+  end
+  function Radar.segments(slots, m0, count)
+    local sl = line(slots)
     if #sl == 0 then return {} end
     local start = m0
     if start < sl[1].minute - 720 then start = start + 1440 end
-    local function lerp(a, b, u) return a + (b - a) * u end
     local out = {}
-    for k = 0, count - 1 do
-      local M = start + k * 10
-      local i = 1
-      while i + 1 <= #sl and sl[i + 1].minute <= M do i = i + 1 end
-      local a, b = sl[i], sl[math.min(i + 1, #sl)]
-      local u = b.minute > a.minute and math.min(math.max((M - a.minute) / (b.minute - a.minute), 0), 1) or 0
-      local dd = (b.dir - a.dir + 540) % 360 - 180
-      local cv = lerp(Radar.coverOf(a.name), Radar.coverOf(b.name), u)
-      out[#out + 1] = { minute = M % 1440, name = a.name, cover = cv, metar = Radar.metar(cv), grey = lerp(a.grey, b.grey, u), rain = lerp(a.rain, b.rain, u),
-        air = lerp(a.air or 0, b.air or 0, u), road = lerp(a.road or 0, b.road or 0, u), vmin = lerp(a.vmin, b.vmin, u), vmax = lerp(a.vmax, b.vmax, u),
-        dir = (a.dir + dd * u + 360) % 360 }
+    for k = 0, count - 1 do out[#out + 1] = windowOf(sl, start + k * 10) end
+    return out
+  end
+  local SKY_WORD = { [0] = 'Clear', 'Few clouds', 'Few clouds', 'Scattered clouds', 'Scattered clouds', 'Broken clouds', 'Broken clouds', 'Broken clouds', 'Overcast' }
+  function Radar.skyOf(seg)
+    if seg.vv >= 0.5 then return 'Thunderstorm' end
+    local o = 0
+    for k = 0, 8 do if seg.cover * 100 >= OKTA_PCT[k][1] - 0.5 then o = k end end
+    return SKY_WORD[o]
+  end
+  function Radar.precipOf(mm)
+    if mm < 0.01 then return '' end
+    if mm < 0.30 then return 'light drizzle' elseif mm <= 0.50 then return 'drizzle' elseif mm <= 2.5 then return 'light rain'
+    elseif mm <= 10 then return 'rain' elseif mm <= 50 then return 'heavy rain' end
+    return 'violent rain'
+  end
+  local COMPASS = { 'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW' }
+  local function compass(d) return COMPASS[math.floor(((d % 360) + 11.25) / 22.5) % 16 + 1] end
+  local function hhmm(m) return string.format('%02d:%02d', math.floor(m / 60) % 24, math.floor(m + 0.5) % 60) end
+  function Radar.bulletin(seg)
+    if #seg == 0 then return {} end
+    local a, z = seg[1], seg[#seg]
+    local function kmh(s) return string.format('%d-%d km/h', math.floor(s.vmin * 3.6 + 0.5), math.floor(s.vmax * 3.6 + 0.5)) end
+    local out = { string.format('%s now: %s, air %d°C, track %d°C, wind %s %s.', hhmm(a.minute), Radar.skyOf(a), math.floor(a.air + 0.5), math.floor(a.road + 0.5),
+      compass(a.dir), kmh(a)) }
+    local r
+    for _, s in ipairs(seg) do if not r and s.chance >= 0.2 and s.mmh >= 0.01 then r = s end end
+    out[#out + 1] = r and string.format('Precipitation expected from %s (%s), %d%% chance, up to %.2f mm/h.', hhmm(r.minute), Radar.precipOf(r.ref),
+      math.floor(r.chance * 100 + 0.5), r.mmh) or 'No precipitation expected.'
+    out[#out + 1] = string.format('By %s: %s%s, air %d°C, track %d°C; wind %s %s.', hhmm(z.minute), Radar.skyOf(z):lower(),
+      z.mmh >= 0.01 and string.format(', %s %d%%', Radar.precipOf(z.ref), math.floor(z.chance * 100 + 0.5)) or '', math.floor(z.air + 0.5),
+      math.floor(z.road + 0.5), compass(z.dir), kmh(z))
+    local drop = math.floor(a.road - z.road + 0.5)
+    if math.abs(drop) >= 3 then
+      out[#out + 1] = drop > 0 and string.format('Track temperature falling %d°C: less grip expected.', drop) or string.format('Track temperature rising %d°C.', -drop)
     end
     return out
   end
-  function Radar.windAt(seg, t)
-    local p = math.min(math.max(t / 600, 0), #seg - 1)
+  local PRE, POST = 240, 360
+  function Radar.gAt(FL, T)
+    local p = math.min(math.max((T - FL.G0) / 10, 0), FL.N - 1)
     local i = math.floor(p)
     local u = p - i
-    local a, b = seg[i + 1], seg[math.min(i + 2, #seg)]
-    local dd = (b.dir - a.dir + 540) % 360 - 180
-    local r = math.rad(a.dir + dd * u + 180)
-    return math.sin(r), -math.cos(r), ((a.vmin + a.vmax) / 2) * (1 - u) + ((b.vmin + b.vmax) / 2) * u
+    local a, b = FL.grid[i + 1], FL.grid[math.min(i + 2, FL.N)]
+    return { cover = lerp(a.cover, b.cover, u), mmh = lerp(a.mmh, b.mmh, u), conv = lerp(a.conv, b.conv, u), vv = lerp(a.vv, b.vv, u),
+      dir = turn(a.dir, b.dir, u), v = (lerp(a.vmin, b.vmin, u) + lerp(a.vmax, b.vmax, u)) / 2 }
   end
-  function Radar.airOffset(seg, t)
-    local x, y, tt = 0, 0, 0
-    while tt < t do
-      local ux, uy, v = Radar.windAt(seg, tt + 15)
-      local dt = math.min(30, t - tt)
-      x, y, tt = x + ux * v * dt, y + uy * v * dt, tt + 30
+  function Radar.forecastLine(slots)
+    local sl = line(slots)
+    if #sl == 0 then return nil end
+    local first, last = sl[1].minute, sl[#sl].minute
+    local hour0 = math.floor(first / 60) * 60
+    local FL = { sl = sl, first = first, last = last, hour0 = hour0, G0 = hour0 - PRE, grid = {}, ax = { 0 }, ay = { 0 } }
+    FL.N = math.ceil((last + POST - FL.G0) / 10) + 1
+    for k = 0, FL.N - 1 do FL.grid[k + 1] = windowOf(sl, FL.G0 + k * 10) end
+    for k = 1, FL.N * 10 do
+      local w = Radar.gAt(FL, FL.G0 + k - 0.5)
+      local r = math.rad(w.dir + 180)
+      FL.ax[k + 1] = FL.ax[k] + math.sin(r) * w.v * 60
+      FL.ay[k + 1] = FL.ay[k] - math.cos(r) * w.v * 60
     end
-    return x, y
+    return FL
   end
+  function Radar.airAt(FL, T)
+    local n = #FL.ax
+    local x = math.min(math.max(T - FL.G0, 0), n - 1)
+    local i = math.min(math.floor(x), n - 2)
+    local u = x - i
+    return lerp(FL.ax[i + 1], FL.ax[i + 2], u), lerp(FL.ay[i + 1], FL.ay[i + 2], u)
+  end
+  function Radar.lineMinute(FL, m)
+    local best, bd = m, math.huge
+    for d = -1, 2 do
+      local x = m + d * 1440
+      local e = math.abs(x - math.min(math.max(x, FL.first), FL.last))
+      if e < bd then best, bd = x, e end
+    end
+    return best
+  end
+  function Radar.segAt(FL, M) return FL.grid[math.min(math.max(math.floor((M - FL.G0) / 10 + 0.5), 0), FL.N - 1) + 1] end
   function Radar.nowMinute() return math.floor(CarRead.num(sim.timeHours) * 60 + CarRead.num(sim.timeMinutes)) end
+  function Radar.lineOf(slots)
+    local key = {}
+    for _, x in ipairs(slots) do
+      key[#key + 1] = string.format('%d|%s|%g|%g|%g|%g|%g|%g', x.minute, tostring(x.name), x.rain or 0, x.vmin or 0, x.vmax or 0, x.dir or 0, x.trans or 0, x.road or 0)
+    end
+    key = table.concat(key, ';')
+    if Radar.flKey ~= key then Radar.flKey, Radar.fl = key, Radar.forecastLine(slots) end
+    return Radar.fl
+  end
   function Radar.textSegments(fc)
-    local slots = Radar.slots(fc)
-    local m0 = Radar.nowMinute()
-    local last = slots[#slots].minute
-    if last < m0 - 720 then last = last + 1440 end
-    local n = math.min(math.max(math.floor((last - m0) / 10) + 1, 6), 144)
-    return Radar.segments(slots, m0, n)
+    local FL = Radar.lineOf(Radar.slots(fc))
+    if not FL then return {} end
+    local H = math.floor(Radar.lineMinute(FL, Radar.nowMinute()) / 60) * 60
+    local out = {}
+    local M = H
+    while M <= math.max(FL.last, H + 50) and #out < 144 do out[#out + 1] = Radar.segAt(FL, M); M = M + 10 end
+    return out
   end
-  function Radar.at(slots, minute)
-    local s = slots[1]
-    for _, x in ipairs(slots) do if x.minute <= minute then s = x end end
-    return s
-  end
-  function Radar.hour(slots)
-    local m0 = Radar.nowMinute()
-    local L = Radar.loop
-    if L and L.m0 == m0 and L.slots == slots then return L end
-    L = { m0 = m0, slots = slots, seg = Radar.segments(slots, m0, 6), off = {} }
-    for k = 0, 5 do local x, y = Radar.airOffset(L.seg, k * 600); L.off[k] = { x, y } end
-    Radar.loop = L
-    return L
-  end
-  local RADAR_MAX_SLOTS = 16
-  local RADAR_SHADER = [[
+  local RADAR_BACK, RADAR_STEPS = 24, 60
+  local function radarShader()
+    local w, d = {}, {}
+    for i = 0, RADAR_STEPS do w[#w + 1] = 'gW' .. i end
+    for i = 0, RADAR_STEPS / 2 do d[#d + 1] = 'gD' .. i end
+    return [[
 uint rhash(int x, int y, int seed) {
   uint h = ((uint)x * 0x8da6b343u) ^ ((uint)y * 0xd8163841u) ^ ((uint)seed * 0xcb1ab31fu);
   h ^= h >> 13; h *= 0x85ebca6bu; h ^= h >> 16;
@@ -10253,9 +10365,9 @@ float vnoise(float2 p, int seed) {
   float a = rval(ix, iy, seed), b = rval(ix + 1, iy, seed), c = rval(ix, iy + 1, seed), d = rval(ix + 1, iy + 1, seed);
   return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
 }
-float field(float2 p, int seed, float gain, float norm) {
-  float sum = 0, amp = 1, fr = 1.0 / 20000.0;
-  [loop] for (int o = 0; o < 11; o++) { sum += amp * vnoise(p * fr, seed * 131 + o * 1013); amp *= gain; fr *= 2; }
+float field(float2 p, int seed, float gain, float norm, int oct, float wave) {
+  float sum = 0, amp = 1, fr = 1.0 / wave;
+  [loop] for (int o = 0; o < 11; o++) { if (o >= oct) break; sum += amp * vnoise(p * fr, seed * 131 + o * 1013); amp *= gain; fr *= 2; }
   return sum / norm;
 }
 float3 pcolor(float v) {
@@ -10265,64 +10377,75 @@ float3 pcolor(float v) {
   if (v <= 0.78) return lerp(float3(250, 220, 40), float3(240, 120, 40), (v - 0.55) / 0.23);
   return lerp(float3(240, 120, 40), float3(170, 60, 220), (v - 0.78) / 0.22);
 }
-float coverLevel(float c) {
-  if (c >= 1) return -1e9;
-  if (c <= 0) return 1e9;
+float rankOf(float nc) {
   float Q[21] = { -3.6373, -1.5227, -1.1635, -0.9344, -0.7436, -0.5829, -0.4423, -0.3051, -0.1743, -0.0519, 0.0697, 0.193, 0.3197, 0.4493, 0.5842, 0.7342, 0.8983, 1.0897, 1.3166, 1.6456, 3.6192 };
-  float p = (1 - c) * 20;
-  int i = (int)floor(p);
-  return lerp(Q[i], Q[min(i + 1, 20)], p - i);
-}
-float4 slotOf(int i) {
-  float4 S[16] = { gS0, gS1, gS2, gS3, gS4, gS5, gS6, gS7, gS8, gS9, gS10, gS11, gS12, gS13, gS14, gS15 };
-  return S[i];
-}
-float3 interp(float t) {
-  int n = (int)gN;
-  float4 first = slotOf(0);
-  if (t <= first.x) return first.yzw;
-  [loop] for (int i = 1; i < 16; i++) {
-    if (i >= n) break;
-    float4 a = slotOf(i - 1), b = slotOf(i);
-    if (t <= b.x) return lerp(a.yzw, b.yzw, (t - a.x) / max(b.x - a.x, 1e-6));
-  }
-  return slotOf(max(n - 1, 0)).yzw;
+  if (nc <= Q[0]) return 0;
+  if (nc >= Q[20]) return 1;
+  int i = 0;
+  [loop] for (int k = 0; k < 19; k++) { if (nc > Q[k + 1]) i = k + 1; }
+  return (i + (nc - Q[i]) / (Q[i + 1] - Q[i])) / 20;
 }
 float4 main(PS_IN pin) {
-  float X = -gHalf + pin.Tex.x * 2 * gHalf, Y = -gHalf + pin.Tex.y * 2 * gHalf;
-  float tau = -(X * gWind.x + Y * gWind.y) / max(gWind.z, 0.5);
-  float3 w = interp(gT + tau);
-  float rain = w.x, cover = w.y, grey = w.z;
-  float nr = field(float2(X - gOff.x, Y - gOff.y), 3, 0.659754, 0.5865);
-  float nc = field(float2(X - gOff.x * 0.9, Y - gOff.y * 0.9), 9, 0.757858, 0.6831);
-  float3 col = float3(9, 13, 18);
-  float cm = saturate((nc - coverLevel(cover)) * 3) * (0.45 + 0.35 * grey);
-  col = lerp(col, (245 - 100 * grey).xxx, cm);
-  float rr = rain / 100;
-  float thr = 0.8 - 4.0 * rr;
-  float rainNow = gWind.w;
-  if (rainNow > 0.5) {
-    float nearT = exp(-(X * X + Y * Y) / (6000.0 * 6000.0)) * min(1, rainNow / 3);
-    nr += nearT * max(0, (0.8 - 4.0 * rainNow / 100) + 0.5 - nr) * 0.9;
+  float4 W[]] .. (RADAR_STEPS + 1) .. [[] = { ]] .. table.concat(w, ', ') .. [[ };
+  float4 D[]] .. (RADAR_STEPS / 2 + 1) .. [[] = { ]] .. table.concat(d, ', ') .. [[ };
+  float2 P = float2(-gHalf + pin.Tex.x * 2 * gHalf, -gHalf + pin.Tex.y * 2 * gHalf);
+  float best = 1e30, at = 0;
+  float2 prev = P + D[0].xy;
+  [loop] for (int i = 1; i <= ]] .. RADAR_STEPS .. [[; i++) {
+    float4 dd = D[i / 2];
+    float2 cur = P + ((i % 2) == 0 ? dd.xy : dd.zw);
+    float2 e = cur - prev;
+    float ll = dot(e, e);
+    float u = ll > 0 ? saturate(-dot(prev, e) / ll) : 0;
+    float2 x = prev + e * u;
+    float dist = dot(x, x);
+    if (dist < best) { best = dist; at = i - 1 + u; }
+    prev = cur;
   }
-  float pm = saturate((nr - thr) * 1.5) * saturate(rain / 3) * 0.85;
-  col = lerp(col, pcolor(rr * 1.6 * (0.7 + 0.35 * nr)), pm);
+  int ia = min((int)floor(at), ]] .. (RADAR_STEPS - 1) .. [[);
+  float4 w = lerp(W[ia], W[ia + 1], at - ia);
+  float cover = w.x, mmh = w.y, conv = w.z, vv = w.w;
+  float2 q = P - gOff;
+  float rank = rankOf(field(q, 9, 0.757858, 0.6831, 11, 2000.0));
+  float cov = max(cover, vv);
+  float3 col = float3(9, 13, 18);
+  if (cov <= 0 || rank < 1 - cov) return float4(col / 255, 1);
+  float th = pow(saturate((rank - (1 - cov)) / cov), 1 - 0.5 * conv);
+  th = saturate(th + 0.22 * field(q, 13, 0.6, 0.6, 6, 700.0) * (0.4 + th));
+  float edge = saturate(th / 0.06);
+  float shade = (240 - 125 * th) * (1 - vv) + (92 - 60 * th) * vv;
+  col = lerp(col, float3(shade, shade, shade + 5), edge * (0.82 + 0.15 * th));
+  if (mmh > 0.005) {
+    float bub = saturate(0.5 + 0.5 * field(q, 5, 0.55, 0.5412, 6, 1600.0));
+    float rate = mmh * pow(bub, 2 + 2 * conv) * pow(th, 1 + conv) * (3 + 5 * conv);
+    if (rate >= max(0.02, mmh * 0.9)) {
+      float pos = saturate(log(rate / 0.05) / log(100.0 / 0.05));
+      col = lerp(col, pcolor(pos), saturate(0.45 + (rate / mmh - 0.9) * 0.4));
+    }
+  }
   return float4(col / 255, 1);
 }
 ]]
-  function Radar.values(L, k, half)
-    local seg = L.seg
-    local v = { gHalf = half, gT = k * 600, gN = math.min(#seg, RADAR_MAX_SLOTS) }
-    for i = 1, RADAR_MAX_SLOTS do
-      local s = seg[math.min(i, #seg)]
-      v['gS' .. (i - 1)] = vec4((math.min(i, #seg) - 1) * 600, s.rain, s.cover, s.grey)
+  end
+  local RADAR_SHADER = radarShader()
+  function Radar.values(FL, t, half)
+    local v = { gHalf = half }
+    local ox, oy = Radar.airAt(FL, t)
+    v.gOff = vec2(ox, oy)
+    local px, py = {}, {}
+    for i = 0, RADAR_STEPS do
+      local T = t + (i - RADAR_BACK) * 10
+      local w = Radar.gAt(FL, T)
+      v['gW' .. i] = vec4(w.cover, w.mmh, w.conv, w.vv)
+      local bx, by = Radar.airAt(FL, T)
+      px[i], py[i] = bx - ox, by - oy
     end
-    local ux, uy, sp = Radar.windAt(seg, k * 600)
-    v.gWind = vec4(ux, uy, sp, seg[k + 1].rain)
-    v.gOff = vec2(L.off[k][1], L.off[k][2])
+    for j = 0, RADAR_STEPS / 2 do
+      local a, b = 2 * j, math.min(2 * j + 1, RADAR_STEPS)
+      v['gD' .. j] = vec4(px[a], py[a], px[b], py[b])
+    end
     return v
   end
-  local COMPASS = { 'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW' }
   Radar.ZOOM = { 150, 300, 600, 900, 1500, 2500, 5000, 10000 }
   Radar.RING = { [150] = 50, [300] = 100, [600] = 200, [900] = 250, [1500] = 500, [2500] = 1000, [5000] = 1000, [10000] = 2500 }
   Radar.zoomAt = 4
@@ -10337,18 +10460,19 @@ float4 main(PS_IN pin) {
   function Radar.draw(a, side, s, fc, big)
     local half = Radar.half()
     local zoom = half <= 2500 and 'track' or 'wide'
-    local slots = Radar.slots(fc)
-    local L = Radar.hour(slots)
+    local FL = Radar.lineOf(Radar.slots(fc))
+    local H = math.floor(Radar.lineMinute(FL, Radar.nowMinute()) / 60) * 60
     local k = math.floor(state.ui.clock) % 6
-    local sl = L.seg[k + 1]
-    local minute = sl.minute
+    local t = H + k * 10
+    local sl = Radar.segAt(FL, t)
+    local minute = t % 1440
     local b = vec2(a.x + side, a.y + side)
     ui.pushClipRect(a, b, true)
     if ui.ExtraCanvas then
       Radar.canvas = Radar.canvas or ui.ExtraCanvas(vec2(256, 256))
-      local key = half .. '|' .. k .. '|' .. L.m0 .. '|' .. #slots
+      local key = half .. '|' .. t .. '|' .. #Radar.flKey
       if Radar.canvasT ~= key then
-        local ok = Radar.canvas:updateWithShader({ values = Radar.values(L, k, half), shader = RADAR_SHADER, async = true, cacheKey = 672 })
+        local ok = Radar.canvas:updateWithShader({ values = Radar.values(FL, t, half), shader = RADAR_SHADER, async = true, cacheKey = 676 })
         if ok ~= false then Radar.canvasT = key end
       end
       ui.drawImage(Radar.canvas, a, b)
@@ -10472,7 +10596,14 @@ float4 main(PS_IN pin) {
       local minute, sl = Radar.draw(vec2(p1.x + 10 * s, y + 18 * s), side, s, fc, big)
       if big then
         drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 10 * s, vec2(zx + 6 * s, y), YELLOW)
-        local nm, room = tostring(sl.name), sa.x - 6 * s - (zx + 46 * s)
+        local wet = sl.mmh >= 0.01
+        local xr = sa.x - 6 * s
+        local xc = xr - textWidth('0.00 mm/h', FONT_MONO, 9 * s) - 6 * s
+        if wet then
+          drawTextRight(string.format('%.2f mm/h', sl.mmh), FONT_MONO, 9 * s, xr, y + 1 * s, COLOR_TITLE)
+          drawTextRight(string.format('%d%%', math.floor(sl.chance * 100 + 0.5)), FONT_MONO, 9 * s, xc, y + 1 * s, YELLOW)
+        end
+        local nm, room = Radar.skyOf(sl), xc - textWidth('100%', FONT_MONO, 9 * s) - 6 * s - (zx + 46 * s)
         if textWidth(nm, FONT_MONO, 9 * s) > room then
           while #nm > 1 and textWidth(nm .. '...', FONT_MONO, 9 * s) > room do nm = nm:sub(1, -2) end
           nm = nm .. '...'
@@ -10485,6 +10616,13 @@ float4 main(PS_IN pin) {
         for i = 0, n - 1 do
           local r, g, b = Radar.pcolor(i / (n - 1))
           ui.drawRectFilled(vec2(bx1 + (bx2 - bx1) * i / n, ly + 2 * s), vec2(bx1 + (bx2 - bx1) * (i + 1) / n + 0.5, ly + 9 * s), rgbm(r / 255, g / 255, b / 255, 1))
+        end
+        if wet then
+          local pos = math.min(math.max(math.log(sl.mmh / 0.05) / math.log(100 / 0.05), 0), 1)
+          local cx = bx1 + (bx2 - bx1) * pos
+          ui.drawRect(vec2(bx1, ly + 1 * s), vec2(cx, ly + 10 * s), rgbm(1, 1, 1, 1), 0, nil, 1)
+          ui.drawSimpleLine(vec2(cx, ly), vec2(cx, ly + 11 * s), rgbm(1, 1, 1, 1), 2 * s)
+          ui.drawTriangleFilled(vec2(cx - 4 * s, ly - 5 * s), vec2(cx + 4 * s, ly - 5 * s), vec2(cx, ly), rgbm(1, 1, 1, 1))
         end
         drawText(TEXTS.scrRadarLight, FONT_MONO, 8 * s, vec2(bx1, ly + 11 * s), COLOR_DIM)
         drawText(TEXTS.scrRadarHeavy, FONT_MONO, 8 * s, vec2(bx1 + (bx2 - bx1) * 0.55 - 12 * s, ly + 11 * s), COLOR_DIM)
@@ -10529,7 +10667,7 @@ float4 main(PS_IN pin) {
         y = y + ROW * s
         for k = (wxPage - 1) * WX_PAGE + 1, math.min(wxPage * WX_PAGE, #segs) do
           local f = segs[k]
-          local sky = f.metar .. ' ' .. tostring(f.name or ''):gsub('%s*%(Sol%)', '')
+          local sky = Radar.skyOf(f)
           row(p1, y, s, { { string.format('%02d:%02d', math.floor(f.minute / 60) % 24, f.minute % 60), 14 }, { sky, 70 },
             { string.format('%.0f', f.air), 220, nil, true }, { string.format('%.0f', f.road), 286, nil, true } })
           y = y + ROW * s
