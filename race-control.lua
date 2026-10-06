@@ -476,7 +476,7 @@ local TEXTS = {
   rrOffline = 'Base of the event not answering', shareAsking = 'Asking the Racing Room...', shareSent = 'Asked - the Racing Room is opening the capture',
   shareNoRoom = 'Racing Room not in a room - open a room there', shareNoAnswer = 'The Racing Room did not share the game screen',
   shareFailed = 'Not shared: %s', rrNoRoom = 'Not in a room - no voice/video', rrWait = 'Checking...',
-  rrAreas = { pitwall = 'Pitwall', anteroom = 'Anteroom', control = 'Control room', individual = 'Individual room', workshop = 'Workshop' },
+  rrAreas = { pitwall = 'Pitwall', anteroom = 'Anteroom', control = 'Control room', individual = 'Private room', workshop = 'Workshop' },
   lobbyRc = 'RACING CONTROL', lobbyAccount = 'Account', lobbyRegistration = 'Registration', lobbyBase = 'Base of the event',
   lobbyApp = 'Racing Control app', lobbyRoom = 'Racing Room', lobbyShare = 'Game screen', lobbyOk = 'ok', lobbyMissing = 'missing: %s',
   lobbyOnline = 'online', lobbyOffline = 'offline', lobbyRunning = 'running', lobbyNotRunning = 'not running', lobbyShared = 'shared',
@@ -563,6 +563,7 @@ local TEXTS = {
   flagRestart = 'Restart P%d - behind %s', flagRestartFirst = 'Restart P%d - first car',
   flagRestartSwap = 'Restart P%d - driver swap: back of the field, behind %s',
   appMissing = 'Racing Control app not running - install it from the event page - the game closes in %d s',
+  cspOld = 'CSP 4130 required - install it with the 12h app - the game closes in %d s',
   teamSetup = 'Setup from your team: %s - open the setup menu in the pits to apply or refuse it',
   remotePitStart = 'Your team started the pit stop from the Racing Room: stop at your pit place',
   realNameMissing = 'Registration incomplete - you cannot take part in this session - missing: %s - complete it in the 12h Curitiba app',
@@ -923,7 +924,7 @@ Lang.PT = {
   scrWindow = 'JANELA', scrStintLine = 'STINT', scrTyres = 'Pneus', scrPending = 'Pendentes',
   scrOpt = 'Ideal', scrCarBest = 'Melhor do carro', scrStintN = 'STINT %d - %s', scrStintInfo = '%d voltas - %s',
   scrStintMin = ' / mín %d', scrDriveTotal = 'prova %s', scrBestAvg = 'Melhor %s - média %s', scrDeltaButton = 'Δ',
-  scrDeltaRefs = { best = 'MELHOR', session = 'SESSÃO', optimal = 'IDEAL', alltime = 'RECORDE' }, scrDeltaSectors = 'SETORES',
+  scrDeltaRefs = { best = 'MELH.', session = 'SESS.', optimal = 'IDEAL', alltime = 'REC.' }, scrDeltaSectors = 'SETORES',
   cmWatch = 'VER A BORDO', cmMine = 'MEU CARRO', cmNoWatch = 'ver a bordo: desligado neste servidor (roles watch:1)',
   scrGaps = 'DIFERENÇAS', scrObligations = 'OBRIGAÇÕES', scrTrack = 'Pista', scrKmr = 'Pontos KMR',
   exitTitle = 'RELARGADA', exitLine1 = 'Saída do box em fila - ordem da relargada',
@@ -1000,7 +1001,7 @@ Lang.PT = {
   calcNoData = 'sem dados', calcNeedFlying = 'Sem dados: %d de %d voltas lançadas', calcMissing = 'Sem dados: %s',
   calcParams = { race = 'Duração da prova', lap = 'Volta usada', tank = 'Tanque', reserve = 'Reserva (voltas)', pitloss = 'Perda no pit lane',
     refuel = 'Reabastecer', tyres = 'Troca de pneu (cada)' },
-  calcRaceLaps = '%d voltas', calcHead = { 'CEN', 'DESG', 'LIM', 'L/VOLTA', 'PAR', 'V/ST', 'COMB/ST', 'PNEU', 'BOX', 'TOTAL' },
+  calcRaceLaps = '%d voltas', calcHead = { 'CEN', 'DESG', 'LIM', 'L/V', 'PAR', 'V/ST', 'COMB/ST', 'PNEU', 'BOX', 'TOTAL' },
   calcFields = { wear = 'desgaste %/volta', limit = 'pneu até %', fuel = 'comb. L/volta', stops = 'paradas' },
   calcAuto = 'AUTO', calcNo = 'NÃO', calcBest = 'Melhor cenário: %s', calcNone = 'Nenhum cenário cabe no tanque e no pneu',
   scrCockpit = 'COCKPIT', cockpitCar = 'Ajustes deste carro: %s', cockpitSave = 'SALVAR', cockpitSaved = 'SALVO', cockpitNoApp = 'app não está rodando', cockpitMore = '+ TODOS', cockpitAudio = 'VOLUME - CADA CANAL',
@@ -1033,7 +1034,7 @@ Lang.PT = {
   rrOffline = 'Base do evento não responde', shareAsking = 'Pedindo ao Racing Room...', shareSent = 'Pedido - o Racing Room está abrindo a captura',
   shareNoRoom = 'Racing Room fora de uma sala - abra uma sala lá', shareNoAnswer = 'O Racing Room não compartilhou a tela do jogo',
   shareFailed = 'Não compartilhada: %s', rrNoRoom = 'Fora de uma sala - sem voz/vídeo', rrWait = 'Conferindo...',
-  rrAreas = { pitwall = 'Mureta', anteroom = 'Antessala', control = 'Sala de controle', individual = 'Sala individual', workshop = 'Oficina' },
+  rrAreas = { pitwall = 'Mureta', anteroom = 'Antessala', control = 'Sala de controle', individual = 'Sala particular', workshop = 'Oficina' },
   lobbyRc = 'RACING CONTROL', lobbyAccount = 'Conta', lobbyRegistration = 'Cadastro', lobbyBase = 'Base do evento',
   lobbyApp = 'App do Racing Control', lobbyRoom = 'Racing Room', lobbyShare = 'Tela do jogo', lobbyOk = 'ok', lobbyMissing = 'faltando: %s',
   lobbyOnline = 'online', lobbyOffline = 'offline', lobbyRunning = 'rodando', lobbyNotRunning = 'não está rodando', lobbyShared = 'compartilhada',
@@ -1120,6 +1121,7 @@ Lang.PT = {
   flagRestart = 'Relargada P%d - atrás de %s', flagRestartFirst = 'Relargada P%d - primeiro carro',
   flagRestartSwap = 'Relargada P%d - troca de piloto: fim do pelotão, atrás de %s',
   appMissing = 'App do Racing Control não está rodando - instale pela página do evento - o jogo fecha em %d s',
+  cspOld = 'CSP 4130 exigido - instale pelo app das 12h - o jogo fecha em %d s',
   teamSetup = 'Setup da sua equipe: %s - abra o menu de setup no box para aplicar ou recusar',
   remotePitStart = 'Sua equipe iniciou a parada pelo Racing Room: pare na sua vaga',
   realNameMissing = 'Cadastro incompleto - você não pode participar desta sessão - falta: %s - complete no app das 12h Curitiba',
@@ -1133,7 +1135,7 @@ Lang.PT = {
   flagTimeOver = 'TEMPO DA SESSÃO ESGOTADO', flagRaceOver = 'PROVA ENCERRADA', flagFinishLap = 'Termine sua volta - a quadriculada está na linha',
   flagChequeredLine = 'Sessão encerrada',
   relPit = '  BOX',
-  hdr = { pos = 'P', classPos = 'CL', driver = 'PILOTO', class = 'CLASSE', laps = 'VOLTAS', gap = 'DIF', int = 'INT', best = 'MELHOR', pit = 'BOX',
+  hdr = { pos = 'P', classPos = 'CL', driver = 'PILOTO', class = 'CLASSE', laps = 'VLT', gap = 'DIF', int = 'INT', best = 'MELHOR', pit = 'BOX',
     sr = 'SR', pts = 'PTS', time = 'TEMPO', sky = 'CÉU', air = 'AR', track = 'PISTA', avg = 'MÉDIA', lap = 'VOLTA', delta = 'DELTA' },
   lapsShort = '%d V', lapTag = { cut = 'corte', pit = 'box', best = 'melhor' },
   wxSky = { clear = 'Céu limpo', few = 'Poucas nuvens', scattered = 'Nuvens esparsas', broken = 'Nublado', overcast = 'Encoberto', thunder = 'Tempestade' },
@@ -2863,6 +2865,12 @@ do
   end
   function AppLink.waiting() return not AppLink.alive and state.ui.clock - pingT < 3 end
   local PING_SECONDS, CHECK_SECONDS, CLOSE_SECONDS = 2, 30, 10
+  local CSP_MIN = 4130
+  local function cspOld()
+    local ok, code = pcall(function() return ac.getPatchVersionCode and ac.getPatchVersionCode() end)
+    code = ok and tonumber(code) or 0
+    return code > 0 and code < CSP_MIN, code
+  end
   local lastPing, lockT, missingLogged = -1e9, -1e9, false
   function AppLink.update()
     local clock = state.ui.clock
@@ -2870,18 +2878,21 @@ do
       lastPing = clock
       ac.broadcastSharedEvent(APP_REQUEST, '')
     end
-    if AppLink.alive or clock < CHECK_SECONDS then return end
+    local old, code = cspOld()
+    if (AppLink.alive and not old) or clock < CHECK_SECONDS then return end
+    local text = old and TEXTS.cspOld or TEXTS.appMissing
     if not missingLogged then
       missingLogged = true
-      ac.log('race-control: the Racing Control app is not running: controls locked, the game closes')
-      rcLog('App missing', string.format(TEXTS.appMissing, CLOSE_SECONDS))
+      ac.log(old and string.format('race-control: CSP build %d below %d: controls locked, the game closes', code, CSP_MIN)
+        or 'race-control: the Racing Control app is not running: controls locked, the game closes')
+      rcLog(old and 'CSP old' or 'App missing', string.format(text, CLOSE_SECONDS))
     end
     if clock - lockT >= 2 then
       lockT = clock
       physics.lockUserControlsFor(3)
     end
     local left = math.max(math.ceil(CHECK_SECONDS + CLOSE_SECONDS - clock), 0)
-    showNotice(TEXTS.rcTitle, string.format(TEXTS.appMissing, left), nil, 1)
+    showNotice(TEXTS.rcTitle, string.format(text, left), nil, 1)
     if left <= 0 and not AppLink.closed then
       AppLink.closed = true
       ac.shutdownAssettoCorsa()
@@ -10221,10 +10232,11 @@ local drawStatus
     local rp = state.repair
     drawPanel(p1, p2, Desktop.focus == 'status' and BORDER_YELLOW or BORDER_BASE, s)
     drawText(TEXTS.statusTitle, FONT_TITLE, 12 * s, vec2(p1.x + L.side * s, p1.y + 4 * s), COLOR_TITLE)
-    if rp.class == 'repair' then
-      drawTextRight(TEXTS.statusRepair, FONT_MONO, 11 * s, p2.x - L.side * s, p1.y + 5 * s, COLOR_ORANGE)
-    elseif rp.class == 'beyond' then
-      drawTextRight(TEXTS.statusBeyond, FONT_MONO, 11 * s, p2.x - L.side * s, p1.y + 5 * s, BORDER_RED)
+    local badge = rp.class == 'repair' and { TEXTS.statusRepair, COLOR_ORANGE } or rp.class == 'beyond' and { TEXTS.statusBeyond, BORDER_RED } or nil
+    if badge then
+      local room = p2.x - L.side * s - (p1.x + L.side * s + textWidth(TEXTS.statusTitle, FONT_TITLE, 12 * s) + 6 * s)
+      local by = textWidth(badge[1], FONT_MONO, 11 * s) <= room and p1.y + 5 * s or p1.y + (L.head + L.gap) * s
+      drawTextRight(badge[1], FONT_MONO, 11 * s, p2.x - L.side * s, by, badge[2])
     end
     drawSeparator(p1, p2, p1.y + L.head * s, s)
     local x1, x2 = p1.x + L.side * s, p2.x - L.side * s
