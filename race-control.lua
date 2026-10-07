@@ -950,7 +950,7 @@ Lang.PT = {
   navKeyNames = { [37] = 'Seta esquerda', [38] = 'Seta para cima', [39] = 'Seta direita', [40] = 'Seta para baixo' },
   menuSettings = 'Ajustes', menuRedFlag = 'Direção de prova',
   dirTitle = 'DIREÇÃO DE PROVA', dirRole = { director = 'DIRETOR', staff = 'EQUIPE', broadcast = 'TRANSMISSÃO - só leitura' },
-  dirLogin = 'Login de admin do KMR', dirLoginSent = 'Login enviado - esperando o KMR', dirLoginOk = 'Admin do KMR: conectado',
+  dirLogin = 'Login admin do KMR', dirLoginSent = 'Login enviado - esperando o KMR', dirLoginOk = 'Admin do KMR: conectado',
   dirNoAnswer = 'Sem resposta do KMR em 5 s - o login ou o comando falhou',
   dirFailed = 'Falhou: %s', dirSent = 'Enviado: %s - esperando o KMR', dirAnswer = 'KMR: %s',
   dirNextSession = 'PRÓXIMA SESSÃO', dirRestart = 'REINICIAR SESSÃO', dirCancelDt = 'SEM DT', dirToPit = 'AO BOX', dirFuel = 'COMBUSTÍVEL', dirMenu = 'MENU 5 MIN',
@@ -1806,6 +1806,22 @@ function CarRead.slipAngle(car)
   local vn, ln = math.sqrt(v.x * v.x + v.z * v.z), math.sqrt(l.x * l.x + l.z * l.z)
   if vn <= 0 or ln <= 0 then return nil end
   return math.deg(math.acos(math.min(math.max((v.x * l.x + v.z * l.z) / (vn * ln), -1), 1)))
+end
+Lang.letters = {}
+function Lang.letters.count(text) return select(2, tostring(text or ''):gsub('[^\128-\191]', '')) end
+function Lang.letters.head(text, n)
+  text = tostring(text or '')
+  local k = 0
+  for e in text:gmatch('[^\128-\191][\128-\191]*()') do
+    k = k + 1
+    if k == n then return text:sub(1, e - 1) end
+  end
+  return text
+end
+function Lang.letters.upper(text)
+  return (tostring(text or ''):upper():gsub('\195([\160-\190])', function(b)
+    if b ~= '\183' then return '\195' .. string.char(b:byte() - 32) end
+  end))
 end
 local function mmss(seconds, fixed)
   local s = math.max(math.floor(seconds + 0.5), 0)
@@ -2912,7 +2928,7 @@ do
       for item, value in kept:gmatch('([%w%.]+)=(%-?[%d%.]+)') do st[item] = tonumber(value) end
       if not storeLogged then
         storeLogged = true
-        ac.log('race-control: cockpit: values of the app read from the shared storage: ' .. kept:sub(1, 160))
+        ac.log('race-control: cockpit: values of the app read from the shared storage: ' .. Lang.letters.head(kept, 160))
       end
     end
     for k, v in pairs(AppLink.cockpitState) do st[k] = v end
@@ -2945,7 +2961,7 @@ do
     if not cockpitAsk.answered then
       cockpitAsk.answered = true
       ac.log(string.format('race-control: cockpit: first answer of the app (%s, %s): %d values, %d characters: %s', tostring(senderName),
-        tostring(senderType), n, #tostring(data or ''), tostring(data or ''):sub(1, 160)))
+        tostring(senderType), n, #tostring(data or ''), Lang.letters.head(data, 160)))
     end
     if st.saved then
       st.saved = nil
@@ -3957,7 +3973,7 @@ ac.onChatMessage(function(message, senderCarIndex)
   if server then Connection.chat(message) end
   if message:sub(1, #TEXTS.rcPrefix) ~= TEXTS.rcPrefix and (hasAny(low, DICT.kmr.driveThrough)
       or hasAny(low, DICT.kmr.penalty)) then
-    rcLog('Chat seen', string.format('sender %s - %s', tostring(senderCarIndex), message:sub(1, 90)))
+    rcLog('Chat seen', string.format('sender %s - %s', tostring(senderCarIndex), Lang.letters.head(message, 90)))
   end
   if message:sub(1, #TEXTS.rcPrefix) == TEXTS.rcPrefix then
     local car = config.isDirector and message:find(TEXTS.editedFile, 1, true)
@@ -9601,6 +9617,39 @@ local function textWidth(text, font, size)
   ui.popDWriteFont()
   return tw
 end
+local FIT_MAX = 200
+local fitCache, fitCount = {}, 0
+local function fitText(text, font, size, maxW, tail)
+  text = tostring(text or '')
+  tail = tail or '...'
+  local px_ = math.max(size, Desktop.text.minPx)
+  local key = table.concat({ text, tostring(font), tostring(px_), tostring(maxW), tail }, '\1')
+  local hit = fitCache[key]
+  if hit then return hit end
+  local out
+  if textWidth(text, font, size) <= maxW then
+    out = text
+  else
+    local ends = {}
+    for e in text:gmatch('[^\128-\191][\128-\191]*()') do ends[#ends + 1] = e - 1 end
+    if textWidth(tail, font, size) > maxW then
+      out = ''
+    else
+      local lo, hi = 0, #ends - 1
+      while lo < hi do
+        local mid = math.floor((lo + hi + 1) / 2)
+        if textWidth(text:sub(1, ends[mid]) .. tail, font, size) <= maxW then lo = mid else hi = mid - 1 end
+      end
+      out = (lo > 0 and text:sub(1, ends[lo]) or '') .. tail
+    end
+  end
+  if fitCount >= FIT_MAX then fitCache, fitCount = {}, 0 end
+  fitCache[key], fitCount = out, fitCount + 1
+  return out
+end
+local function dropLastLetter(text)
+  return (tostring(text or ''):gsub('[^\128-\191][\128-\191]*$', '', 1))
+end
 Desktop.opacity = math.min(math.max(tonumber(ac.storage['rc.opacity'] or '') or 1, 0.2), 1)
 function Desktop.setOpacity(v)
   Desktop.opacity = math.min(math.max(v, 0.2), 1)
@@ -11271,10 +11320,7 @@ float4 main(PS_IN pin) {
           drawTextRight(string.format('%d%%', math.floor(sl.chance * 100 + 0.5)), FONT_MONO, 9 * s, xc, y + 1 * s, YELLOW)
         end
         local nm, room = Radar.skyOf(sl), xc - textWidth('100%', FONT_MONO, 9 * s) - 6 * s - (zx + 46 * s)
-        if textWidth(nm, FONT_MONO, 9 * s) > room then
-          while #nm > 1 and textWidth(nm .. '...', FONT_MONO, 9 * s) > room do nm = nm:sub(1, -2) end
-          nm = nm .. '...'
-        end
+        nm = fitText(nm, FONT_MONO, 9 * s, room)
         drawText(nm, FONT_MONO, 9 * s, vec2(zx + 46 * s, y + 1 * s), COLOR_TITLE)
         local ly = y + 18 * s + side + 8 * s
         drawText(TEXTS.scrRadarPrec, FONT_MONO, 8.5 * s, vec2(p1.x + 14 * s, ly), COLOR_DIM)
@@ -11295,15 +11341,7 @@ float4 main(PS_IN pin) {
         drawText(TEXTS.scrRadarHeavy, FONT_MONO, 8 * s, vec2(bx1 + (bx2 - bx1) * 0.55 - 12 * s, ly + 11 * s), COLOR_DIM)
         drawTextRight(TEXTS.scrRadarExtreme, FONT_MONO, 8 * s, bx2, ly + 11 * s, COLOR_DIM)
         local lroom = p2.x - 14 * s - (p1.x + 14 * s)
-        local function fit(text)
-          if textWidth(text, FONT_MONO, 8 * s) <= lroom then return text end
-          local function cut(t)
-            repeat local c = t:byte(-1); t = t:sub(1, -2) until #t == 0 or c < 0x80 or c >= 0xC0
-            return t
-          end
-          while #text > 1 and textWidth(text .. '...', FONT_MONO, 8 * s) > lroom do text = cut(text) end
-          return text .. '...'
-        end
+        local function fit(text) return fitText(text, FONT_MONO, 8 * s, lroom) end
         drawText(fit(TEXTS.scrRadarClouds), FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 25 * s), COLOR_DIM)
         drawText(fit(string.format(TEXTS.scrRadarLoop, #fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic)), FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 37 * s), COLOR_DIM)
       end
@@ -11384,7 +11422,7 @@ float4 main(PS_IN pin) {
       end
     end
   end
-  local function eventTitle() return config.eventName ~= '' and config.eventName:upper() or TEXTS.scrEvent end
+  local function eventTitle() return config.eventName ~= '' and Lang.letters.upper(config.eventName) or TEXTS.scrEvent end
   local function eventScreen(car, w, h, s)
     local n = #eventLines()
     local p1, p2, y = frame('event', w, h, s, n + 0.6, eventTitle(), TEXTS.scrEventInfo)
@@ -11864,8 +11902,7 @@ float4 main(PS_IN pin) {
       if #lines > 2 then
         lines[2] = lines[2] .. ' ' .. table.concat(lines, ' ', 3)
         for i = #lines, 3, -1 do lines[i] = nil end
-        while #lines[2] > 1 and textWidth(lines[2] .. '...', FONT_TEXT, 9 * s) > maxW do lines[2] = lines[2]:sub(1, -2) end
-        lines[2] = lines[2] .. '...'
+        lines[2] = fitText(lines[2], FONT_TEXT, 9 * s, maxW)
       end
     end
     if shareRow > shareRows() then shareRow = 1 end
@@ -11887,10 +11924,7 @@ float4 main(PS_IN pin) {
     drawText(on and TEXTS.shareOn or TEXTS.shareOff, FONT_TITLE, 10 * s, vec2(b.x + 10 * s, y), on and GREEN or COLOR_DIM)
     local room, level = RecordSync.base.rrRoom()
     local roomW = p2.x - 14 * s - (b.x + 10 * s)
-    if textWidth(room, FONT_TEXT, 9 * s) > roomW then
-      while #room > 1 and textWidth(room .. '...', FONT_TEXT, 9 * s) > roomW do room = room:sub(1, -2) end
-      room = room .. '...'
-    end
+    room = fitText(room, FONT_TEXT, 9 * s, roomW)
     drawText(room, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + 13 * s), ({ ok = COLOR_TITLE, warn = YELLOW, bad = RED })[level] or COLOR_DIM)
     for i, line in ipairs(lines) do
       drawText(line, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + (13 + 13 * i) * s), ({ warn = YELLOW, bad = RED })[askLevel] or COLOR_DIM)
@@ -11905,9 +11939,8 @@ float4 main(PS_IN pin) {
     ui.drawIcon(hidden and ui.Icons.Hide or ui.Icons.Eye, vec2(oa.x + 3 * s, oa.y + 3 * s), vec2(ob.x - 3 * s, ob.y - 3 * s), hidden and COLOR_DIM or COLOR_TITLE)
     Drag.clickable(oa, ob, function() RecordSync.base.rrOwn(not hidden) end)
     drawText(hidden and TEXTS.ownOff or TEXTS.ownOn, FONT_TITLE, 10 * s, vec2(ob.x + 10 * s, oy), hidden and COLOR_DIM or GREEN)
-    local osub = TEXTS.ownHint
     local osubW = p2.x - 14 * s - (ob.x + 10 * s)
-    while #osub > 1 and textWidth(osub, FONT_TEXT, 9 * s) > osubW do osub = osub:sub(1, -5) .. '...' end
+    local osub = fitText(TEXTS.ownHint, FONT_TEXT, 9 * s, osubW)
     drawText(osub, FONT_TEXT, 9 * s, vec2(ob.x + 10 * s, oy + 13 * s), COLOR_DIM)
     mark(2, oy, 22)
     local fy = oy + 2 * ROW * s
@@ -11923,14 +11956,13 @@ float4 main(PS_IN pin) {
     drawText(fon and TEXTS.focusOn or TEXTS.focusOff, FONT_TITLE, 10 * s, vec2(fb.x + 10 * s, fy), fon and GREEN or COLOR_DIM)
     local sub = not (fo and fo.room) and TEXTS.focusNoRoom or fon and (chosen and string.format(TEXTS.focusWith, chosen) or TEXTS.focusNobody) or TEXTS.focusHint
     local subW = p2.x - 14 * s - (fb.x + 10 * s)
-    while #sub > 1 and textWidth(sub, FONT_TEXT, 9 * s) > subW do sub = sub:sub(1, -5) .. '...' end
+    sub = fitText(sub, FONT_TEXT, 9 * s, subW)
     drawText(sub, FONT_TEXT, 9 * s, vec2(fb.x + 10 * s, fy + 13 * s), (fo and fo.room) and COLOR_DIM or YELLOW)
     if fo and fo.room then
       local ny = fy + 2 * ROW * s
       for i, p in ipairs(fo.people) do
         local on = fon and p.steam == fo.with
-        local nm = p.name
-        while #nm > 1 and textWidth(nm, FONT_TEXT, FS * s) > subW do nm = nm:sub(1, -2) end
+        local nm = fitText(p.name, FONT_TEXT, FS * s, subW, '')
         drawText(nm, FONT_TEXT, FS * s, vec2(fb.x + 10 * s, ny), on and GREEN or COLOR_TITLE)
         if on then drawText('>', FONT_MONO, FS * s, vec2(fa.x + 6 * s, ny), GREEN) end
         mark(3 + i, ny, ROW)
@@ -12003,12 +12035,8 @@ float4 main(PS_IN pin) {
       local a = vec2(p2.x - 14 * s - COCKPIT_RIGHT * s, y)
       local b = vec2(p2.x - 14 * s, y + 12 * s)
       local name = tostring(ac.getCarName and ac.getCarName(0) or ac.getCarID(0) or '')
-      local t = string.format(TEXTS.cockpitCar, name)
       local tw = a.x - 8 * s - (p1.x + 14 * s)
-      if textWidth(t, FONT_TEXT, FS * s) > tw then
-        while #t > 1 and textWidth(t .. '...', FONT_TEXT, FS * s) > tw do t = t:sub(1, -2) end
-        t = t .. '...'
-      end
+      local t = fitText(string.format(TEXTS.cockpitCar, name), FONT_TEXT, FS * s, tw)
       drawText(t, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
       local lit = AppLink.cockpitSavedT and state.ui.clock - AppLink.cockpitSavedT < 3
       if lit then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s) end
@@ -13412,7 +13440,7 @@ local drawDesktopUI = (function()
     ui.drawRect(fa, fb, on and PANEL_COLORS.yellow or rgbm(1, 1, 1, 0.35), 2 * s)
     local caret = on and math.floor(state.ui.clock * 2) % 2 == 0 and '|' or ''
     ui.pushClipRect(fa, fb)
-    local shown = (masked and string.rep('*', #value) or value) .. caret
+    local shown = (masked and string.rep('*', Lang.letters.count(value)) or value) .. caret
     local ms = math.max(10 * s, Desktop.text.minPx)
     ui.pushDWriteFont(FONT_MONO)
     local th = ui.measureDWriteText(shown ~= '' and shown or 'X', ms).y
@@ -13424,10 +13452,10 @@ local drawDesktopUI = (function()
     if on and ui.captureKeyboard then
       local kb = ui.captureKeyboard(true, true, true)
       local typed = kb and kb:queue() or ''
-      for ch in typed:gmatch('[%g ]') do value = value .. ch end
+      for ch in typed:gmatch('[^\128-\191][\128-\191]*') do if not ch:match('^%c') then value = value .. ch end end
       for k = 0, (kb and kb.pressedCount or 0) - 1 do
         local k2 = kb.pressed[k]
-        if k2 == ui.KeyIndex.Back then value = value:sub(1, -2)
+        if k2 == ui.KeyIndex.Back then value = dropLastLetter(value)
         elseif k2 == ui.KeyIndex.Return then enter = true
         elseif k2 == ui.KeyIndex.Escape then Direction.focus = nil end
       end
@@ -13960,15 +13988,11 @@ local drawDesktopUI = (function()
     end
     local status = Direction.status or (cmd and not state.kmrAdmin and TEXTS.redKmrOff or '')
     local maxW = p2.x - x0 - 14 * s
-    if textWidth(status, FONT_MONO, 9 * s) > maxW then
-      while #status > 1 and textWidth(status .. '...', FONT_MONO, 9 * s) > maxW do status = status:sub(1, -2) end
-      status = status .. '...'
-    end
+    status = fitText(status, FONT_MONO, 9 * s, maxW)
     drawText(status, FONT_MONO, 9 * s, vec2(x0, y), Direction.statusColor or PANEL_COLORS.yellow)
     y = y + 18 * s
     if #alerts > 0 then
-      local text = TEXTS.connAlert .. table.concat(alerts, '  -  ')
-      while #text > 1 and textWidth(text, FONT_MONO, 9 * s) > maxW do text = text:sub(1, -2) end
+      local text = fitText(TEXTS.connAlert .. table.concat(alerts, '  -  '), FONT_MONO, 9 * s, maxW, '')
       drawText(text, FONT_MONO, 9 * s, vec2(x0, y), PANEL_COLORS.red)
       y = y + 14 * s
     end
@@ -14079,7 +14103,7 @@ local drawDesktopUI = (function()
     local p2 = vec2(p1.x + LW, p1.y + (30 + 8 * 13 + 22 + 22 + #rcRows * 13 + math.max(#msgs, 1) * 24 + 8) * s)
     Drag.group = nil
     drawPanel(p1, p2, BORDER_BLUE, s)
-    drawText(config.eventName ~= '' and config.eventName:upper() or TEXTS.lobbyTitle, FONT_TITLE, 12 * s,
+    drawText(config.eventName ~= '' and Lang.letters.upper(config.eventName) or TEXTS.lobbyTitle, FONT_TITLE, 12 * s,
       vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     drawTextRight(TEXTS.sessionName[sim.raceSessionType] or '', FONT_MONO, 10 * s, p2.x - 14 * s, p1.y + 5 * s, COLOR_TITLE)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
