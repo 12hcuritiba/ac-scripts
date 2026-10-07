@@ -11189,8 +11189,16 @@ local drawRaceScreens = (function()
     if Radar.flKey ~= key then Radar.flKey, Radar.fl = key, Radar.forecastLine(slots) end
     return Radar.fl
   end
+  function Radar.fixed(fc)
+    local T = Radar.tbl
+    if T and T.fc == fc and #fc > 0 then return T end
+    local slots = Radar.slots(fc)
+    T = { fc = fc, slots = slots, fl = Radar.lineOf(slots) }
+    Radar.tbl = T
+    return T
+  end
   function Radar.textSegments(fc)
-    local FL = Radar.lineOf(Radar.slots(fc))
+    local FL = Radar.fixed(fc).fl
     if not FL then return {} end
     local H = math.floor(Radar.lineMinute(FL, Radar.nowMinute()) / 60) * 60
     local out = {}
@@ -11312,7 +11320,7 @@ float4 main(PS_IN pin) {
   function Radar.draw(a, side, s, fc, big)
     local half = Radar.half()
     local zoom = half <= 2500 and 'track' or 'wide'
-    local FL = Radar.lineOf(Radar.slots(fc))
+    local FL = Radar.fixed(fc).fl
     local H = math.floor(Radar.lineMinute(FL, Radar.nowMinute()) / 60) * 60
     local k = math.floor(state.ui.clock) % 6
     local t = H + k * 10
