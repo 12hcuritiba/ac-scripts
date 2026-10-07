@@ -126,7 +126,7 @@ local cfg = ac.configValues({
 local RC_VERSION = '2026.09.26'
 local TEXTS = {
   pit = {
-    DSQ = 'Pit lane left with the session closed - disqualified',
+    DSQ = 'Pit lane left with the pit closed - disqualified',
   },
   cut = {
     SLOWDOWN = 'Exclusion zone cut - slow down',
@@ -578,7 +578,8 @@ local TEXTS = {
   flagChequeredLine = 'Session finished',
   relPit = '  PIT',
   hdr = { pos = 'P', classPos = 'CL', driver = 'DRIVER', class = 'CLASS', laps = 'LAPS', gap = 'GAP', int = 'INT', best = 'BEST', pit = 'PIT',
-    sr = 'SR', pts = 'PTS', time = 'TIME', sky = 'SKY', air = 'AIR', track = 'TRACK', avg = 'AVG', lap = 'LAP', delta = 'DELTA' },
+    sr = 'SR', pts = 'PTS', time = 'TIME', sky = 'SKY', air = 'AIR', track = 'TRACK', avg = 'AVG', lap = 'LAP', delta = 'DELTA', precip = 'PRECIP.' },
+  wxProb = '%d%% PROB',
   lapsShort = '%d L', lapTag = { cut = 'cut', pit = 'pit', best = 'best' },
   wxSky = { clear = 'Clear', few = 'Few clouds', scattered = 'Scattered clouds', broken = 'Broken clouds', overcast = 'Overcast', thunder = 'Thunderstorm' },
   wxPrecip = { lightDrizzle = 'light drizzle', drizzle = 'drizzle', lightRain = 'light rain', rain = 'rain', heavyRain = 'heavy rain', violentRain = 'violent rain' },
@@ -603,7 +604,7 @@ local TEXTS = {
   side = { front = 'F', back = 'B', left = 'L', right = 'R' },
   dtLine = '%s - Drive-through - %s', holdTowRepair = 'Tow %s + Repair %s', holdRepair = 'Repair %s', dirDsqNotice = 'Disqualified - %s',
   dsqWhy = { repairNotDone = 'Mandatory repair not done', sgInterrupted = 'Stop & go interrupted', swapPending = 'Driver swap with pending penalties',
-    pitClosed = 'Pit lane left with the session closed', slowdown = '%s - slowdown not served' },
+    pitClosed = 'Pit lane left with the pit closed', slowdown = '%s - slowdown not served' },
   cmdHelp = {
     rc = { title = 'RACING CONTROL', how = 'KMR chat: /kmr admin_say RC ... (the buttons of this window) - ACSM live timing: Chat to the driver or Broadcast Chat', rows = {
       'clears the list: drive-throughs, stop & go and slowdowns',
@@ -684,7 +685,7 @@ local NONE = ac.PenaltyType.None
 local GAME_DT = 2
 Lang.PT = {
   pit = {
-    DSQ = 'Saiu do pit lane com a sessão encerrada - desclassificado',
+    DSQ = 'Saiu do pit lane com o pit fechado - desclassificado',
   },
   cut = {
     SLOWDOWN = 'Corte da zona de exclusão - slowdown',
@@ -1059,7 +1060,7 @@ Lang.PT = {
   scrClassSel = '< CLASSE: %s >', scrLapsCar = 'VOLTAS - CARRO #%s', scrLapsMore = 'MAIS', scrLapsLess = 'MENOS',
   scrCompare = 'COMPARAR', scrDriverSel = '< PILOTO: %s >', scrStintShort = 'ST %d', scrMap = 'MAPA DA PISTA', scrNoMap = 'Sem mapa desta pista',
   scrMapLegend = { 'amarelo você - azul volta à frente - bege volta atrás', 'cinza box - vermelho parado' },
-  scrWeather = 'CLIMA', scrWeatherModes = { forecast = 'PREVISÃO', map = 'RADAR' }, scrRadarZoom = '%g KM', scrRadarBig = '+', scrRadarSmall = '-',
+  scrWeather = 'CLIMA / PISTA', scrWeatherModes = { forecast = 'PREVISÃO', map = 'RADAR' }, scrRadarZoom = '%g KM', scrRadarBig = '+', scrRadarSmall = '-',
   scrRadarPrec = 'PRECIPITAÇÃO', scrRadarLight = 'leve', scrRadarHeavy = 'forte', scrRadarExtreme = 'extrema', scrRadarClouds = 'nuvens: branca = leve, cinza = densa',
   scrRadarLoop = '%s - 1 hora em 6 segmentos de 10 min, um por segundo', scrRadarNoTrack = 'Sem a linha da IA nesta pista',
   scrWeatherAnim = 'previsão em segmentos de 10 min', scrWeatherStatic = 'sem previsão', scrWxPage = '< %d/%d >',
@@ -1136,7 +1137,8 @@ Lang.PT = {
   flagChequeredLine = 'Sessão encerrada',
   relPit = '  BOX',
   hdr = { pos = 'P', classPos = 'CL', driver = 'PILOTO', class = 'CLASSE', laps = 'VLT', gap = 'DIF', int = 'INT', best = 'MELHOR', pit = 'BOX',
-    sr = 'SR', pts = 'PTS', time = 'TEMPO', sky = 'CÉU', air = 'AR', track = 'PISTA', avg = 'MÉDIA', lap = 'VOLTA', delta = 'DELTA' },
+    sr = 'SR', pts = 'PTS', time = 'TEMPO', sky = 'CÉU', air = 'AR', track = 'PISTA', avg = 'MÉDIA', lap = 'VOLTA', delta = 'DELTA', precip = 'PRECIP.' },
+  wxProb = '%d%% PROB',
   lapsShort = '%d V', lapTag = { cut = 'corte', pit = 'box', best = 'melhor' },
   wxSky = { clear = 'Céu limpo', few = 'Poucas nuvens', scattered = 'Nuvens esparsas', broken = 'Nublado', overcast = 'Encoberto', thunder = 'Tempestade' },
   wxPrecip = { lightDrizzle = 'garoa fraca', drizzle = 'garoa', lightRain = 'chuva fraca', rain = 'chuva', heavyRain = 'chuva forte', violentRain = 'chuva violenta' },
@@ -1161,7 +1163,7 @@ Lang.PT = {
   side = { front = 'F', back = 'T', left = 'E', right = 'D' },
   dtLine = '%s - Drive-through - %s', holdTowRepair = 'Reboque %s + Reparo %s', holdRepair = 'Reparo %s', dirDsqNotice = 'Desclassificado - %s',
   dsqWhy = { repairNotDone = 'Reparo obrigatório não feito', sgInterrupted = 'Stop & go interrompido', swapPending = 'Troca de piloto com penalidades pendentes',
-    pitClosed = 'Saiu do pit lane com a sessão encerrada', slowdown = '%s - slowdown não cumprido' },
+    pitClosed = 'Saiu do pit lane com o pit fechado', slowdown = '%s - slowdown não cumprido' },
   cmdHelp = {
     rc = { title = 'RACING CONTROL', how = 'Chat do KMR: /kmr admin_say RC ... (os botões desta janela) - live timing do ACSM: Chat ao piloto ou Broadcast Chat', rows = {
       'limpa a lista: drive-throughs, stop & go e slowdowns',
@@ -1506,6 +1508,7 @@ local state = {
   zonePass = {},
   zoneRef = {},
   cutChecks = {},
+  lapCut = false,
   pitDsqActive = false,
   dtDsqActive = false,
   onJumped = {},
@@ -1616,6 +1619,7 @@ ac.onCarJumped(0, function()
     return
   end
   state.list.jumped = true
+  state.lapCut = false
   if not state.list.prevInPit then state.tow.jumpPending = true end
   ac.log('race-control: car jumped')
 end)
@@ -1656,6 +1660,12 @@ local function leaderboardLaps()
 end
 local function serverTimeMs() return sim.currentSessionTime or 0 end
 local CarRead = {}
+CarRead.staff = {}
+function CarRead.isStaff(i)
+  local t = CarRead.staff[i]
+  if i == 0 then return t == true end
+  return t ~= nil and state.ui.clock <= t
+end
 function CarRead.num(v) return tonumber(v) or 0 end
 function CarRead.flagOn(v)
   return v == true or (type(v) == 'number' and v ~= 0)
@@ -2326,7 +2336,7 @@ do
       if not RecordSync.askedT or state.ui.clock - RecordSync.askedT > SYNC_ANSWER_WINDOW then return end
       if not Record.sameSession(rec.key, Record.key()) then return end
       local p = RecordSync.pending.track
-      if not p or rec.seq >= p.seq then RecordSync.pending.track = { body = rec.body, seq = rec.seq } end
+      if not p or rec.seq >= p.seq then RecordSync.pending.track = { body = rec.body, seq = rec.seq, key = rec.key } end
       return
     end
     keepPeer(car, list, rec.seq, text)
@@ -2338,7 +2348,7 @@ do
       return
     end
     local p = RecordSync.pending[list]
-    if not p or rec.seq >= p.seq then RecordSync.pending[list] = { body = rec.body, seq = rec.seq } end
+    if not p or rec.seq >= p.seq then RecordSync.pending[list] = { body = rec.body, seq = rec.seq, key = rec.key } end
   end
   function RecordSync.receive(sender, msg)
     if sender and sender.index == 0 then return end
@@ -2373,12 +2383,16 @@ do
   function RecordSync.update()
     for list, best in pairs(Trust.settled()) do
       local rec = Record.decode(best.text)
-      if rec then RecordSync.pending[list] = { body = rec.body, seq = rec.seq } end
+      if rec then RecordSync.pending[list] = { body = rec.body, seq = rec.seq, key = rec.key } end
     end
+    local key = Record.key()
     for list, p in pairs(RecordSync.pending) do
       RecordSync.pending[list] = nil
       local restore = RecordSync.restorers[list]
-      if restore and (p.seq or 0) >= Record.floor then restore(p.body, p.seq, 'peers') end
+      local here = p.key and (list == 'track' and Record.sameSession(p.key, key) or (list ~= 'track' and Record.sameRace(p.key, key)))
+      if not here then
+        ac.log('race-control: record ' .. list .. ' ' .. tostring(p.seq) .. ' of another session not applied (' .. tostring(p.key) .. ')')
+      elseif restore and (p.seq or 0) >= Record.floor then restore(p.body, p.seq, 'peers') end
     end
   end
   Record.onSave = RecordSync.publish
@@ -2453,7 +2467,7 @@ do
     local function keep(rec, from)
       local p = RecordSync.pending[rec.list]
       if not p or rec.seq >= p.seq then
-        RecordSync.pending[rec.list] = { body = rec.body, seq = rec.seq }
+        RecordSync.pending[rec.list] = { body = rec.body, seq = rec.seq, key = rec.key }
         ac.log('race-control: record ' .. rec.list .. ' ' .. rec.seq .. ' from the base online (' .. from .. ')')
       end
     end
@@ -2582,7 +2596,8 @@ do
         for v in (line .. '|'):gmatch('([^|]*)|') do f[#f + 1] = v end
         if #f >= 9 and f[1]:match('^%d+:%d+$') then
           list[#list + 1] = { time = f[1], type = f[2], sky = f[3]:gsub('%s*%(Sol%)', ''), wind = f[4], road = tonumber(f[5]),
-            air = tonumber(f[6]), rain = tonumber(f[7]), wet = tonumber(f[8]), water = tonumber(f[9]), trans = tonumber(f[10]) or 0 }
+            air = tonumber(f[6]), rain = tonumber(f[7]), wet = tonumber(f[8]), water = tonumber(f[9]), trans = tonumber(f[10]) or 0,
+            tsec = tonumber(f[11]) or 0 }
         end
       end
       F.list, F.race, F.session = list, race, session
@@ -2603,6 +2618,41 @@ do
         ac.storage['rc.lang'] = code
         ac.log('race-control: language ' .. code .. ' (12h app)')
       end
+    end)
+  end
+  local ROLE_GAP, ROLE_SEND, ROLE_KEEP = 60, 10, 35
+  B.role = { nextT = 0, busy = false, sentT = -1e9, role = nil }
+  local sendRole = ac.OnlineEvent({
+    ac.StructItem.key('amxracing.race-control.staff'),
+    staffRole = ac.StructItem.uint8(),
+  }, function(sender, msg)
+    if not sender or sender.index == 0 then return end
+    if (tonumber(msg.staffRole) or 0) > 0 then
+      if not CarRead.staff[sender.index] then ac.log('race-control: car ' .. sender.index .. ' of the broadcast or the organization: out of the race') end
+      CarRead.staff[sender.index] = state.ui.clock + ROLE_KEEP
+    else
+      CarRead.staff[sender.index] = nil
+    end
+  end, nil, nil, { processPostponed = true })
+  function B.roleUpdate()
+    local R = B.role
+    if R.role and state.ui.clock - R.sentT >= ROLE_SEND then
+      R.sentT = state.ui.clock
+      OnlineQueue.push(sendRole, { staffRole = R.role == 'tv' and 1 or 2 }, nil)
+    end
+    if not on() or R.busy or state.ui.clock < R.nextT then return end
+    R.busy, R.nextT = true, state.ui.clock + ROLE_GAP
+    WebQueue.request('GET', config.baseUrl .. '/v1/role?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
+      R.busy = false
+      if err or not res or tonumber(res.status) ~= 200 then return end
+      local role = tostring(res.body or ''):match('^OK|(%a+)')
+      role = (role == 'tv' or role == 'org') and role or nil
+      if role ~= R.role then
+        ac.log('race-control: role of this driver in the event: ' .. tostring(role or 'none') .. (role and ' (out of the race)' or ''))
+        if R.role and not role then OnlineQueue.push(sendRole, { staffRole = 0 }, nil) end
+        R.role, R.sentT = role, -1e9
+      end
+      CarRead.staff[0] = role ~= nil or nil
     end)
   end
   local RR_GAP = 5
@@ -2992,7 +3042,7 @@ do
     if cb then cb(tostring(data)) end
   end)
 end
-local PitRecord = { stops = 0, last = '-' }
+local PitRecord = { stops = 0, last = '-', HOLD_MAX = 86400 }
 PitRecord.onService = nil
 local startHold
 function PitRecord.save()
@@ -3033,6 +3083,10 @@ function PitRecord.apply(body, seq, newConnection)
   PitRecord.last = last
   local left = (tonumber(untilMs) - serverTimeMs()) / 1000
   if left <= 0 or state.hold then return end
+  if left > PitRecord.HOLD_MAX then
+    ac.log(string.format('race-control: hold of %.0f s left not put back (over %d s: not of this session)', left, PitRecord.HOLD_MAX))
+    return
+  end
   if newConnection then
     startHold(left, text)
     ac.log(string.format('race-control: hold goes on after the new connection, %.0f s left', left))
@@ -3116,6 +3170,7 @@ do
       dtCancelled = { en = { "drive-through penalty for event" }, pt = { 'drive-through pelo evento' } },
       directorPenalty = { en = { 'money penalty', 'points penalty', 'point penalty' },
         pt = { 'penalidade em dinheiro', 'penalidade de pontos', 'pontos de penalidade', 'dinheiro de penalidade' } },
+      lapInvalid = { en = { 'laptime invalidated' }, pt = { 'tempo de volta invalidado' } },
     },
     areas = {
       { 'limits', en = { 'laptime invalidated', 'do not improve your laptime' },
@@ -3849,7 +3904,7 @@ do
   end
 end
 local Start = { phase = nil, maxKmh = nil, minKmh = nil, farM = nil, slowFarM = nil, slowKmh = nil, locked = {},
-  goUntil = 0, sent = 'off', sentT = -1e9 }
+  goUntil = 0, sent = 'off', sentT = -1e9, GREEN_SPLINE = 0.95 }
 do
   local TRACK_EVENT = 'race-control.start'
   function Start.reset()
@@ -3868,6 +3923,11 @@ do
     local S = DICT.start
     if hasAny(low, DICT.kmr.penalty) then return false end
     local taken = true
+    if Start.phase == 'go' and hasAny(low, S.go) then
+      Audit.add('KMR', message, true, 'rc')
+      rcLog('Rolling start', 'go (KMR) - ' .. tostring(message))
+      return true
+    end
     if hasAny(low, S.rules) then phaseTo('rules', message)
     elseif DICT.match(low, S.speed) then
       local mx, mn = DICT.match(low, S.speed)
@@ -3922,9 +3982,25 @@ do
   end
   function Start.update(car)
     if (Start.phase == 'formation' or Start.phase == 'release') and next(Start.locked) == nil then
+      local list = {}
       for i = 0, (sim.carsCount or 1) - 1 do
         local c = ac.getCar(i)
-        if c and c.isConnected and CarRead.num(c.racePosition) > 0 then Start.locked[i] = CarRead.num(c.racePosition) end
+        if c and c.isConnected and CarRead.num(c.racePosition) > 0 and not CarRead.isStaff(i) then list[#list + 1] = { i = i, p = CarRead.num(c.racePosition) } end
+      end
+      table.sort(list, function(a, b) return a.p < b.p end)
+      for k, x in ipairs(list) do Start.locked[x.i] = k end
+    end
+    if Start.phase == 'release' then
+      local lead = byPlace()[1]
+      if not lead then
+        for i = 0, (sim.carsCount or 1) - 1 do
+          local c = ac.getCar(i)
+          if c and (i == 0 or c.isConnected) and CarRead.num(c.racePosition) == 1 and not CarRead.isStaff(i) then lead = i end
+        end
+      end
+      local lc = lead and ac.getCar(lead)
+      if lc and (lead == 0 or lc.isConnected) and not lc.isInPitlane and CarRead.num(lc.splinePosition) >= Start.GREEN_SPLINE then
+        phaseTo('go', string.format('the leader at %.2f of the lap', CarRead.num(lc.splinePosition)))
       end
     end
     if Start.phase == 'go' and state.ui.clock >= Start.goUntil then Start.phase = nil end
@@ -3963,7 +4039,9 @@ do
       local text = d ~= '' and (t ~= '' and (t .. ' - ' .. d) or d) or t
       if Audit.blank(text) then return end
       if text:match('^%s*SERVER%s*:') then
-        ac.log('race-control: game message (log only): ' .. text)
+        if not Audit.blank((text:gsub('^%s*SERVER%s*:', ''))) then
+          ac.log('race-control: game message (log only): ' .. text)
+        end
         return
       end
       for _, k in ipairs(LOG_ONLY) do
@@ -3983,6 +4061,10 @@ ac.onChatMessage(function(message, senderCarIndex)
   if server and Audit.blank(message) then return true end
   local low = message:lower()
   if server then Connection.chat(message) end
+  if server and hasAny(low, DICT.kmr.lapInvalid) then
+    if not state.lapCut then ac.log('race-control: lap invalidated by the KMR (track limits): cut lap') end
+    state.lapCut = true
+  end
   if message:sub(1, #TEXTS.rcPrefix) ~= TEXTS.rcPrefix and (hasAny(low, DICT.kmr.driveThrough)
       or hasAny(low, DICT.kmr.penalty)) then
     rcLog('Chat seen', string.format('sender %s - %s', tostring(senderCarIndex), Lang.letters.head(message, 90)))
@@ -6255,6 +6337,16 @@ do
     if #id >= 17 then return id == tostring(ac.getUserSteamID() or '') end
     return tonumber(id) == ac.getCar(0).sessionID
   end
+  local function holdOff()
+    state.hold = nil
+    local car = ac.getCar(0)
+    if car and car.currentPenaltyType ~= BLACK_FLAG and not (state.dtDsqActive or state.pitDsqActive) then
+      physics.setCarPenalty(NONE, 0)
+      ac.log('race-control: hold of the game taken off (penalty of the game set to none)')
+    end
+    physics.lockUserControlsFor(0)
+    PitRecord.save()
+  end
   local function done(what, detail)
     local text = detail and detail ~= '' and (what .. ' - ' .. detail) or what
     rcLog('Racing Control command', text)
@@ -6281,9 +6373,7 @@ do
       l.endOfLap = {}
       listSave()
     elseif what == 'HOLD' then
-      state.hold = nil
-      physics.lockUserControlsFor(0)
-      PitRecord.save()
+      holdOff()
     elseif what == 'REPAIR' then
       local r = state.repair
       r.lapsLeft, r.beyondSince, r.class, r.waived = nil, nil, 'normal', true
@@ -6396,9 +6486,7 @@ do
         local ok
         if action == 'RELAX' then ok = relax(value, reason)
         elseif action == 'UNLOCK' then
-          state.hold = nil
-          physics.lockUserControlsFor(0)
-          PitRecord.save()
+          holdOff()
           done('Unlocked', reason)
           ok = true
         else ok = penalty(action, value, reason) end
@@ -6537,6 +6625,7 @@ do
   function Flags.receive(sender, msg)
     if not sender or sender.index == 0 then return end
     local i = sender.index
+    if CarRead.isStaff(i) then Flags.incidents[i] = nil return end
     local kind = tonumber(msg.incKind) or 0
     local pos = (tonumber(msg.incPos) or 0) / 65535
     if not Trust.incident(sender, kind, pos) then return end
@@ -6546,7 +6635,7 @@ do
     Flags.incidents[i] = { kind = kind, pos = pos, t = state.ui.clock, oilPos = oilPos, oilT = oilT }
   end
   local function publish(car)
-    local kind = ownKind(car)
+    local kind = CarRead.isStaff(0) and INC.none or ownKind(car)
     local clock = state.ui.clock
     if kind ~= Flags.sentKind or (kind ~= INC.none and clock - Flags.sentT >= INC_RESEND) then
       if kind ~= Flags.sentKind then
@@ -6576,7 +6665,7 @@ do
     local list = {}
     for i = 0, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
-      if c and (i == 0 or c.isConnected) then
+      if c and (i == 0 or c.isConnected) and not CarRead.isStaff(i) then
         list[#list + 1] = { i = i, pos = CarRead.num(c.racePosition),
           sw = i == 0 and Flags.mySwapMs and math.floor(Flags.mySwapMs / 1000) or Flags.redSwaps[i] }
       end
@@ -6670,6 +6759,7 @@ do
       end
     end
     local g, cause = sim.raceFlagType, sim.raceFlagCause
+    if cause and cause >= 0 and CarRead.isStaff(cause) then g = nil end
     if g == ac.FlagType.Caution and not yellow then
       yellow = { 2, 'yellow', TEXTS.flagYellow, TEXTS.flagYellowLine,
         cause and cause >= 0 and string.format(TEXTS.flagCausedBy, carTag(cause)) or '' }
@@ -6730,7 +6820,7 @@ do
     local nearest = math.huge
     for j = 1, (sim.carsCount or 1) - 1 do
       local o = ac.getCar(j)
-      if j ~= i and o and o.isConnected and not o.isInPitlane then
+      if j ~= i and o and o.isConnected and not o.isInPitlane and not CarRead.isStaff(j) then
         nearest = math.min(nearest, ((CarRead.num(o.splinePosition) - CarRead.num(c.splinePosition)) % 1) * len)
       end
     end
@@ -6802,7 +6892,7 @@ do
     end
     for i = 1, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
-      if c and c.isConnected and not c.isInPitlane and not car.isInPitlane then
+      if c and c.isConnected and not c.isInPitlane and not car.isInPitlane and not CarRead.isStaff(i) then
         local d = sideOf(car, c)
         local side = d > 0 and 1 or -1
         if yellowSide[i] == -1 and side == 1 and math.abs(d) < RED_PASS_SPLINE and not Flags.giveBack[i] then
@@ -6869,7 +6959,7 @@ do
     local me = CarRead.num(car.splinePosition)
     for i = 1, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
-      if c and c.isConnected and not c.isInPitlane and not car.isInPitlane then
+      if c and c.isConnected and not c.isInPitlane and not car.isInPitlane and not CarRead.isStaff(i) then
         local d = me - CarRead.num(c.splinePosition)
         if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
         local side = d > 0 and 1 or -1
@@ -6914,12 +7004,12 @@ do
   local function leaderLaps()
     for i = 0, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
-      if c and (i == 0 or c.isConnected) and CarRead.num(c.racePosition) == 1 then return CarRead.num(c.lapCount) end
+      if c and (i == 0 or c.isConnected) and CarRead.num(c.racePosition) == 1 and not CarRead.isStaff(i) then return CarRead.num(c.lapCount) end
     end
     return nil
   end
   function Flags.sessionReset()
-    Flags.endSession, Flags.ending, Flags.overLeader, Flags.prevPitlane = nil, nil, nil, nil
+    Flags.endSession, Flags.ending, Flags.overLeader, Flags.prevPitlane, Flags.prevSp = nil, nil, nil, nil, nil
     Flags.lastLap, Flags.lastLapSession, Flags.sector, Flags.greenUntil, Flags.lastGroup = nil, nil, nil, 0, nil
     if Flags.parkedReset then Flags.parkedReset() end
   end
@@ -6929,6 +7019,10 @@ do
     end
     local enteredPit = car.isInPitlane and Flags.prevPitlane == false
     Flags.prevPitlane = car.isInPitlane
+    local sp = CarRead.num(car.splinePosition)
+    local crossedLine = Flags.prevSp ~= nil and Flags.prevSp > 0.9 and sp < 0.1 and not car.isInPitlane
+    Flags.prevSp = sp
+    lineFrame = lineFrame or crossedLine
     if Flags.ending == 'finished' or not sim.isSessionStarted then return end
     local session = ac.getSession(sim.currentSessionIndex)
     if not session then return end
@@ -7019,6 +7113,11 @@ do
     end
   end
   function Flags.update(car, lineFrame)
+    if CarRead.isStaff(0) then
+      sessionEnd(car, lineFrame)
+      Flags.current = pick(car)
+      return
+    end
     redPit(car)
     if Flags.hudOff ~= sim.currentSessionIndex or state.ui.clock >= (Flags.hudT or 0) then
       Flags.hudOff, Flags.hudT = sim.currentSessionIndex, state.ui.clock + 5
@@ -7594,10 +7693,13 @@ do
     end
     if Formation.phase == nil or Formation.phase == 'pre' then
       Formation.phase = 'lap'
+      local list = {}
       for i = 0, (sim.carsCount or 1) - 1 do
         local c = alive(i)
-        if c and CarRead.num(c.racePosition) > 0 then Formation.locked[i] = CarRead.num(c.racePosition) end
+        if c and CarRead.num(c.racePosition) > 0 and not CarRead.isStaff(i) then list[#list + 1] = { i = i, p = CarRead.num(c.racePosition) } end
       end
+      table.sort(list, function(a, b) return a.p < b.p end)
+      for k, x in ipairs(list) do Formation.locked[x.i] = k end
       Formation.k = Formation.locked[0]
       Formation.leader = firstConnected()
       Formation.prog, Formation.lastSp = 0, nil
@@ -7615,6 +7717,7 @@ do
           local d = sp - Formation.lastSp
           if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
           if d > 0 and Formation.lastSp > 0.9 and sp < 0.1 and Formation.prog >= 0.5 then crossed = true end
+          if r.procedure == 'ROLLING' and d > 0 and sp >= Start.GREEN_SPLINE and Formation.prog >= 0.5 then crossed = true end
           Formation.prog = Formation.prog + math.max(d, 0)
         end
         Formation.lastSp = sp
@@ -7623,7 +7726,7 @@ do
         Formation.phase = 'done'
         Formation.goT = state.ui.clock
         Flags.srGoUntil = state.ui.clock + config.flags.greenSeconds
-        ac.log('race-control: rolling start: the leader crossed the line, green flag')
+        ac.log(string.format('race-control: rolling start: the leader at %.2f of the lap, green flag', sp))
         rcLog('Rolling start', 'green flag')
       elseif r.procedure == 'STANDING' and lc and Formation.prog >= 0.5 then
         local lp = slotPos(Formation.locked[Formation.leader])
@@ -7815,7 +7918,7 @@ do
       for k = 0, #board do
         local e = board[k]
         local c = e and e.car
-        if c then
+        if c and not CarRead.isStaff(c.index) then
           stopsWatch(c)
           local cls = RaceTable.classOf(c.index)
           local laps, best = e.laps or 0, e.bestLapTimeMs or 0
@@ -10151,7 +10254,7 @@ local drawStatus
     local gears, final = gearsOf(car)
     if gears then
       local pairW = textWidth('8', FONT_MONO, fs) + 4 * s + textWidth('0.000', FONT_MONO, fs)
-      local gw = math.max(2 * pairW + 10 * s, textWidth(TEXTS.setupGears .. '  F 0.000', FONT_MONO, fs))
+      local gw = math.max(2 * pairW + 10 * s, textWidth(TEXTS.setupGears, FONT_TITLE, SETUP.title * s) + textWidth('  F 0.000', FONT_MONO, fs))
       local half = gw / 2
       drawText(TEXTS.setupGears, FONT_TITLE, SETUP.title * s, vec2(x0, ty - (SETUP.title - SETUP.font) * s / 2), COLOR_DIM)
       drawTextRight(string.format('F %.3f', final), FONT_MONO, fs, x0 + gw, ty, COLOR_TITLE)
@@ -10622,7 +10725,9 @@ local drawRaceScreens = (function()
     for _, r in ipairs(RaceTable.rows) do if sessionBest > 0 and r.best == sessionBest then owner = '  #' .. r.number end end
     local optimal = 0
     for k = 0, 2 do optimal = optimal + (car.bestSplits and CarRead.num(car.bestSplits[k]) or 0) end
-    local lastValid = CarRead.num(car.previousLapTimeMs) <= 0 or (car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0)
+    local kept = RaceTable.laps[#RaceTable.laps]
+    local lastValid = CarRead.num(car.previousLapTimeMs) <= 0 or (car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0
+      and not (kept and kept.ms == math.floor(CarRead.num(car.previousLapTimeMs)) and not kept.valid))
     for _, l in ipairs({
       { TEXTS.scrLast, lapTime(CarRead.num(car.previousLapTimeMs)) .. (lastValid and '' or (' ' .. TEXTS.lapTag.cut)), lastValid and COLOR_TITLE or RED },
       { TEXTS.scrBest, lapTime(best), (best > 0 and best == sessionBest) and PURPLE or GREEN },
@@ -10844,10 +10949,10 @@ local drawRaceScreens = (function()
     local n = low(name)
     local function s(o1, o2, wet, conv, vv) return { o1 = o1, o2 = o2, wet = wet, conv = conv and 1 or 0, vv = vv and 1 or 0 } end
     if n:find('thunder', 1, true) then return s(8, 8, n:find('heavy', 1, true) and 'heavyThunder' or n:find('light', 1, true) and 'lightThunder' or 'thunder', true, true) end
-    if n:find('shower', 1, true) or n:find('squall', 1, true) then return s(5, 7, 'showers', true) end
+    if n:find('shower', 1, true) or n:find('squall', 1, true) then return s(8, 8, 'showers', true) end
     if n:find('drizzle', 1, true) then
       if n:find('heavy', 1, true) then return s(8, 8, 'heavyDrizzle') end
-      return s(5, 7, n:find('light', 1, true) and 'lightDrizzle' or 'drizzle')
+      return s(8, 8, n:find('light', 1, true) and 'lightDrizzle' or 'drizzle')
     end
     if n:find('rain', 1, true) then return s(8, 8, n:find('heavy', 1, true) and 'heavyRain' or n:find('light', 1, true) and 'lightRain' or 'rain') end
     if n:find('overcast', 1, true) then return s(8, 8) end
@@ -10859,9 +10964,7 @@ local drawRaceScreens = (function()
   end
   local function oktaMid(o) return (OKTA_PCT[o][1] + OKTA_PCT[o][2]) / 200 end
   function Radar.slotCover(name, nextName)
-    local a, b = Radar.scheme(name), Radar.scheme(nextName or name)
-    local la, lb = (a.o1 + a.o2) / 2, (b.o1 + b.o2) / 2
-    return oktaMid(lb > la and a.o2 or a.o1)
+    return oktaMid(Radar.scheme(name).o2)
   end
   local MMH = { lightDrizzle = { 0, 0.30 }, drizzle = { 0.30, 0.50 }, heavyDrizzle = { 0.50, 1.0 }, lightRain = { 0, 2.5 }, rain = { 2.6, 10.0 },
     heavyRain = { 10.1, 50.0 }, showers = { 1.0, 30.0 }, lightThunder = { 15, 40 }, thunder = { 15, 70 }, heavyThunder = { 15, 100 } }
@@ -10880,7 +10983,7 @@ local drawRaceScreens = (function()
         local v1, v2 = w:match('(%d+%.?%d*)%s*%-%s*(%d+%.?%d*)%s*m/s')
         out[#out + 1] = { minute = tonumber(h) * 60 + tonumber(m), name = f.sky or f.type or '', rain = CarRead.num(f.rain), air = CarRead.num(f.air),
           road = CarRead.num(f.road), vmin = tonumber(v1) or 0, vmax = tonumber(v2) or tonumber(v1) or 0,
-          dir = tonumber(w:match('(%d+)%s*°') or w:match('at%s*(%d+)')) or 0, trans = CarRead.num(f.trans) }
+          dir = tonumber(w:match('(%d+)%s*°') or w:match('at%s*(%d+)')) or 0, trans = CarRead.num(f.trans), tsec = CarRead.num(f.tsec) }
       end
     end
     if #out == 0 then
@@ -10912,6 +11015,15 @@ local drawRaceScreens = (function()
       s.trFrom = (tr > 0 and nx ~= s) and (nx.minute - (nx.minute - s.minute) / (1 - tr)) or nil
       s.idx = i
     end
+    for i, s in ipairs(sl) do
+      local T = CarRead.num(s.tsec) / 60
+      local tr = math.min(math.max(CarRead.num(s.trans), 0), 100) / 100
+      if T > 0 and tr > 0 then
+        local tg
+        for j = i + 1, #sl do if low(sl[j].name) ~= low(s.name) then tg = sl[j]; break end end
+        if tg then s.trFrom, s.trTo, s.tg = s.minute - tr * T, s.minute - tr * T + T, tg else s.trFrom = nil end
+      end
+    end
     return sl
   end
   local function mixQ(a, b, w)
@@ -10924,7 +11036,17 @@ local drawRaceScreens = (function()
     local span = b.minute - a.minute
     local u = span > 0 and math.min(math.max((M - a.minute) / span, 0), 1) or 0
     local q, name = a.q, a.name
-    if a.trFrom and b ~= a then
+    if a.trTo then
+      local w = math.min(math.max((M - a.trFrom) / (a.trTo - a.trFrom), 0), 1)
+      q = mixQ(a.q, a.tg.q, w)
+      if w >= 0.5 then name = a.tg.name end
+    elseif b.trTo and b ~= a then
+      if M >= b.trFrom then
+        local w = math.min(math.max((M - b.trFrom) / (b.trTo - b.trFrom), 0), 1)
+        q = mixQ(a.q, b.tg.q, w)
+        if w >= 0.5 then name = b.tg.name end
+      end
+    elseif a.trFrom and b ~= a then
       local w = math.min(math.max((M - a.trFrom) / (b.minute - a.trFrom), 0), 1)
       q = mixQ(a.q, b.q, w)
       if w >= 0.5 then name = b.name end
@@ -11050,7 +11172,8 @@ local drawRaceScreens = (function()
   function Radar.lineOf(slots)
     local key = {}
     for _, x in ipairs(slots) do
-      key[#key + 1] = string.format('%d|%s|%g|%g|%g|%g|%g|%g', x.minute, tostring(x.name), x.rain or 0, x.vmin or 0, x.vmax or 0, x.dir or 0, x.trans or 0, x.road or 0)
+      key[#key + 1] = string.format('%d|%s|%g|%g|%g|%g|%g|%g|%g', x.minute, tostring(x.name), x.rain or 0, x.vmin or 0, x.vmax or 0, x.dir or 0, x.trans or 0, x.road or 0,
+        x.tsec or 0)
     end
     key = table.concat(key, ';')
     if Radar.flKey ~= key then Radar.flKey, Radar.fl = key, Radar.forecastLine(slots) end
@@ -11367,8 +11490,8 @@ float4 main(PS_IN pin) {
       if #fc > 0 then
         drawSeparator(p1, p2, y + 3 * s, s)
         y = y + 8 * s
-        row(p1, y, s, { { TEXTS.hdr.time, 14, COLOR_AXIS }, { TEXTS.hdr.sky, 70, COLOR_AXIS }, { TEXTS.hdr.air, 220, COLOR_AXIS, true },
-          { TEXTS.hdr.track, 286, COLOR_AXIS, true } })
+        row(p1, y, s, { { TEXTS.hdr.time, 14, COLOR_AXIS }, { TEXTS.hdr.sky, 70, COLOR_AXIS }, { TEXTS.hdr.precip, 210, COLOR_AXIS, true },
+          { TEXTS.hdr.air, 240, COLOR_AXIS, true }, { TEXTS.hdr.track, 286, COLOR_AXIS, true } })
         if paged then
           local t = string.format(TEXTS.scrWxPage, wxPage, wxPages(segs))
           local tw = textWidth(t, FONT_MONO, FS * s)
@@ -11382,7 +11505,8 @@ float4 main(PS_IN pin) {
           local f = segs[k]
           local sky = Radar.skyOf(f)
           row(p1, y, s, { { string.format('%02d:%02d', math.floor(f.minute / 60) % 24, f.minute % 60), 14 }, { sky, 70 },
-            { string.format('%.0f', f.air), 220, nil, true }, { string.format('%.0f', f.road), 286, nil, true } })
+            { string.format(TEXTS.wxProb, math.floor(f.chance * 100 + 0.5)), 210, nil, true },
+            { string.format('%.0f', f.air), 240, nil, true }, { string.format('%.0f', f.road), 286, nil, true } })
           y = y + ROW * s
         end
       end
@@ -13477,7 +13601,7 @@ local drawDesktopUI = (function()
     local lead = 0
     for i = 0, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
-      if c and (i == 0 or c.isConnected) then lead = math.max(lead, CarRead.num(c.lapCount)) end
+      if c and (i == 0 or c.isConnected) and not CarRead.isStaff(i) then lead = math.max(lead, CarRead.num(c.lapCount)) end
     end
     local total = session and session.laps or 0
     if total > 0 then
@@ -13814,7 +13938,7 @@ local drawDesktopUI = (function()
     local cars = {}
     for i = 0, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
-      if c and c.isConnected then cars[#cars + 1] = { i = i, c = c } end
+      if c and c.isConnected and not CarRead.isStaff(i) then cars[#cars + 1] = { i = i, c = c } end
     end
     local cmd = config.canCommand
     if Direction.guidJob and state.ui.clock - Direction.guidJob.t > 6 then
@@ -14817,6 +14941,7 @@ function script.update(dt)
     l.jumped = false
     state.prevInPitlane = {}
     state.cutPassPenalized = {}
+    state.lapCut = false
     state.zonePass = {}
     GainRef.load()
     state.cutChecks = {}
@@ -14882,6 +15007,7 @@ function script.update(dt)
   RecordSync.base.bestUpdate()
   RecordSync.base.forecastUpdate()
   RecordSync.base.langUpdate()
+  RecordSync.base.roleUpdate()
   RecordSync.base.rrUpdate()
   RecordSync.base.stratUpdate()
   RecordSync.base.planUpdate()
@@ -14940,6 +15066,19 @@ function script.update(dt)
   end
   l.curLap = l.lastLap
   Intro.update(car)
+  if CarRead.isStaff(0) then
+    local lineFrame = lapCount > l.lastLap
+    if lineFrame then l.lastLap = lapCount end
+    Start.update(car)
+    Flags.update(car, lineFrame)
+    if state.ui.clock >= RaceTable.nextT then
+      RaceTable.nextT = state.ui.clock + 0.25
+      RaceTable.refresh()
+    end
+    l.prevInPit = inPit
+    l.prevGame = { t = g.t, p = g.p }
+    return
+  end
   local pitRule = config.pit.rules[sim.raceSessionType]
   if pitRule then
     local closed = isPitClosed()
