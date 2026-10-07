@@ -579,7 +579,7 @@ local TEXTS = {
   relPit = '  PIT',
   hdr = { pos = 'P', classPos = 'CL', driver = 'DRIVER', class = 'CLASS', laps = 'LAPS', gap = 'GAP', int = 'INT', best = 'BEST', pit = 'PIT',
     sr = 'SR', pts = 'PTS', time = 'TIME', sky = 'SKY', air = 'AIR', track = 'TRACK', avg = 'AVG', lap = 'LAP', delta = 'DELTA', precip = 'PRECIP.' },
-  wxProb = '%d%% PROB',
+  wxProb = '%d%%',
   lapsShort = '%d L', lapTag = { cut = 'cut', pit = 'pit', best = 'best' },
   wxSky = { clear = 'Clear', few = 'Few clouds', scattered = 'Scattered clouds', broken = 'Broken clouds', overcast = 'Overcast', thunder = 'Thunderstorm' },
   wxPrecip = { lightDrizzle = 'light drizzle', drizzle = 'drizzle', lightRain = 'light rain', rain = 'rain', heavyRain = 'heavy rain', violentRain = 'violent rain' },
@@ -1138,7 +1138,7 @@ Lang.PT = {
   relPit = '  BOX',
   hdr = { pos = 'P', classPos = 'CL', driver = 'PILOTO', class = 'CLASSE', laps = 'VLT', gap = 'DIF', int = 'INT', best = 'MELHOR', pit = 'BOX',
     sr = 'SR', pts = 'PTS', time = 'TEMPO', sky = 'CÉU', air = 'AR', track = 'PISTA', avg = 'MÉDIA', lap = 'VOLTA', delta = 'DELTA', precip = 'PRECIP.' },
-  wxProb = '%d%% PROB',
+  wxProb = '%d%%',
   lapsShort = '%d V', lapTag = { cut = 'corte', pit = 'box', best = 'melhor' },
   wxSky = { clear = 'Céu limpo', few = 'Poucas nuvens', scattered = 'Nuvens esparsas', broken = 'Nublado', overcast = 'Encoberto', thunder = 'Tempestade' },
   wxPrecip = { lightDrizzle = 'garoa fraca', drizzle = 'garoa', lightRain = 'chuva fraca', rain = 'chuva', heavyRain = 'chuva forte', violentRain = 'chuva violenta' },
@@ -7321,12 +7321,22 @@ do
       if lastGame then ac.log('race-control: game penalty ' .. lastGame .. ' -> ' .. gameNow) end
       lastGame = gameNow
     end
-    if g.t == GAME_DT and (tonumber(g.p) or 0) > 0 then
-      physics.setCarPenalty(MANDATORY_PITS, 0)
-      ac.log(string.format('race-control: drive-through of the game taken out (%s, session %s)', gameNow,
-        sim.isSessionStarted and 'started' or 'not started'))
-      rcLog('Start', TEXTS.gameDtTaken)
+    local gp = tonumber(g.p) or 0
+    if state.hold then
+      Flags.holdTail = g.t == GAME_DT and gp > 0 and gp or Flags.holdTail
+    elseif Flags.holdTail and not (g.t == GAME_DT and gp > 0 and gp <= Flags.holdTail) then
+      Flags.holdTail = nil
     end
+    local dtGame = g.t == GAME_DT and gp > 0 and not state.hold and not Flags.holdTail
+    if dtGame then
+      physics.setCarPenalty(MANDATORY_PITS, 0)
+      if not Flags.dtTaking then
+        ac.log(string.format('race-control: drive-through of the game taken out (%s, session %s)', gameNow,
+          sim.isSessionStarted and 'started' or 'not started'))
+        rcLog('Start', TEXTS.gameDtTaken)
+      end
+    end
+    Flags.dtTaking = dtGame
     local idx = sim.currentSessionIndex
     if os_.session ~= idx then osReset(idx) end
     if Flags.formation and Flags.formation.on() then return end
