@@ -1544,7 +1544,7 @@ local state = {
   },
   chat = {
     queue = {},
-    cooldown = 0,
+    seq = 0,
   },
   rcOut = {},
   lapOut = {},
@@ -1633,8 +1633,13 @@ if math.abs((tonumber(sim.pitsSpeedLimit) or 0) - config.pitSpeedLimit) > 0.5 th
   ac.log(string.format('race-control: WARNING pitSpeedLimit %d differs from the server pit limiter (SPEED_KMH) %d',
     config.pitSpeedLimit, (tonumber(sim.pitsSpeedLimit) or 0)))
 end
+function state.chat.stamp()
+  state.chat.seq = state.chat.seq + 1
+  return os.preciseClock(), state.chat.seq
+end
 local function queueCommand(msg)
-  state.chat.queue[#state.chat.queue + 1] = msg
+  local t, n = state.chat.stamp()
+  state.chat.queue[#state.chat.queue + 1] = { text = msg, t = t, n = n }
 end
 local function queueChat(msg)
   if config.announce then queueCommand(msg) end
@@ -1833,7 +1838,7 @@ local function driverTag()
 end
 local function rcLog(what, reason)
   local msg = string.format('%s%s - %s - %s', TEXTS.rcPrefix, what, driverTag(), reason)
-  state.chat.queue[#state.chat.queue + 1] = msg
+  queueCommand(msg)
   if config.baseUrl ~= '' then
     state.rcOut[#state.rcOut + 1] = string.format('%d|%s', math.floor(serverTimeMs()), msg)
     if #state.rcOut > 400 then table.remove(state.rcOut, 1) end
@@ -1914,18 +1919,25 @@ function Record.load(list)
   if rec then return rec.body, rec.seq, 'storage' end
   return nil
 end
-local OnlineQueue = { items = {}, nextT = 0 }
+local OnlineQueue = { items = {}, lastT = -1e9 }
 do
-  local ONLINE_GAP = 0.25
+  local GAP = 0.2
   function OnlineQueue.push(send, msg, target)
-    OnlineQueue.items[#OnlineQueue.items + 1] = { send = send, msg = msg, target = target }
+    local t, n = state.chat.stamp()
+    OnlineQueue.items[#OnlineQueue.items + 1] = { send = send, msg = msg, target = target, t = t, n = n }
   end
   function OnlineQueue.update()
-    local clock = state.ui.clock
-    local q = OnlineQueue.items[1]
-    if not q or clock < OnlineQueue.nextT then return end
-    OnlineQueue.nextT = clock + ONLINE_GAP
-    if q.send(q.msg, false, q.target) then table.remove(OnlineQueue.items, 1) end
+    local now = os.preciseClock()
+    if now - OnlineQueue.lastT < GAP then return end
+    local e, c = OnlineQueue.items[1], state.chat.queue[1]
+    if not e and not c then return end
+    local chat = c ~= nil and (e == nil or c.t < e.t or (c.t == e.t and c.n < e.n))
+    OnlineQueue.lastT = now
+    if chat then
+      if ac.sendChatMessage(c.text) then table.remove(state.chat.queue, 1) end
+    elseif e.send(e.msg, false, e.target) then
+      table.remove(OnlineQueue.items, 1)
+    end
   end
 end
 local WebQueue = { items = {}, running = {} }
@@ -4087,16 +4099,6 @@ ac.onChatMessage(function(message, senderCarIndex)
   end
   return false
 end)
-local function updateChat(dt)
-  local chat = state.chat
-  chat.cooldown = chat.cooldown - dt
-  if #chat.queue > 0 and chat.cooldown <= 0 then
-    if ac.sendChatMessage(chat.queue[1]) then
-      table.remove(chat.queue, 1)
-    end
-    chat.cooldown = 1
-  end
-end
 local function sessionElapsedMs()
   local s = ac.getSession(sim.currentSessionIndex)
   if not s then return 0 end
@@ -7346,15 +7348,16 @@ do
     end
     local clock = state.ui.clock
     local pos = car.position
+    local kmh = CarRead.num(car.speedKmh)
     if P.last then
       local d = math.sqrt((pos.x - P.last.x) ^ 2 + (pos.z - P.last.z) ^ 2)
-      if d < JUMP_M then P.odo = P.odo + d end
+      if d < JUMP_M or d <= kmh / 3.6 * (clock - P.last.t) + JUMP_M then P.odo = P.odo + d end
     end
-    P.last = { x = pos.x, z = pos.z }
+    P.last = { x = pos.x, z = pos.z, t = clock }
     P.hist[#P.hist + 1] = { t = clock, odo = P.odo }
     while #P.hist > 2 and P.hist[2].t <= clock - rule.seconds do table.remove(P.hist, 1) end
     local first = P.hist[1]
-    local stopped = first.t <= clock - rule.seconds and P.odo - first.odo < rule.distance
+    local stopped = first.t <= clock - rule.seconds and P.odo - first.odo < rule.distance and kmh <= ARM_KMH
     if not stopped then
       P.slowT, P.elapsed, P.detected, P.fuelStop = nil, 0, false, false
       return
@@ -14786,6 +14789,7 @@ function script.update(dt)
   local inPit = car.isInPitlane
   local lapCount = car.lapCount
   state.ui.clock = state.ui.clock + dt
+  OnlineQueue.update()
   AppLink.update()
   RecordSync.base.nameUpdate()
   if car.lapCount > (Audit.askLap or car.lapCount) then Audit.askPending = true end
@@ -14871,7 +14875,6 @@ function script.update(dt)
   CarControls.update(dt)
   Diag.update(car)
   CarRead.updateMotion(car)
-  OnlineQueue.update()
   OnlineQueue.web.update()
   Connection.update()
   RecordSync.update()
@@ -15072,5 +15075,4 @@ function script.update(dt)
     l.prevGame = { t = g.t, p = g.p }
     PassMirror.update(car)
   end
-  updateChat(dt)
 end
