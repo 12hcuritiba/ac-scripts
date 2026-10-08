@@ -11894,13 +11894,14 @@ float4 main(PS_IN pin) {
     Tele.t = now
     local acc = car.acceleration
     local lock = math.max(CarRead.num(car.steerLock), 1)
-    local v = { thr = CarRead.num(car.gas), brk = CarRead.num(car.brake), clu = 1 - CarRead.num(car.clutch == nil and 1 or car.clutch),
-      str = 0.5 + 0.5 * math.max(-1, math.min(1, CarRead.num(car.steer) / lock)),
-      spd = math.min(CarRead.num(car.speedKmh) / 320, 1), gear = math.max(0, math.min(CarRead.num(car.gear), 8)) / 8,
-      glat = 0.5 + 0.5 * math.max(-1, math.min(1, (acc and CarRead.num(acc.x) or 0) / 3)),
-      glon = 0.5 + 0.5 * math.max(-1, math.min(1, (acc and CarRead.num(acc.z) or 0) / 3)),
-      ffb = math.min(math.abs(CarRead.num(car.ffbFinal)), 1) }
     Tele.at = Tele.at % TELE_MAX + 1
+    local v = Tele.buf[Tele.at] or {}
+    v.thr, v.brk, v.clu = CarRead.num(car.gas), CarRead.num(car.brake), 1 - CarRead.num(car.clutch == nil and 1 or car.clutch)
+    v.str = 0.5 + 0.5 * math.max(-1, math.min(1, CarRead.num(car.steer) / lock))
+    v.spd, v.gear = math.min(CarRead.num(car.speedKmh) / 320, 1), math.max(0, math.min(CarRead.num(car.gear), 8)) / 8
+    v.glat = 0.5 + 0.5 * math.max(-1, math.min(1, (acc and CarRead.num(acc.x) or 0) / 3))
+    v.glon = 0.5 + 0.5 * math.max(-1, math.min(1, (acc and CarRead.num(acc.z) or 0) / 3))
+    v.ffb = math.min(math.abs(CarRead.num(car.ffbFinal)), 1)
     Tele.buf[Tele.at] = v
     Tele.n = math.min(Tele.n + 1, TELE_MAX)
   end
@@ -11944,12 +11945,14 @@ float4 main(PS_IN pin) {
     end
     local n = Tele.n
     if n > 1 then
+      local pt = Tele.pt or vec2(0, 0)
+      Tele.pt = pt
       for _, k in ipairs(TELE_ORDER) do
         if TELE_ON[k] then
           for i = 1, n do
             local v = Tele.buf[(Tele.at - n + i - 1) % TELE_MAX + 1]
             local px_ = gx1 + (gx2 - gx1) * (i - 1) / (TELE_MAX - 1) + (gx2 - gx1) * (TELE_MAX - n) / (TELE_MAX - 1)
-            ui.pathLineTo(vec2(px_, gy2 - (gy2 - gy1) * (v and v[k] or 0)))
+            ui.pathLineTo(pt:set(px_, gy2 - (gy2 - gy1) * (v and v[k] or 0)))
           end
           ui.pathStroke(TELE_COLOR[k], false, (small and 1.2 or 1.6) * s)
         end
