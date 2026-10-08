@@ -30,7 +30,7 @@
 -- Authorization requests: amxracingg@gmail.com / 12hcuritiba@gmail.com / suporte@codice-ti.com.br
 -- ============================================================================================================
 local cfg = ac.configValues({
-  control = '', cockpit = '', event = '', roles = '', kmr = '', base = '', driverSwap = '', pitStops = '',
+  control = '', cockpit = '', event = '', roles = '', staffPits = '', kmr = '', base = '', driverSwap = '', pitStops = '',
   pitWindow = '', pitExit = '', pitSpeed = '', dsq = '', cutZone1 = '', cutZone2 = '', slowdown = '',
   announce = 0,
   penaltyMode = 'CSP',
@@ -647,14 +647,8 @@ local TEXTS = {
     player = { title = 'KMR PLAYERS', how = 'Any driver in the chat, no slash: kmr <command>' },
   },
 }
-local Lang = { code = 'en', hooks = {}, PT = nil }
+local Lang = { hooks = {} }
 do
-  local function copy(t)
-    local out = {}
-    for k, v in pairs(t) do out[k] = type(v) == 'table' and copy(v) or v end
-    return out
-  end
-  Lang.EN = copy(TEXTS)
   local function fill(dst, src)
     for k, v in pairs(src) do
       if type(v) == 'table' then
@@ -665,16 +659,31 @@ do
       end
     end
   end
-  function Lang.set(code)
-    local src = code == 'pt' and Lang.PT or Lang.EN
-    if not src then return false end
-    fill(TEXTS, Lang.EN)
-    if src ~= Lang.EN then fill(TEXTS, src) end
+  local function unescape(v) return (v:gsub('\\(.)', function(c) return c == 'n' and '\n' or c == 't' and '\t' or c end)) end
+  function Lang.apply(text)
+    local tbl, n = {}, 0
+    for line in tostring(text or ''):gmatch('[^\n]+') do
+      local path, kind, value = line:match('^([^\t]+)\t([sn])(.*)$')
+      if path then
+        local keys = {}
+        for name in path:gmatch('[^.]+') do
+          keys[#keys + 1] = tonumber(name:match('^#(%-?%d+)$')) or (name:gsub('%%(%x%x)', function(h) return string.char(tonumber(h, 16)) end))
+        end
+        local node = tbl
+        for i = 1, #keys - 1 do
+          if type(node[keys[i]]) ~= 'table' then node[keys[i]] = {} end
+          node = node[keys[i]]
+        end
+        value = unescape(value)
+        node[keys[#keys]] = kind == 'n' and (tonumber(value) or 0) or value
+        n = n + 1
+      end
+    end
+    if n == 0 then return 0 end
+    fill(TEXTS, tbl)
     for cat, base in pairs(TEXTS.kmrReasons) do TEXTS.reason[cat] = base .. ' (KMR)' end
-    Lang.code = code == 'pt' and 'pt' or 'en'
     for _, h in ipairs(Lang.hooks) do h() end
-    if ac.broadcastSharedEvent then pcall(ac.broadcastSharedEvent, 'amxracing.race-control.lang', Lang.code) end
-    return true
+    return n
   end
 end
 for cat, base in pairs(TEXTS.kmrReasons) do TEXTS.reason[cat] = base .. ' (KMR)' end
@@ -683,530 +692,6 @@ local BLACK_FLAG = ac.PenaltyType.BlackFlag
 local TELEPORT_TO_PITS = ac.PenaltyType.TeleportToPits
 local NONE = ac.PenaltyType.None
 local GAME_DT = 2
-Lang.PT = {
-  pit = {
-    DSQ = 'Saiu do pit lane com o pit fechado - desclassificado',
-  },
-  cut = {
-    SLOWDOWN = 'Corte da zona de exclusão - slowdown',
-    DT = 'Corte da zona de exclusão - drive-through',
-    DSQ = 'Corte da zona de exclusão - desclassificado',
-  },
-  timerPay = 'SLOWDOWN  ',
-  timerSeconds = '%.1f s',
-  timerDeadline = '   prazo ',
-  timerDeadlineSeconds = '%.0f s',
-  timerEnd = ' ou fim da volta',
-  sdTitle = 'CORTE DA ZONA DE EXCLUSÃO - slowdown',
-  liftTitle = 'CORTE DA ZONA DE EXCLUSÃO - tire o pé para evitar o slowdown',
-  liftSlower = 'mais lento - sem penalidade',
-  liftFaster = 'mais rápido - slowdown',
-  liftLimit = '+%g%% ref',
-  rcPrefix = '[RC] ',
-  rcTitle = 'RACING CONTROL',
-  introText = TEXTS.introText,
-  introStatus = TEXTS.introStatus,
-  cellPit = 'JANELA',
-  cellSwap = 'TROCA',
-  cellTrack = 'PISTA',
-  cellPenalties = 'PENALIDADES',
-  pitOpen = 'ABERTA %s',
-  pitDone = 'FEITA',
-  pitMissed = 'PERDIDA',
-  pitOpenMsg = 'Janela de parada aberta - troca de piloto antes de fechar',
-  swapCount = '%d | %d',
-  trackYellow = 'AMARELA',
-  trackBlue = 'AZUL',
-  penHold = 'RETIDO',
-  penDsq = 'DSQ',
-  penSG = 'SG%d · %d DTs',
-  sgPending = 'Stop & go %d s - pare no seu box nesta volta ou na próxima',
-  sgLastLap = 'ÚLTIMA VOLTA - Stop & go %d s - pare no seu box agora',
-  sgOverdue = 'VENCIDO - Stop & go %d s - pare no seu box',
-  sgServiced = 'Serviço no box - stop & go não cumprido nesta passagem',
-  sgAnnulled = 'Serviço iniciado - pagamento do stop & go anulado',
-  practiceCleared = 'Treino - penalidades zeradas na vaga',
-  pitSpeedNotPaid = 'Excesso de velocidade no pit lane - o drive-through desta passagem não conta', practiceTowCleared = 'Treino - penalidades zeradas pelo reboque',
-  practiceDsqCleared = 'Treino - desclassificação retirada na vaga',
-  sgStopped = 'Stop & go %s - fique parado, sem serviço',
-  sgInterrupted = 'Stop & go interrompido - faltam %s - só o mesmo piloto pode continuar',
-  pitMissedLog = 'PERDIDA - nenhuma troca de piloto válida dentro da janela de parada',
-  pitBoxTitle = 'PARADA NO BOX',
-  pitBoxTotal = 'Total %s',
-  pitBoxConfirm = 'Enter para confirmar',
-  pitBoxMode = '< %s >',
-  pitBoxStart = '   INICIAR >',
-  pitModeAuto = 'AUTO',
-  pitModeManual = 'MANUAL',
-  pitBoxServing = 'Parada em andamento',
-  pitFuel = 'Combustível',
-  pitFuelValue = '+%d L (para %d / %d L)',
-  pitCompound = 'Composto',
-  pitTyres = 'Pneus',
-  pitPressureFront = 'Pressão dianteira',
-  pitPressureRear = 'Pressão traseira',
-  pitWing = 'Asa',
-  pitStrategy = 'Estratégia', pitStrategyTab = 'ESTRATÉGIA', pitPresetN = 'Preset %d', pitBack = 'Voltar',
-  pitStrategyHint = 'Direita: usar   Esquerda: voltar',
-  pitPressure = 'Pressão',
-  pitRepairSuspension = 'Reparo da suspensão',
-  pitRepairPowertrain = 'Reparo do motor e câmbio',
-  pitRepairBody = 'Reparo da carroceria',
-  pitRepairYes = 'Reparar',
-  pitRepairNo = 'Não',
-  pitRepairNone = 'Nenhum',
-  pitFuelLocked = 'Travado - bandeira vermelha', pitRepairLocked = 'Depois da relargada',
-  setupTitle = 'SETUP',
-  setupLap = 'Volta %d',
-  setupAero = 'AERO',
-  setupWing = 'Asa',
-  setupDrive = 'TRANSMISSÃO',
-  setupDiffPower = 'Diferencial tração',
-  setupDiffCoast = 'Diferencial desac.',
-  setupPreload = 'Pré-carga',
-  setupPreloadValue = '%.0f Nm',
-  setupBrakeBias = 'Balanço de freio',
-  setupChassis = 'CHASSI',
-  setupHeight = 'Altura',
-  setupHeaveHeight = 'Altura heave',
-  setupDeploy = 'Deploy',
-  setupErs = 'ERS / Rec.',
-  setupArb = 'Barra estab.',
-  setupToe = 'Convergência',
-  setupCamber = 'Cambagem',
-  setupSuspension = 'SUSPENSÃO',
-  setupSpring = 'Mola',
-  setupAxes = 'D/T',
-  setupBumpSlow = 'Comp. L',
-  setupReboundSlow = 'Ret. L',
-  setupBumpFast = 'Comp. R',
-  setupReboundFast = 'Ret. R',
-  setupHeaveSpring = 'Mola heave',
-  setupHeaveBumpSlow = 'Heave comp. L',
-  setupHeaveReboundSlow = 'Heave ret. L',
-  setupHeaveBumpFast = 'Heave comp. R',
-  setupHeaveReboundFast = 'Heave ret. R',
-  setupTyres = 'PNEUS', setupGears = 'MARCHAS',
-  setupPsi = 'PSI',
-  setupLife = 'Vida',
-  setupKm = 'Km',
-  setupLaps = 'Voltas',
-  setupLapsOf = '%d/%s',
-  statusTitle = 'EST. DO CARRO',
-  statusRepair = 'REPARO',
-  statusBeyond = 'INSEGURO',
-  statusWheels = 'RODAS E SUSPENSÃO',
-  statusPunct = 'FURADO',
-  statusBent = 'TORTA +%.0f°',
-  statusBroken = 'QUEBRADA +%.0f°',
-  statusBrokenShort = 'QUEBRADO',
-  statusPowertrain = 'MOTOR E CÂMBIO',
-  statusEngine = 'MOTOR',
-  statusGearbox = 'CÂMBIO',
-  statusBop = 'BOP',
-  statusOk = 'OK',
-  statusBody = 'CARROCERIA',
-  sgBoxTitle = 'STOP & GO',
-  sgBoxStay = 'Fique parado - sem serviço durante o stop & go',
-  sgBoxTimes = 'Parado %s / Total %s',
-  sgBoxInterrupted = 'STOP & GO INTERROMPIDO',
-  sgBoxLeft = 'faltam %s',
-  sgBoxSameDriver = 'Só o mesmo piloto pode continuar',
-  sgBoxReturnWithin = 'Só o mesmo piloto pode continuar - volte em até %s',
-  sgBoxResume = 'Pare na sua vaga para continuar',
-  sgServed = 'Stop & go cumprido',
-  sgLimit = 'Limite de stop & go - mais de %d penalidades',
-  swapBlocked = 'Troca não permitida - cumpra as penalidades antes',
-  wrongDriverTitle = 'PILOTO ERRADO',
-  wrongDriverLeave = 'Penalidades de outro piloto pendentes - saia do carro',
-  wrongDriverTime = 'Saia em até %s',
-  damageRepairLaps = 'REPARO OBRIGATÓRIO - %d VOLTAS',
-  damageRepairLast = 'REPARO OBRIGATÓRIO - ÚLTIMA VOLTA',
-  damageBent = 'Suspensão torta - %s',
-  damageSuspension = 'Suspensão %s',
-  damageAngle = '%s +%.1f°',
-  damageBody = 'Dano na carroceria %s %d',
-  damageBodyLimit = 'limite %d',
-  damageTyre = 'Pneu furado - %s',
-  damageTyres = 'Pneus furados - %d',
-  damageTyresAllowed = '%d de %d permitidos',
-  damageBeyondTitle = 'DANO ALÉM DO LIMITE DE SEGURANÇA',
-  damageBeyond = 'Pare fora da pista e volte ao box (reboque)',
-  damageWheel = 'Roda solta - %s',
-  damageEngine = 'Motor quebrado',
-  damageGearbox = 'Câmbio quebrado',
-  damagePowertrain = 'Dano no motor e câmbio %.0f%%',
-  damagePowertrainLimit = 'reparo a partir de %d%%',
-  dsqTitle = 'DESCLASSIFICADO',
-  dsqStop = 'Pare no seu box antes da linha',
-  dsqTow = 'Carro retirado - volte ao box',
-  dsqOut = 'Fora da sessão - controles travados',
-  dsqSafety = 'Risco à segurança - dano além do limite de segurança',
-  editedFile = 'Arquivo editado',
-  editedFileDetail = 'registro %s - carro %d - banimento pendente',
-  kmrTitle = 'KMR',
-  swapActive = 'TROCA DE PILOTO ATIVA',
-  swapTitle = 'TROCA DE PILOTO',
-  swapDisconnect = 'Desconecte para fazer a troca de piloto',
-  swapWait = 'Você está pilotando agora - espere %s antes de sair do box',
-  swapClear = 'Pode sair do box - VAI VAI!',
-  swapTimes = 'Decorrido %s / Total %s',
-  code80 = 'CODE 80 - nenhuma penalidade pode ser cumprida até a bandeira verde',
-  holdTitle = 'RETIDO',
-  hold = 'Retido %s - %s',
-  holdTwoDT = 'Dois drive-throughs pendentes',
-  holdTwoDTLong = 'Dois drive-throughs pendentes (excesso de velocidade no pit lane vencido na pista)',
-  towReason = 'De volta ao box',
-  qualiEndTow = 'reboque', qualiEndHold = 'Classificação encerrada - %s',
-  qualiEndNotice = 'Classificação encerrada (%s) - vale sua melhor volta válida',
-  repairReason = 'Reparo na parada',
-  parkedFlagTitle = 'CARRO PARADO NA PISTA', parkedMove = 'Siga - %d s', parkedLeft = 'Paradas toleradas restantes: %d de %d - acima: desclassificado', parkedNoGrace = 'Não seguiu: desclassificado',
-  parkedTitle = 'Carro parado na pista', parkedLog = 'parada %d de %d tolerada', parkedDsq = 'Carro parado na pista',
-  parkedDsqDetail = 'mais de %d paradas de %d s', parkedTimeTitle = 'Penalidade de tempo', parkedTimeLog = '%d s - sem combustível na pista',
-  parkedFuelRace = 'Sem combustível na pista - %d s somados ao seu tempo de prova', parkedFuelLaps = 'Sem combustível na pista - suas voltas são inválidas daqui em diante',
-  parkedFuelLapsLog = 'sem combustível - voltas inválidas daqui em diante',
-  reason = {
-    SD1 = 'Corte da zona de exclusão - zona 1',
-    SD2 = 'Corte da zona de exclusão - zona 2',
-    PSE = 'Excesso de velocidade no pit lane',
-    RC = 'Decisão do Racing Control',
-    JS = 'Largada queimada na relargada parada',
-    JSS = 'Largada queimada na largada',
-    FS = 'Acima da velocidade máxima na volta de apresentação',
-    FL = 'Abaixo da velocidade mínima na volta de apresentação',
-    FP = 'Ultrapassagem na volta de apresentação não devolvida',
-    PX = 'Saiu do box antes do carro da frente na relargada',
-  },
-  kmrReasons = {
-    K0 = 'Penalidade do KMR', K1 = 'Cruzou a linha da saída do box', K2 = 'Excesso de velocidade no pit lane', K3 = 'Limite de infrações',
-    K4 = 'Colisão com um carro dando volta em você', K5 = 'Colisão com um carro em volta rápida', K6 = 'Atrapalhou volta rápida',
-    K7 = 'Marcha à ré', K8 = 'Carro parado perto da pista', K9 = 'Colisões demais', K10 = 'Excesso de velocidade sob VSC',
-    K11 = 'Lentidão sob VSC', K12 = 'Ultrapassagem sob VSC', K13 = 'Linha de corte', K14 = 'Bandeira azul ignorada',
-    K15 = 'Voltou à pista em alta velocidade',
-  },
-  dsqBlackFlag = 'Bandeira preta',
-  dsqDtReason = 'Drive-through não cumprido',
-  wrongWayDsq = 'Contramão',
-  swapVoidService = 'Troca de piloto inválida - serviço na mesma parada',
-  swapVoidSg = 'Troca de piloto inválida - stop & go cumprido na mesma parada',
-  swapInvalidTitle = 'TROCA DE PILOTO INVÁLIDA',
-  swapInvalidLeave = 'Stop & go cumprido nesta parada - saia do carro, não saia do box',
-  swapInvalidDsq = 'Troca de piloto na parada em que o stop & go foi cumprido',
-  swapInvalidLeftDsq = 'Saiu do box depois de uma troca de piloto inválida',
-  wrongWayTitle = 'CONTRAMÃO',
-  wrongWayTurn = 'Dê a volta - %.0f / %d m',
-  wrongWayLimit = 'Acima de %d m: desclassificado',
-  dtTitle = 'DRIVE-THROUGH',
-  dtMore = '  +%d',
-  dtThisLap = 'Cumpra nesta volta',
-  dtNextLap = 'Cumpra nesta volta ou na próxima',
-  dtWithinLaps = 'Cumpra em até %d voltas',
-  dtOverdue = 'VENCIDO - cumpra na próxima passagem pelo box',
-  pitWindowDsq = 'Parada obrigatória não feita',
-  swapEarlyDsq = 'Saiu do box antes do tempo da troca de piloto',
-  swapsMissingDsq = 'Trocas de piloto faltando (%d de %d)',
-  stopsMissingDsq = 'Paradas faltando (%d de %d)',
-  driverRow = 'Piloto',
-  driverRowText = 'troca %d%s - equipe %s - GUID %s',
-  driverRowRejoin = ' (reentrada)',
-  pitStopRow = 'Box',
-  pitStopRowText = 'linha %d - parada %s - entrada %s - saída %s - %s - %s - %s - bandeiras %s/%s - equipe %s - GUID %s',
-  pitStopRowInPits = 'no box',
-  pitStopRowNoService = 'sem serviço',
-  pitStopRowNoPenalty = 'sem penalidade',
-  stintMinDsq = 'Tempo de condução abaixo do mínimo (%s de %d min, prova inteira)',
-  stintMaxDsq = 'Tempo de condução acima do máximo (%d min, prova inteira)',
-  kmrRatingDsq = 'Nota de segurança do KMR %s (limite %s)',
-  scrRelative = 'RELATIVO', scrStandings = 'CLASSIFICAÇÃO', scrLapTime = 'TEMPO DE VOLTA', scrDelta = 'DELTA', scrVsBest = 'vs MELHOR',
-  scrLaps = 'VOLTAS', scrLapN = 'Volta %d', scrStint = 'STINT - %s - %d voltas', scrRace = 'SITUAÇÃO DA PROVA',
-  scrCurrent = 'Atual', scrNow = 'Agora', scrBest = 'Melhor', scrOptimal = 'Ideal', scrLast = 'Última',
-  scrSession = 'Sessão', scrInvalid = 'INVÁLIDA', scrTime = 'Tempo', scrPosition = 'Posição', scrLap = 'Volta',
-  scrLeader = 'Líder', scrAhead = 'À frente', scrBehind = 'Atrás', scrStops = 'PARADAS', scrSwaps = 'TROCAS',
-  scrWindow = 'JANELA', scrStintLine = 'STINT', scrTyres = 'Pneus', scrPending = 'Pendentes',
-  scrOpt = 'Ideal', scrCarBest = 'Melhor do carro', scrStintN = 'STINT %d - %s', scrStintInfo = '%d voltas - %s',
-  scrStintMin = ' / mín %d', scrDriveTotal = 'prova %s', scrBestAvg = 'Melhor %s - média %s', scrDeltaButton = 'Δ',
-  scrDeltaRefs = { best = 'MELH.', session = 'SESS.', optimal = 'IDEAL', alltime = 'REC.' }, scrDeltaSectors = 'SETORES',
-  cmWatch = 'VER A BORDO', cmMine = 'MEU CARRO', cmNoWatch = 'ver a bordo: desligado neste servidor (roles watch:1)',
-  scrGaps = 'DIFERENÇAS', scrObligations = 'OBRIGAÇÕES', scrTrack = 'Pista', scrKmr = 'Pontos KMR',
-  exitTitle = 'RELARGADA', exitLine1 = 'Saída do box em fila - ordem da relargada',
-  exitWait = 'Espere na sua vaga - saia depois que %s passar', exitGo = 'Sua vez - saia do box agora, em fila',
-  exitFirst = 'Primeiro da ordem da relargada - saia do box agora', exitEarlyLog = 'Saiu do box antes de %s passar (fora da ordem da relargada)',
-  scrKmrRating = 'Nota KMR', scrKmrCrashes = 'Batidas KMR', scrKmrInfr = 'Infrações KMR', scrKmrKm = 'Distância KMR',
-  scrKmrNone = 'ainda nenhuma',
-  sessionName = { [ac.SessionType.Practice] = 'TREINO', [ac.SessionType.Qualify] = 'CLASSIFICAÇÃO', [ac.SessionType.Race] = 'CORRIDA' },
-  edTitle = 'TELAS', edPitDesk = 'Área do box', edDeskOf = 'Área %s de %d', edHint = 'arraste uma tela para o lugar - a linha do título move esta janela',
-  edAll = 'todas', edScreens = 'Telas', edReset = 'Reiniciar a área', edCopy = 'Copiar da 1', edDelete = 'Apagar a área',
-  edPitOn = 'Área do BOX ligada', edPitOff = 'Área do BOX desligada',
-  edPitWarning = 'Área do BOX desligada: nada mais aparece no pit lane - por sua conta',
-  edButtons = 'Próxima tela %s - Tela anterior %s - Próxima área %s - Área anterior %s (controles do CSP)',
-  edIndicator = 'ÁREA %d / %d - %s',
-  menuButtons = 'Botões', navTitle = 'BOTÕES', navOwn = 'GRAVADO PELA FERRAMENTA', navCsp = 'CONTROLES DO CSP',
-  navTabs = { nav = 'Navegação', screens = 'Abrir / fechar telas' },
-  navNextScreen = 'Próxima tela', navPrevScreen = 'Tela anterior', navNextDesktop = 'Próxima área',
-  navPrevDesktop = 'Área anterior', navShowPanel = 'Mostrar o painel (5 s)', navSet = 'Gravar', navClear = 'Limpar', navPress = 'Aperte um botão... %d s',
-  navInUseAc = 'em uso pelo AC: %s - escolha outro', navInUseOwn = 'em uso por %s desta ferramenta - escolha outro',
-  navButton = '%s - botão %d', navPov = '%s - D-pad %d graus', navGamepad = 'Controle %d - %s', navKey = 'Tecla %s',
-  navDeviceOff = 'dispositivo desligado',
-  navUp = 'Cima', navDown = 'Baixo', navLeft = 'Esquerda (valor -)', navRight = 'Direita (valor +)',
-  navKeyNames = { [37] = 'Seta esquerda', [38] = 'Seta para cima', [39] = 'Seta direita', [40] = 'Seta para baixo' },
-  menuSettings = 'Ajustes', menuRedFlag = 'Direção de prova',
-  dirTitle = 'DIREÇÃO DE PROVA', dirRole = { director = 'DIRETOR', staff = 'EQUIPE', broadcast = 'TRANSMISSÃO - só leitura' },
-  dirLogin = 'Login admin do KMR', dirLoginSent = 'Login enviado - esperando o KMR', dirLoginOk = 'Admin do KMR: conectado',
-  dirNoAnswer = 'Sem resposta do KMR em 5 s - o login ou o comando falhou',
-  dirFailed = 'Falhou: %s', dirSent = 'Enviado: %s - esperando o KMR', dirAnswer = 'KMR: %s',
-  dirNextSession = 'PRÓXIMA SESSÃO', dirRestart = 'REINICIAR SESSÃO', dirCancelDt = 'SEM DT', dirToPit = 'AO BOX', dirFuel = 'COMBUSTÍVEL', dirMenu = 'MENU 5 MIN',
-  setTitle = 'AJUSTES', setTabs = { messages = 'Mensagens', controls = 'Controles', text = 'Texto', design = 'Visual', app = 'App', room = 'Racing Room' },
-  setFontSample = 'RACING CONTROL  P3  Reduza', setFontMissing = 'não instalada', setTextMin = 'Texto pequeno no mínimo', setTextMinOff = 'Desligado', setOpacity = 'Opacidade', setPreset = 'Predefinição',
-  setPresets = { verbose = 'Completo', race = 'Corrida', minimal = 'Mínimo', custom = 'Personalizado' }, setAlways = 'sempre - no painel do Racing Control',
-  setAreas = { rc = 'Racing Control, bandeiras, troca de piloto, diretor de prova', limits = 'Limites de pista e voltas inválidas',
-    damage = 'Colisões e danos', points = 'Pontos e nota (KMR)', warnings = 'Avisos de comportamento',
-    others = 'Penalidades de outros pilotos', results = 'Resultados e recordes da sessão', welcome = 'Boas-vindas e estatísticas',
-    admin = 'Administração do servidor', chat = 'Chat dos pilotos', server = 'Outras mensagens do servidor',
-    diag = 'Diagnóstico: mudanças no carro e o botão' },
-  setAreaHint = { limits = 'volta invalidada', damage = 'Dano: -3p', points = 'prêmio, custo, saldo',
-    warnings = 'retardatário, volta rápida, velocidade', others = 'KMR, diretor de prova', results = 'vencedor, pole, volta mais rápida',
-    welcome = 'na entrada', admin = 'kick, ban, voto de pista', chat = 'na nossa janela', server = 'não a direção de prova', diag = 'faróis, limitador, motor, câmera' },
-  setCtl = { on = 'Mostrar os controles do carro', elec = 'Eletrônica', engine = 'Motor e freios', hybrid = 'Híbrido',
-    aero = 'Aero (DRS)', pit = 'Limitador do box' },
-  setServer = 'Servidor', setCsp = 'CSP', setScript = 'Script', setApp = 'App', setRunning = 'rodando',
-  msgTitle = 'MENSAGENS', setMissing = 'faltando', setChecking = 'conferindo', setAllGood = 'Tudo certo - fecha em %d s', setNotGood = 'Nem tudo certo - feche você',
-  redTitle = 'CONTROLE DA BANDEIRA VERMELHA', redNone = 'sem bandeira vermelha', redConfirm = 'CONFIRMAR BANDEIRA VERMELHA', redVsc = 'RETOMAR VSC %d s',
-  dirLightsRed = 'LUZES VERMELHAS', dirLightsGreen = 'LUZES VERDES', dirLightsAuto = 'LUZES AUTO',
-  redGreen = 'VERDE', dirVsc = 'VSC %d s', dirMoney = 'ZERAR PONTOS', dirStats = 'ZERAR ESTAT.', dirBan = 'BANIR', dirUnban = 'DESBANIR', dirNoSg = 'SEM S&G', dirNoDsq = 'SEM DSQ',
-  dirKmrLine = 'KMR  pontos %s / %d  -  segurança %s  -  %s  -  infrações %s (%s / 100 km)',
-  dirPrompt = 'Comando', dirPromptSent = 'Enviado: %s', dirKmrCrashes = 'batidas %s (%s / 100 km)', dirBalRes = 'lastro %.0f kg  restritor %.0f', dirKmrLaps = '  -  voltas %d melhor %s', dirKmrNoStats = 'estatísticas: ainda nenhuma (pouco rodado)',
-  dirKmrNone = 'KMR  ainda sem números deste piloto',
-  dirPenNone = 'Penalidades  nenhuma', dirPenTitle = 'Penalidades  ', dirPenDt = '%s DT%d', dirPenSg = 'S&G %d s', dirPenDsq = 'DSQ',
-  dirPenUnknown = 'Penalidades  ainda sem lista deste piloto',
-  dirDriver = 'Piloto',
-  dirWebLine = 'pontos %s - %s - infr %s (%s/100km) - batidas %s (%s/100km) - voltas %d melhor %s',
-  dirWebOthers = 'Registrados no KMR',
-  dirWebErr = 'Estatísticas do KMR na web não lidas: %s', dirWebOff = 'Estatísticas do KMR na web: chave kmrStatsUrl vazia', dirValue = 'Valor', dirBallast = 'LASTRO', dirRestrictor = 'RESTRITOR',
-  kmrEvBtn = 'EVENTOS KMR', kmrEvTitle = 'EVENTOS KMR - CONTROLE DE PROVA DA SESSÃO', kmrEvConnecting = 'Conectando ao controle de prova do KMR...',
-  kmrEvErr = 'Controle de prova do KMR fora de alcance: %s', kmrEvNone = 'Nenhum evento', kmrEvReplay = 'REPLAY', kmrEvBack = '< LISTA', kmrEvLoading = 'Carregando o replay do KMR...',
-  kmrEvNoData = 'O KMR não deu replay deste evento', kmrEvPlay = 'PLAY', kmrEvPause = 'PAUSA', kmrEvToEvent = 'EVENTO', kmrEvGear = 'marcha',
-  kmrEvLap = 'volta ', kmrEvReviewed = 'revisado ', kmrEvLast = 'ESTA SESSÃO', kmrEvAll = 'TODAS AS SESSÕES',
-  kmrEvKinds = { collision = 'COLISÃO', cut = 'CORTE', generic = 'INFO', overtake = 'ULTRAPASSAGEM' },
-  kmrEvFilters = { all = 'TODOS', collision = 'COLISÕES', cut = 'CORTES', generic = 'INFO' },
-  dirNeedCarValue = 'Lastro / restritor: um piloto do servidor no campo e um valor', dirList = 'PILOTOS', dirListBtn = 'LISTA', dirCmdBtn = 'COMANDOS', dirCmdTitle = 'COMANDOS', dirCmdHow = 'Como: ', dirSessionTime = '%s decorrido / faltam %s',
-  dirSessionLaps = 'volta %d', dirSessionLapsOf = 'volta %d / %d - faltam %d',
-  dirLeft = 'Saiu do servidor', dirGuidAsk = 'Pedindo ao KMR o GUID de %s',
-  dirGuidNone = 'O KMR não deu GUID para %s (o nome diferencia maiúsculas)', dirGuidGot = 'GUID de %s: %s',
-  dirNoRed = 'Nem bandeira vermelha nem VSC ligados', redKmrOn = 'Admin do KMR: conectado', redKmrOff = 'Admin do KMR: digite /kmr login <senha> no chat',
-  redPlace = 'vaga', redLane = 'pit lane', redTrack = 'pista',
-  where = { menu = 'MENU (ESC)', box = 'BOX (LOBBY)', pit = 'BOX', pitlane = 'PIT LANE', grid = 'GRID', stopped = 'PARADO',
-    track = 'PISTA' }, redCount = 'No box %d / %d - acima do limite %d',
-  scrPerf = 'DESEMPENHO', perfRows = { fps = 'FPS', cpu = 'CPU', gpu = 'GPU' },
-  scrCalc = 'CALCULADORA DE ESTRATÉGIA', calcNotCar = 'não enviado ao carro', calcFuel = 'Combustível/volta', calcWear = 'Desgaste/volta (pior pneu)',
-  calcLap = 'Volta média', calcLaps = 'Voltas lançadas',
-  calcNoData = 'sem dados', calcNoDataShort = 's/ dados', calcNeedFlying = 'Sem dados: %d de %d voltas lançadas', calcMissing = 'Sem dados: %s',
-  calcParams = { race = 'Duração da prova', lap = 'Volta usada', tank = 'Tanque', reserve = 'Reserva (voltas)', pitloss = 'Perda no pit lane',
-    refuel = 'Reabastecer', tyres = 'Troca de pneu (cada)' },
-  calcRaceLaps = '%d voltas', calcHead = { 'CEN', 'DESG', 'LIM', 'L/V', 'PAR', 'V/ST', 'COMB/ST', 'PNEU', 'BOX', 'TOTAL' },
-  calcFields = { wear = 'desgaste %/volta', limit = 'pneu até %', fuel = 'comb. L/volta', stops = 'paradas' },
-  calcAuto = 'AUTO', calcNo = 'NÃO', calcBest = 'Melhor cenário: %s', calcNone = 'Nenhum cenário cabe no tanque e no pneu',
-  scrCockpit = 'COCKPIT', cockpitCar = 'Ajustes deste carro: %s', cockpitSave = 'SALVAR', cockpitSaved = 'SALVO', cockpitNoApp = 'app não está rodando', cockpitMore = '+ TODOS', cockpitAudio = 'VOLUME - CADA CANAL',
-  cockpitRows = { ffb = 'Force feedback', y = 'Banco cima / baixo', x = 'Banco esq. / dir.', pitch = 'Inclin. cima / baixo',
-    fov = 'Campo de visão', ['vol.main'] = 'Volume (geral)' },
-  cockpitChannels = { engine = 'Motor', transmission = 'Transmissão', tyres = 'Pneus', surfaces = 'Superfícies', dirt = 'Terra',
-    wind = 'Vento', opponents = 'Adversários', carComponents = 'Peças do carro', track = 'Pista', weather = 'Clima',
-    rain = 'Chuva', wipers = 'Limpadores' },
-  dirLogout = 'SAIR', dirLoggedOut = 'Desconectado nesta tela - o KMR não tem logout: ele esquece o login quando você sai do servidor',
-  dirKmrLost = 'Login do KMR sem resposta - caiu: entre de novo',
-  dirResetBtn = 'REINICIAR', dirReset = 'Janela reiniciada - campos, listas e posição de volta ao início; login do KMR conferido',
-  connLap = 'VOLTA ', connSector = 'S%d', connSpline = 'SPL %.3f', connPing = 'PING %d ms', connPingNone = 'PING -',
-  connOk = 'CONEXÃO OK', connHigh = 'PING ALTO', connKick = 'KICK DO KMR PROVÁVEL - média %.0f / desvio %.0f ms', connStalled = 'DADOS PARADOS - QUEDA PROVÁVEL',
-  connAlert = 'ALERTA  ', connAlertCar = '#%s %s: %s',
-  connPitTitle = 'BOX  ', connStopped = 'parado na vaga %s', connOutAfter = 'piloto saiu %s depois da parada',
-  connOutNoStop = 'piloto saiu longe da vaga', connSwapTime = 'tempo de troca %s / %s',
-  connBackSame = 'o mesmo piloto voltou depois de %s (tempo de troca %s)', connBackOther = 'piloto novo entrou depois de %s (tempo de troca %s)',
-  connInTime = 'dentro do tempo de troca', connLate = 'depois do tempo de troca',
-  connCause = { pitPlace = 'saiu na vaga', menu = 'ESC / menu - saiu da sessão', lost = 'conexão perdida',
-    pingHigh = 'kick do KMR - ping alto', pingUnstable = 'kick do KMR - ping instável', kick = 'kick',
-    unknown = 'saiu - sem menu visto, conexão boa' },
-  connGoneTitle = 'SAIU DO SERVIDOR', connLeft = 'saiu', connTitle = 'Conexão', connLog = '%s saiu do servidor - %s',
-  lobbyTitle = 'RACING CONTROL', lobbyStops = 'Paradas', lobbyKmr = 'Pontos / nota KMR', lobbyWeather = 'Ar / pista',
-  lobbyMessages = 'MENSAGENS', lobbyWindow = 'Racing Control - lobby',
-  scrShare = 'RACING ROOM', shareOn = 'TELA DO JOGO COMPARTILHADA', shareOff = 'TELA DO JOGO NÃO COMPARTILHADA', shareHint = '< desl.   lig. >',
-  ownOn = 'MINHAS TELAS À MINHA VISTA', ownOff = 'MINHAS TELAS ESCONDIDAS DE MIM', ownHint = 'Escondidas: menos tráfego e carga; os outros continuam vendo',
-  focusOn = 'FOCO LIGADO', focusOff = 'FOCO DESLIGADO', focusWith = 'Falando com você: %s', focusNobody = 'Escolha quem fala com você', focusHint = 'Só uma pessoa fala com você',
-  focusNoRoom = 'Foco: Racing Room numa sala privada',
-  rrRoom = '%s - %s', rrNone = 'Não conectado - sem voz/vídeo', rrOther = 'Em outro PC - sem voz/vídeo',
-  rrOffline = 'Base do evento não responde', shareAsking = 'Pedindo ao Racing Room...', shareSent = 'Pedido - o Racing Room está abrindo a captura',
-  shareNoRoom = 'Racing Room fora de uma sala - abra uma sala lá', shareNoAnswer = 'O Racing Room não compartilhou a tela do jogo',
-  shareFailed = 'Não compartilhada: %s', rrNoRoom = 'Fora de uma sala - sem voz/vídeo', rrWait = 'Conferindo...',
-  rrAreas = { pitwall = 'Mureta', anteroom = 'Antessala', control = 'Sala de controle', individual = 'Sala particular', workshop = 'Oficina' },
-  lobbyRc = 'RACING CONTROL', lobbyAccount = 'Conta', lobbyRegistration = 'Cadastro', lobbyBase = 'Base do evento',
-  lobbyApp = 'App do Racing Control', lobbyRoom = 'Racing Room', lobbyShare = 'Tela do jogo', lobbyOk = 'ok', lobbyMissing = 'faltando: %s',
-  lobbyOnline = 'online', lobbyOffline = 'offline', lobbyRunning = 'rodando', lobbyNotRunning = 'não está rodando', lobbyShared = 'compartilhada',
-  lobbyNotShared = 'não compartilhada', lobbyOff = 'não usado neste servidor',
-  setShareSource = 'Fonte', setShareLayout = 'Telas', setShareVr = 'VR: janela do jogo (o espelho do óculos no PC)',
-  setShareSources = { game = 'Janela do jogo', screen1 = 'Tela 1', screen2 = 'Tela 2', screen3 = 'Tela 3' },
-  setShareLayouts = { single = 'Única', triple = 'Tripla (todas)', center = 'Tripla (meio)' },
-  setShareScope = 'Mostrar em', setShareScopes = { all = 'Toda sala com Telas', room = 'Só a sua sala' },
-  setShareGo = 'COMPARTILHAR A TELA DO JOGO', setShareStop = 'PARAR DE COMPARTILHAR',
-  menuDesktops = 'Áreas', menuAudit = 'Auditoria', auditTitle = 'AUDITORIA', auditPoints = 'Pontos KMR %d / %d',
-  auditRating = 'Nota KMR %s',
-  auditCount = '%d mensagens', auditEmpty = 'Nenhuma mensagem nesta sessão',
-  edStrip = 'CONTROLES - MENSAGENS (quando houver)', edFlagStrip = 'BANDEIRAS (quando houver)', edPin = 'Fixar em todas', edPinned = 'Em todas as áreas', edMode = 'Modo: %s', edRemove = 'Remover',
-  edChoose = 'Clique numa tela para escolher e arraste para o lugar',
-  screenNames = { pitbox = 'Parada no box', setup = 'Setup', status = 'Estado do carro', race = 'Situação da prova', laps = 'Voltas',
-    standings = 'Classificação', relative = 'Relativo', laptime = 'Tempo de volta', delta = 'Delta', event = 'Evento',
-    weather = 'Clima', map = 'Mapa da pista', telemetry = 'Telemetria', share = 'Racing Room', cockpit = 'Cockpit', perf = 'Desempenho',
-    calc = 'Calculadora de estratégia' },
-  scrTelemetry = 'TELEMETRIA',
-  teleChannels = { thr = 'ACEL', brk = 'FREIO', clu = 'EMBR', str = 'DIR', spd = 'VEL', gear = 'MARCHA', glat = 'G LAT', glon = 'G LON' },
-  teleShort = { thr = 'A', brk = 'F', clu = 'E', str = 'D', spd = 'V', gear = 'M', glat = 'X', glon = 'Z' },
-  scrClassSel = '< CLASSE: %s >', scrLapsCar = 'VOLTAS - CARRO #%s', scrLapsMore = 'MAIS', scrLapsLess = 'MENOS',
-  scrCompare = 'COMPARAR', scrDriverSel = '< PILOTO: %s >', scrStintShort = 'ST %d', scrMap = 'MAPA DA PISTA', scrNoMap = 'Sem mapa desta pista',
-  scrMapLegend = { 'amarelo você - azul volta à frente - bege volta atrás', 'cinza box - vermelho parado' },
-  scrWeather = 'CLIMA / PISTA', scrWeatherModes = { forecast = 'PREVISÃO', map = 'RADAR' }, scrRadarZoom = '%g KM', scrRadarBig = '+', scrRadarSmall = '-',
-  scrRadarPrec = 'PRECIPITAÇÃO', scrRadarLight = 'leve', scrRadarHeavy = 'forte', scrRadarExtreme = 'extrema', scrRadarClouds = 'nuvens: branca = leve, cinza = densa',
-  scrRadarLoop = '%s - 1 hora em 6 segmentos de 10 min, um por segundo', scrRadarNoTrack = 'Sem a linha da IA nesta pista',
-  scrWeatherAnim = 'previsão em segmentos de 10 min', scrWeatherStatic = 'sem previsão', scrWxPage = '< %d/%d >',
-  scrWxTime = 'Hora local', scrWxSky = 'Céu', scrWxAir = 'Ar / pista', scrWxWind = 'Vento', scrWxRain = 'Chuva', scrWxNext = 'Próximo',
-  scrEvent = 'EVENTO', scrEventInfo = 'informações', evStops = 'Paradas exigidas', evSwaps = 'Trocas de piloto exigidas',
-  evStint = 'Stint', evOrder = 'Ordem da parada', evPitSpeed = 'Velocidade no pit lane', evRating = 'Nota KMR',
-  flagRed = 'BANDEIRA VERMELHA',
-  flagRedLine = 'Reduza - sem ultrapassar - complete a volta na pista, depois o box',
-  flagRedNeutral = 'Prova neutralizada pelo Racing Control',
-  flagRedSpeed = 'Máx %d km/h - você: %.0f km/h',
-  redFlagLineDsq = 'Cruzou a linha no pit lane com a bandeira vermelha (saindo do box)',
-  flagRedGrace = 'Sem ultrapassar daqui em diante - %d s', flagRedToLine = 'Complete a volta: cruze a linha na pista',
-  flagRedToBox = 'Bandeira vermelha recebida - vá para a sua vaga',
-  redFlagLineAgainDsq = 'Cruzou a linha de novo com a bandeira vermelha - não foi ao box',
-  redFlagPassDsq = 'Ultrapassagem com a bandeira vermelha (%s)',
-  redFlagSpeedSG = 'CODE-65: acima de %d km/h por mais de %d s com a bandeira vermelha', yellowPassSG = 'Ultrapassagem sob bandeira amarela (%s) não devolvida',
-  flagGiveBack = 'DEVOLVA A POSIÇÃO A %s - %d s', sgFlagGiven = 'Stop & go %d s - %s',
-  yellowGivenBack = 'Posição devolvida a %s',
-  flagCode80 = { VSC = 'VIRTUAL SAFETY CAR', SC = 'SAFETY CAR', ['CODE-80'] = 'AMARELA NA PISTA TODA' },
-  flagCode80Line = 'Pista toda - sem ultrapassar',
-  flagRaceControl = 'Racing Control',
-  flagYellow = 'BANDEIRA AMARELA',
-  flagYellowLine = 'Reduza - sem ultrapassar',
-  flagIncidentAhead = '%s %s a %.0f m',
-  flagIncident = { stopped = 'parado', broken = 'quebrado', oil = 'motor estourado' },
-  flagCausedBy = 'Incidente - %s',
-  flagWhite = 'BANDEIRA BRANCA',
-  flagWhiteLine = 'Carro lento à frente',
-  flagSlowAhead = '%s - %.0f m - %.0f km/h',
-  flagSlippery = 'PISTA ESCORREGADIA',
-  flagOil = 'Óleo na pista',
-  flagOilCar = '%s motor estourado',
-  flagWet = 'Pista molhada',
-  flagBlue = 'BANDEIRA AZUL',
-  flagBlueLine = 'Carro mais rápido atrás - deixe passar',
-  flagLastLap = 'ÚLTIMA VOLTA',
-  flagLastLapLine = 'Falta uma volta',
-  flagGreen = 'BANDEIRA VERDE',
-  flagGreenLine = 'Pista livre - corrida', flagStart = 'BANDEIRA VERDE - VAI VAI', flagStartLine = 'Largada lançada - corrida',
-  startTitle = 'LARGADA LANÇADA - VOLTA DE APRESENTAÇÃO', startLimits = 'Máx %d / mín %d km/h - sem ultrapassar',
-  startNoOvertake = 'Sem ultrapassar antes da bandeira verde', startRelease = 'Limite de velocidade desligado - largue quando o líder cruzar a linha',
-  startWaiting = 'A volta de apresentação vai começar', startNoPlace = 'Mantenha a posição',
-  startPlace = 'P%d - fique atrás de %s', startLeader = 'ninguém: você lidera', startBehindYou = ' - %s atrás de você',
-  osTitle = 'LARGADA', osLocked = 'Controles travados até %s', osLockedLight = 'luz %d',
-  gameDtTaken = 'Drive-through do jogo retirado - o Racing Control decide a penalidade',
-  startPassedBy = ' - %s passou você', startGiveBack = 'DEVOLVA A POSIÇÃO A %s', startPassAllowed = 'P%d - %s pode ser ultrapassado (KMR)',
-  flagRedLocked = 'Fique na sua vaga - controles travados até a relargada',
-  ssTitle = 'LARGADA PARADA', dirStart = 'LARGAR', fmTitle = 'VOLTA DE APRESENTAÇÃO', fmEnd = 'Fim da volta de apresentação - pare no seu lugar do grid',
-  fmToGrid = 'Grid P%d - pare no seu lugar', fmAligned = 'Grid P%d - no seu lugar, controles travados',
-  fmPitStart = 'Largada do pit lane, depois do pelotão', fmPlace = 'P%d - fique atrás de %s',
-  fmGiveBack = 'Devolva a posição a %s - %d s', fmGivenBack = 'Posição devolvida a %s',
-  fmMissedStart = 'Fora do lugar do grid quando as luzes da largada começaram',
-  srTitle = 'RELARGADA PARADA', srGrid = 'Grid P%d - controles travados', srGridFree = 'Grid P%d', srGridSoon = 'Grid em %d s - fique na sua vaga',
-  srSwap = 'Troca de piloto: saia do pit lane na verde', srLightsIn = 'Luzes em %d s', srLights = 'Luzes %d / %d',
-  srFree = 'Controles livres - não se mova antes de as luzes apagarem', srGo = 'BANDEIRA VERDE - VAI VAI',
-  srGoLine = 'Relargada parada', srCancelled = 'Relargada parada cancelada - bandeira vermelha',
-  srGridLocked = 'Fique no grid - controles travados', srNoNode = 'sem lugar de grid AC_START_%d nesta pista',
-  dirStanding = 'RELARGADA PARADA', dirStandingOff = 'CANCELAR RELARGADA',
-  flagRestart = 'Relargada P%d - atrás de %s', flagRestartFirst = 'Relargada P%d - primeiro carro',
-  flagRestartSwap = 'Relargada P%d - troca de piloto: fim do pelotão, atrás de %s',
-  appMissing = 'App do Racing Control não está rodando - instale pela página do evento - o jogo fecha em %d s',
-  cspOld = 'CSP 4130 exigido - instale pelo app das 12h - o jogo fecha em %d s',
-  teamSetup = 'Setup da sua equipe: %s - abra o menu de setup no box para aplicar ou recusar',
-  remotePitStart = 'Sua equipe iniciou a parada pelo Racing Room: pare na sua vaga',
-  realNameMissing = 'Cadastro incompleto - você não pode participar desta sessão - falta: %s - complete no app das 12h Curitiba',
-  realNameWhat = { cadastro = 'cadastro', steam = 'conta Steam confirmada', nome = 'nome verdadeiro' },
-  realNameOffline = 'Cadastro não confirmado - a base do evento não responde - espere por ela antes de a sessão começar',
-  redTowDeferred = 'Reboque sob bandeira vermelha: o tempo de reboque e reparo começa na relargada',
-  redNoLineSG = 'Entrada no box com a bandeira vermelha não recebida na linha', redFuelUnlocked = 'Combustível liberado pelo Racing Control',
-  menuFree = 'Menu do jogo livre por %d min - ajuste e prepare-se', menuFreeOff = 'Menu do jogo fechado de novo',
-  redFlagNoPitDsq = 'Fora do box na relargada depois da bandeira vermelha',
-  flagChequered = 'BANDEIRA QUADRICULADA', flagChequeredMine = 'Sessão encerrada para você', flagChequeredPos = 'P%d - %d voltas',
-  flagTimeOver = 'TEMPO DA SESSÃO ESGOTADO', flagRaceOver = 'PROVA ENCERRADA', flagFinishLap = 'Termine sua volta - a quadriculada está na linha',
-  flagChequeredLine = 'Sessão encerrada',
-  relPit = '  BOX',
-  hdr = { pos = 'P', classPos = 'CL', driver = 'PILOTO', class = 'CLASSE', laps = 'VLT', gap = 'DIF', int = 'INT', best = 'MELHOR', pit = 'BOX',
-    sr = 'SR', pts = 'PTS', time = 'TEMPO', sky = 'CÉU', air = 'AR', track = 'PISTA', avg = 'MÉDIA', lap = 'VOLTA', delta = 'DELTA', precip = 'PRECIP.' },
-  wxProb = '%d%%',
-  lapsShort = '%d V', lapTag = { cut = 'corte', pit = 'box', best = 'melhor' },
-  wxSky = { clear = 'Céu limpo', few = 'Poucas nuvens', scattered = 'Nuvens esparsas', broken = 'Nublado', overcast = 'Encoberto', thunder = 'Tempestade' },
-  wxPrecip = { lightDrizzle = 'garoa fraca', drizzle = 'garoa', lightRain = 'chuva fraca', rain = 'chuva', heavyRain = 'chuva forte', violentRain = 'chuva violenta' },
-  compass = { 'N', 'NNE', 'NE', 'ENE', 'L', 'ESE', 'SE', 'SSE', 'S', 'SSO', 'SO', 'OSO', 'O', 'ONO', 'NO', 'NNO' },
-  wxBulletin = { now = '%s agora: %s, ar %d°C, pista %d°C, vento %s %s.', rain = 'Precipitação esperada a partir de %s (%s), %d%% de chance, até %.2f mm/h.',
-    dry = 'Sem precipitação esperada.', by = 'Até %s: %s%s, ar %d°C, pista %d°C; vento %s %s.', falling = 'Temperatura da pista caindo %d°C: menos aderência esperada.',
-    rising = 'Temperatura da pista subindo %d°C.' },
-  wxWindFmt = '%.0f km/h %03.0f°', wxRainFmt = '%.0f%% - molhada %.0f%%', wxGripFmt = 'aderência %.0f%%',
-  evStintFmt = 'mín %d - máx %d min', evRatingFmt = 'DSQ em %s', posClassFmt = ' - classe P%d %s',
-  tyreLapsFmt = '%d voltas%s', trackGripFmt = '%s - aderência %d%%', trackWet = 'MOLHADA', trackDry = 'SECA',
-  edPitTag = 'BOX',
-  ctlGroup = { elec = 'ELETRÔNICA', engine = 'MOTOR - FREIOS', hybrid = 'HÍBRIDO' },
-  ctlBox = { aero = 'AERO', drs = 'DRS', open = 'ABERTO', closed = 'FECHADO', pit = 'BOX', limiter = 'LIMITADOR', on = 'LIG', off = 'DESL',
-    recov = 'RECUP.', batt = 'BATERIA', motor = 'MOTOR' },
-  dirNoData = 'sem dados', kmrEvNoAnswer = 'sem resposta',
-  dirChip = { dt = 'DT', kick = 'KICK', ban60 = 'BAN 60', dsq = 'DSQ' },
-  dirAct = { money = 'zerar pontos', stats = 'zerar estatísticas', ban = 'banir', unban = 'desbanir', ballast = 'lastro kg', restrictor = 'restritor',
-    dt = 'DT %s', cancelDt = 'cancelar DT %s', relaxSg = 'retirar S&G %s', kick = 'kick %s', ban60 = 'ban 60 min %s', toPit = 'ao box %s',
-    dsq = 'DSQ %s', relaxDsq = 'retirar DSQ %s', fuel = 'combustível liberado %s', menu = 'menu livre %s' },
-  wheelCode = { FL = 'DE', FR = 'DD', RL = 'TE', RR = 'TD', F = 'D', R = 'T' },
-  wheelNames = { [0] = 'dianteira esquerda', 'dianteira direita', 'traseira esquerda', 'traseira direita' }, bodySides = { [0] = 'dianteira', 'traseira', 'esquerda', 'direita' },
-  side = { front = 'F', back = 'T', left = 'E', right = 'D' },
-  dtLine = '%s - Drive-through - %s', holdTowRepair = 'Reboque %s + Reparo %s', holdRepair = 'Reparo %s', dirDsqNotice = 'Desclassificado - %s',
-  dsqWhy = { repairNotDone = 'Reparo obrigatório não feito', sgInterrupted = 'Stop & go interrompido', swapPending = 'Troca de piloto com penalidades pendentes',
-    pitClosed = 'Saiu do pit lane com o pit fechado', slowdown = '%s - slowdown não cumprido' },
-  cmdHelp = {
-    rc = { title = 'RACING CONTROL', how = 'Chat do KMR: /kmr admin_say RC ... (os botões desta janela) - live timing do ACSM: Chat ao piloto ou Broadcast Chat', rows = {
-      'limpa a lista: drive-throughs, stop & go e slowdowns',
-      'retira o primeiro item da lista',
-      'retira o stop & go (botão SEM S&G)',
-      'cancela o slowdown em andamento',
-      'encerra a retenção (ou reboque / reparo) e libera os controles',
-      'retira o reparo obrigatório (bandeira preta com disco laranja)',
-      'cancela a desclassificação e libera os controles (botão SEM DSQ)',
-      'libera os controles e encerra a retenção (lista e DSQ mantidos)',
-      'drive-through em até as voltas (0 = nesta volta)',
-      'retenção: o carro travado na vaga',
-      'o carro ao box, com o dano mantido (botão AO BOX)',
-      'desclassificação pelo Racing Control (botão DSQ)',
-      'trava os controles (até 86400 s)',
-      'combustível liberado sob bandeira vermelha (botão COMBUSTÍVEL)',
-      'o carro pede de novo os números do KMR',
-      'o menu do jogo de volta para esse piloto (5 min; até 60; 0 encerra) (botão MENU 5 MIN)',
-      'bandeira vermelha para todos (botão BANDEIRA VERMELHA)',
-      'fim da bandeira vermelha: relargada lançada sob VSC',
-      'relargada parada, com a bandeira vermelha (botão RELARGADA PARADA)',
-      'cancela a relargada parada antes da verde',
-      'pista verde na hora: bandeira vermelha abaixada, CODE-80 encerrado (botão VERDE)',
-      'luzes de saída do box e de largada da pista em vermelho (botão LUZES VERMELHAS)',
-      'luzes de saída do box e de largada da pista em verde (botão LUZES VERDES)',
-      'luzes da pista de volta ao estado da pista (botão LUZES AUTO)' } },
-    kmr = { title = 'KMR', how = 'Chat do KMR: /kmr login <senha> uma vez, depois /kmr <comando> - ou o console do KMR' },
-    server = { title = 'SERVIDOR DO AC (ACSM)', how = 'Chat: /admin <senha> uma vez, depois o comando - ou /kmr admin_send_command /<comando> - ou ACSM Admin Command', rows = {
-      'entra como admin do servidor (chat)',
-      'lista dos comandos do servidor',
-      'vai para a próxima sessão',
-      'reinicia a sessão atual',
-      'IDs dos carros com os nomes dos pilotos',
-      'kick do piloto pelo nome',
-      'kick do piloto pelo ID do carro',
-      'bane o piloto pelo nome',
-      'bane o piloto pelo ID do carro',
-      'lastro no carro (botão LASTRO)',
-      'restritor no carro (botão RESTRITOR)' } },
-    player = { title = 'JOGADORES NO KMR', how = 'Qualquer piloto no chat, sem barra: kmr <comando>' },
-  },
-}
-Lang.set(tostring(ac.storage['rc.lang'] or '') == 'en' and 'en' or 'pt')
 local config = (function()
   local OLD = {
     penaltyMode = { 'control', 'mode', nil, 'CSP' }, announce = { 'control', 'announce', nil, 0 },
@@ -1250,9 +735,9 @@ local config = (function()
     raceSlowdownUnpaidPenalty = { 'slowdown', 'raceUnpaid', nil, 'DT' },
     cutSpinAngle = { 'slowdown', 'spinAngle', nil, 90 },
   }
-  local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
+  local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, staffPits = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
     pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
-  local FIELDS = { kmr = { points = 1, ratingDsq = 1 }, base = { realName = 1, offline = 1 }, roles = { watch = 1 },
+  local FIELDS = { kmr = { points = 1, ratingDsq = 1 }, base = { realName = 1, offline = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
     stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
   for _, m in pairs(OLD) do
     if THEMES[m[1]] then FIELDS[m[1]] = FIELDS[m[1]] or {}; FIELDS[m[1]][m[2]] = 1 end
@@ -1459,6 +944,8 @@ local config = (function()
       rule(K('raceSlowdownUnpaidPenalty'), 0)),
   }
   c.staffSteamIDs = tostring(K('staffSteamIDs') or '')
+  local staffPits = theme('staffPits') or {}
+  c.staffPits = { org = math.max(math.floor(tonumber(staffPits.org) or 0), 0), tv = math.max(math.floor(tonumber(staffPits.tv) or 0), 0) }
   c.broadcastSteamIDs = tostring(K('broadcastSteamIDs') or '')
   c.themesOnServer = {}
   for k in pairs(THEMES) do if theme(k) then c.themesOnServer[#c.themesOnServer + 1] = k end end
@@ -1480,6 +967,7 @@ local config = (function()
     table.sort(lines)
     lines[#lines + 1] = string.format('kmr: points=%s ratingDsq=%s', tostring(kmrPoints.limit), kmrRating.on and tostring(kmrRating.dsqAt) or '-')
     lines[#lines + 1] = 'base: realName=' .. (c.realName and 1 or 0) .. ' offline=' .. c.realNameOffline
+    lines[#lines + 1] = string.format('staffPits: org=%d tv=%d', c.staffPits.org, c.staffPits.tv)
     return lines
   end
   return c
@@ -1660,11 +1148,21 @@ local function leaderboardLaps()
 end
 local function serverTimeMs() return sim.currentSessionTime or 0 end
 local CarRead = {}
-CarRead.staff = {}
+CarRead.staffLogged = {}
 function CarRead.isStaff(i)
-  local t = CarRead.staff[i]
-  if i == 0 then return t == true end
-  return t ~= nil and state.ui.clock <= t
+  local slotOf = ac.getCar.serverSlot
+  if not slotOf then return false end
+  for what, n in pairs(config.staffPits) do
+    local c = n > 0 and slotOf(n - 1) or nil
+    if c and c.index == i and (i == 0 or c.isConnected) then
+      if not CarRead.staffLogged[i] then
+        CarRead.staffLogged[i] = true
+        ac.log(string.format('race-control: car %d (position %d of the entry list, %s): out of the race', i, n, what))
+      end
+      return true
+    end
+  end
+  return false
 end
 function CarRead.num(v) return tonumber(v) or 0 end
 function CarRead.flagOn(v)
@@ -1929,24 +1427,42 @@ function Record.load(list)
   if rec then return rec.body, rec.seq, 'storage' end
   return nil
 end
-local OnlineQueue = { items = {}, lastT = -1e9 }
+local OnlineQueue = { items = {}, lastT = -1e9, chatT = -1e9 }
 do
-  local GAP = 0.2
+  local GAP_ONLINE = 0.25
+  local GAP_CHAT = 1
   function OnlineQueue.push(send, msg, target)
     local t, n = state.chat.stamp()
     OnlineQueue.items[#OnlineQueue.items + 1] = { send = send, msg = msg, target = target, t = t, n = n }
   end
+  local function oldest(list)
+    local best, at = nil, nil
+    for i, x in ipairs(list) do
+      if not best or x.t < best.t or (x.t == best.t and x.n < best.n) then best, at = x, i end
+    end
+    return best, at
+  end
   function OnlineQueue.update()
     local now = os.preciseClock()
-    if now - OnlineQueue.lastT < GAP then return end
-    local e, c = OnlineQueue.items[1], state.chat.queue[1]
-    if not e and not c then return end
-    local chat = c ~= nil and (e == nil or c.t < e.t or (c.t == e.t and c.n < e.n))
-    OnlineQueue.lastT = now
-    if chat then
-      if ac.sendChatMessage(c.text) then table.remove(state.chat.queue, 1) end
-    elseif e.send(e.msg, false, e.target) then
-      table.remove(OnlineQueue.items, 1)
+    if now - OnlineQueue.lastT >= GAP_ONLINE then
+      local e, i = oldest(OnlineQueue.items)
+      if e then
+        OnlineQueue.lastT = now
+        table.remove(OnlineQueue.items, i)
+        if not e.send(e.msg, false, e.target) then
+          ac.log(string.format('race-control: online message refused by the game, left out (stamp %.3f #%d)', e.t, e.n))
+        end
+      end
+    end
+    if now - OnlineQueue.chatT >= GAP_CHAT then
+      local c, j = oldest(state.chat.queue)
+      if c then
+        OnlineQueue.chatT = now
+        table.remove(state.chat.queue, j)
+        if not ac.sendChatMessage(c.text) then
+          ac.log('race-control: chat line refused by the game, left out: ' .. Lang.letters.head(c.text, 90))
+        end
+      end
     end
   end
 end
@@ -2603,59 +2119,6 @@ do
       F.list, F.race, F.session = list, race, session
     end)
   end
-  local LANG_GAP = 120
-  B.lang = { nextT = 0, busy = false }
-  function B.langUpdate()
-    local L = B.lang
-    if not on() or L.busy or state.ui.clock < L.nextT then return end
-    L.busy, L.nextT = true, state.ui.clock + LANG_GAP
-    WebQueue.request('GET', config.baseUrl .. '/v1/lang?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
-      L.busy = false
-      if err or not res or tonumber(res.status) ~= 200 then return end
-      local code = tostring(res.body or ''):match('^(%a%a)')
-      if (code == 'pt' or code == 'en') and code ~= Lang.code then
-        Lang.set(code)
-        ac.storage['rc.lang'] = code
-        ac.log('race-control: language ' .. code .. ' (12h app)')
-      end
-    end)
-  end
-  local ROLE_GAP, ROLE_SEND, ROLE_KEEP = 60, 10, 35
-  B.role = { nextT = 0, busy = false, sentT = -1e9, role = nil }
-  local sendRole = ac.OnlineEvent({
-    ac.StructItem.key('amxracing.race-control.staff'),
-    staffRole = ac.StructItem.uint8(),
-    staffSpare = ac.StructItem.uint32(),
-  }, function(sender, msg)
-    if not sender or sender.index == 0 then return end
-    if (tonumber(msg.staffRole) or 0) > 0 then
-      if not CarRead.staff[sender.index] then ac.log('race-control: car ' .. sender.index .. ' of the broadcast or the organization: out of the race') end
-      CarRead.staff[sender.index] = state.ui.clock + ROLE_KEEP
-    else
-      CarRead.staff[sender.index] = nil
-    end
-  end)
-  function B.roleUpdate()
-    local R = B.role
-    if R.role and state.ui.clock - R.sentT >= ROLE_SEND then
-      R.sentT = state.ui.clock
-      OnlineQueue.push(sendRole, { staffRole = R.role == 'tv' and 1 or 2 }, nil)
-    end
-    if not on() or R.busy or state.ui.clock < R.nextT then return end
-    R.busy, R.nextT = true, state.ui.clock + ROLE_GAP
-    WebQueue.request('GET', config.baseUrl .. '/v1/role?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
-      R.busy = false
-      if err or not res or tonumber(res.status) ~= 200 then return end
-      local role = tostring(res.body or ''):match('^OK|(%a+)')
-      role = (role == 'tv' or role == 'org') and role or nil
-      if role ~= R.role then
-        ac.log('race-control: role of this driver in the event: ' .. tostring(role or 'none') .. (role and ' (out of the race)' or ''))
-        if R.role and not role then OnlineQueue.push(sendRole, { staffRole = 0 }, nil) end
-        R.role, R.sentT = role, -1e9
-      end
-      CarRead.staff[0] = role ~= nil or nil
-    end)
-  end
   local RR_GAP = 5
   B.rr = { state = 'unknown', nextT = 0, busy = false, garage = '', area = '', screen = false, game = false, logged = nil, err = '',
     source = tostring(ac.storage['rc.share.source'] or 'game'), layout = tostring(ac.storage['rc.share.layout'] or 'single'),
@@ -3032,6 +2495,25 @@ do
       ac.log('race-control: cockpit: values saved by the app for the car')
     end
     AppLink.cockpitState = st
+  end)
+  local LANG_EVENT, LANG_STORE, LANG_OK = 'amxracing.race-control.lang', '.amxracing.race-control.lang', 'amxracing.race-control.lang.ok'
+  AppLink.lang = nil
+  ac.onSharedEvent(LANG_EVENT, function(data)
+    local code = tostring(data or '')
+    if code ~= 'pt' and code ~= 'en' then return end
+    if not AppLink.lang then
+      local n = 0
+      if code == 'pt' then
+        n = Lang.apply(ac.load and ac.load(LANG_STORE))
+        if n == 0 then
+          ac.log('race-control: language pt told by the app, its texts not in the shared storage yet')
+          return
+        end
+      end
+      AppLink.lang = code
+      ac.log(string.format('race-control: language %s from the app of the game (%d texts)', code, n))
+    end
+    ac.broadcastSharedEvent(LANG_OK, AppLink.lang)
   end)
   ac.onSharedEvent(APP_ANSWER, function(data, senderName, senderType, senderID)
     AppLink.alive = true
@@ -4094,12 +3576,14 @@ ac.onChatMessage(function(message, senderCarIndex)
   if command then
     ac.log(string.format('race-control: command received (sender %s): %s [raw: %s]', tostring(senderCarIndex), command,
       message))
-    state.rcCommands[#state.rcCommands + 1] = command
+    local t, n = state.chat.stamp()
+    state.rcCommands[#state.rcCommands + 1] = { text = command, t = t, n = n }
     return true
   end
   local myName = tostring(ac.getDriverName(0) or '')
   if server and myName ~= '' and message:find(myName, 1, true) and hasAny(low, DICT.kmr.dtCancelled) then
-    state.kmrMessages[#state.kmrMessages + 1] = { text = message, sender = senderCarIndex, cancel = true }
+    local t, n = state.chat.stamp()
+    state.kmrMessages[#state.kmrMessages + 1] = { text = message, sender = senderCarIndex, cancel = true, t = t, n = n }
     Audit.add('KMR', message, true, 'rc')
     return true
   end
@@ -4108,7 +3592,8 @@ ac.onChatMessage(function(message, senderCarIndex)
     local text = message
     if message:sub(1, #prefix) == prefix then text = message:sub(#prefix + 1):gsub('^%s+', '') end
     showNotice(TEXTS.kmrTitle, text, nil, SERVER_NOTICE_SECONDS)
-    state.kmrMessages[#state.kmrMessages + 1] = { text = text, sender = senderCarIndex }
+    local t, n = state.chat.stamp()
+    state.kmrMessages[#state.kmrMessages + 1] = { text = text, sender = senderCarIndex, t = t, n = n }
     Audit.add('KMR', text)
     return true
   end
@@ -6300,6 +5785,7 @@ do
     local msgs = state.kmrMessages
     if #msgs == 0 then return end
     state.kmrMessages = {}
+    table.sort(msgs, function(a, b) return (a.t or 0) < (b.t or 0) or ((a.t or 0) == (b.t or 0) and (a.n or 0) < (b.n or 0)) end)
     for _, m in ipairs(msgs) do
       local text = m.text
       local via = ' - chat sender ' .. tostring(m.sender)
@@ -6433,7 +5919,9 @@ do
     local cmds = state.rcCommands
     if #cmds == 0 then return end
     state.rcCommands = {}
-    for _, line in ipairs(cmds) do
+    table.sort(cmds, function(a, b) return a.t < b.t or (a.t == b.t and a.n < b.n) end)
+    for _, e in ipairs(cmds) do
+      local line = e.text
       local body, reason = line, ''
       local cut = line:find(' - ', 1, true)
       if cut then body, reason = line:sub(1, cut - 1), line:sub(cut + 3):gsub('^%s+', ''):gsub('%s+$', '') end
@@ -6544,7 +6032,7 @@ local function onSlowdownUnpaid(cat, endOfLap, inPit)
   else
     Rules.slowdownMidLap(cat)
   end
-  queueChat(Lang.PT.cut.DT)
+  queueChat(TEXTS.cut.DT)
   ac.log(string.format('race-control: slowdown %s unpaid, end of lap=%s', cat, tostring(endOfLap)))
 end
 local SLOWDOWN_PULSE_MAX_HZ = 6
@@ -8179,7 +7667,7 @@ local function onPitViolation(car, r)
   if r.penalty ~= 'DSQ' then return end
   if config.mode == 'CSP' then
     carDsq(2, TEXTS.dsqWhy.pitClosed)
-    queueChat(Lang.PT.pit.DSQ)
+    queueChat(TEXTS.pit.DSQ)
   elseif config.isRaceControl then
     applyKMR(car, r)
   end
@@ -8337,7 +7825,7 @@ local function updateCutChecks()
         ac.log(string.format('race-control: cut %s gained: %.3f s, limit %.3f s', zone.category,
           elapsed / 1000, limit / 1000))
         startSlowdown(zone, cc.rule, cc.lapCount)
-        queueChat(Lang.PT.cut.SLOWDOWN)
+        queueChat(TEXTS.cut.SLOWDOWN)
       end
     end
   end
@@ -8367,7 +7855,7 @@ local function checkCutZone(zoneIndex, zone, lapCount)
       else
         if not withRef then
           startSlowdown(zone, r, lapCount)
-          queueChat(Lang.PT.cut.SLOWDOWN)
+          queueChat(TEXTS.cut.SLOWDOWN)
         end
         state.cutChecks[zoneIndex] = { zone = zone, rule = r, lapCount = lapCount, t0 = pass and pass.t0 or sim.time,
           ref = withRef, given = not withRef, margin = 0, spun = false }
@@ -8375,10 +7863,10 @@ local function checkCutZone(zoneIndex, zone, lapCount)
     elseif r.penalty == 'DT' then
       rcLog('Drive-through', TEXTS.reason[zone.category])
       if car.isInPitlane then Rules.slowdownEndOfLap(zone.category) else Rules.slowdownMidLap(zone.category) end
-      queueChat(Lang.PT.cut.DT)
+      queueChat(TEXTS.cut.DT)
     elseif r.penalty == 'DSQ' then
       carDsq(1, TEXTS.reason[zone.category])
-      queueChat(Lang.PT.cut.DSQ)
+      queueChat(TEXTS.cut.DSQ)
     end
     ac.log(string.format('race-control: cut %s spline=%.4f wheelsOut=%d penalty=%s',
       zone.category, car.splinePosition, car.wheelsOutside, r.penalty))
@@ -8596,21 +8084,26 @@ do
     return #state.list.items > 0 or next(state.slowdowns) ~= nil or state.code80 ~= nil or state.hold ~= nil
       or state.dtDsqActive or state.pitDsqActive
   end
-  local INTRO_CYCLE = {
-    [TEXTS.cellPit] = { { string.format(TEXTS.pitOpen, '00:00'), 'yellow' }, { TEXTS.pitDone, 'dim' },
-      { TEXTS.pitMissed, 'red' } },
-    [TEXTS.cellSwap] = { { string.format(TEXTS.swapCount, 0, 1), 'dim' }, { string.format(TEXTS.swapCount, 1, 1), 'green' } },
-    [TEXTS.cellTrack] = { { TEXTS.trackYellow, 'yellow' }, { TEXTS.trackBlue, 'blue' }, { 'VSC', 'yellow' },
-      { 'SC', 'yellow' }, { 'CODE-80', 'yellow' } },
-    [TEXTS.cellPenalties] = { { 'SD1 DT0', 'yellow' }, { 'SD1 DT0 · PSE DT1 +1', 'yellow' },{ TEXTS.penHold, 'red' }, { TEXTS.penDsq, 'red' } },
-  }
+  local INTRO_CYCLE, INTRO_MESSAGES
+  local function introTexts()
+    INTRO_CYCLE = {
+      [TEXTS.cellPit] = { { string.format(TEXTS.pitOpen, '00:00'), 'yellow' }, { TEXTS.pitDone, 'dim' },
+        { TEXTS.pitMissed, 'red' } },
+      [TEXTS.cellSwap] = { { string.format(TEXTS.swapCount, 0, 1), 'dim' }, { string.format(TEXTS.swapCount, 1, 1), 'green' } },
+      [TEXTS.cellTrack] = { { TEXTS.trackYellow, 'yellow' }, { TEXTS.trackBlue, 'blue' }, { 'VSC', 'yellow' },
+        { 'SC', 'yellow' }, { 'CODE-80', 'yellow' } },
+      [TEXTS.cellPenalties] = { { 'SD1 DT0', 'yellow' }, { 'SD1 DT0 · PSE DT1 +1', 'yellow' },{ TEXTS.penHold, 'red' }, { TEXTS.penDsq, 'red' } },
+    }
+    INTRO_MESSAGES = {
+      { string.format(TEXTS.dtLine, 'DT0', TEXTS.reason.SD1), 'yellow' },
+      { string.format(TEXTS.hold, mmss(45), TEXTS.holdTwoDT), 'red' },
+      { TEXTS.code80, 'yellow' },
+      { TEXTS.pitOpenMsg, 'yellow' },
+    }
+  end
+  introTexts()
+  Lang.hooks[#Lang.hooks + 1] = introTexts
   local INTRO_FRAMES = { 'base', 'yellow', 'blue', 'red', 'green' }
-  local INTRO_MESSAGES = {
-    { string.format(TEXTS.dtLine, 'DT0', TEXTS.reason.SD1), 'yellow' },
-    { string.format(TEXTS.hold, mmss(45), TEXTS.holdTwoDT), 'red' },
-    { TEXTS.code80, 'yellow' },
-    { TEXTS.pitOpenMsg, 'yellow' },
-  }
   local function cycled(list, t)
     return list[math.floor(t / INTRO_CYCLE_STEP) % #list + 1]
   end
@@ -15083,8 +14576,6 @@ function script.update(dt)
   RecordSync.base.update()
   RecordSync.base.bestUpdate()
   RecordSync.base.forecastUpdate()
-  RecordSync.base.langUpdate()
-  RecordSync.base.roleUpdate()
   RecordSync.base.rrUpdate()
   RecordSync.base.stratUpdate()
   RecordSync.base.planUpdate()
