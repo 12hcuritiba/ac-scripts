@@ -9455,19 +9455,28 @@ do
   local function grow(t, g, p1, p2)
     local r = t[g]
     if r then
-      r.min = vec2(math.min(r.min.x, p1.x), math.min(r.min.y, p1.y))
-      r.max = vec2(math.max(r.max.x, p2.x), math.max(r.max.y, p2.y))
+      r.min:set(math.min(r.min.x, p1.x), math.min(r.min.y, p1.y))
+      r.max:set(math.max(r.max.x, p2.x), math.max(r.max.y, p2.y))
     else
       t[g] = { min = vec2(p1.x, p1.y), max = vec2(p2.x, p2.y) }
     end
+  end
+  local zoneKept = { at = vec2(0, 0) }
+  local function growZone(g, p1, p2)
+    if zones[g] then return grow(zones, g, p1, p2) end
+    local z = zoneKept[g] or { min = vec2(0, 0), max = vec2(0, 0) }
+    zoneKept[g] = z
+    z.min:set(p1.x, p1.y)
+    z.max:set(p2.x, p2.y)
+    zones[g] = z
   end
   function Drag.hit(p1, p2)
     local g = Drag.group
     if not g then return end
     grow(rects, g, p1, p2)
-    grow(zones, g, p1, p2)
+    growZone(g, p1, p2)
   end
-  function Drag.zone(group, p1, p2) grow(zones, group, p1, p2) end
+  function Drag.zone(group, p1, p2) growZone(group, p1, p2) end
   local function icon(id, x, y, size, color, action)
     local p1, p2 = vec2(x, y), vec2(x + size, y + size)
     ui.drawRectFilled(vec2(p1.x - 1, p1.y - 1), vec2(p2.x + 1, p2.y + 1), rgbm(0.04, 0.04, 0.05, 0.85), 2)
@@ -9502,7 +9511,7 @@ do
     if group == 'panel' then row[#row + 1] = { ui.Icons.Reset, ICON_COLOR, 'reset' } end
     local y = p1.y - size - gap
     local x = p2.x - #row * size - (#row - 1) * gap
-    grow(zones, group, vec2(x, y), p2)
+    growZone(group, zoneKept.at:set(x, y), p2)
     if not hover[group] then return end
     for i, it in ipairs(row) do icon(it[1], x + (i - 1) * (size + gap), y, size, it[2], it[3]) end
   end
@@ -9687,6 +9696,7 @@ function Desktop.fontCheck()
     end
   end
   if Desktop.text.wanted then Desktop.textApply(Desktop.text.wanted) end
+  if Desktop.widthReset then Desktop.widthReset() end
 end
 function Desktop.textApply(id, min)
   for _, f in ipairs(Desktop.text.sets) do
@@ -9696,6 +9706,7 @@ function Desktop.textApply(id, min)
     end
   end
   if min then Desktop.text.min = min end
+  if Desktop.widthReset then Desktop.widthReset() end
   if not Desktop.text.checked then return end
   ac.storage['rc.font'] = Desktop.text.id
   ac.storage['rc.textMin'] = tostring(Desktop.text.min)
@@ -9721,18 +9732,37 @@ local LIFT_LIMIT_POS = 0.55
 local LIFT_SCALE = 1.8
 local LIFT_CARET_HZ = 2
 local function px(v) return math.floor(v + 0.5) end
+local TMP = { text = vec2(0, 0), a = vec2(0, 0), b = vec2(0, 0) }
 local function drawText(text, font, size, pos, color)
   size = math.max(size, Desktop.text.minPx)
   ui.pushDWriteFont(font)
-  ui.dwriteDrawText(text, size, vec2(px(pos.x), px(pos.y)), color)
+  ui.dwriteDrawText(text, size, TMP.text:set(px(pos.x), px(pos.y)), color)
   ui.popDWriteFont()
 end
+do
+  local WIDTH_MAX = 2000
+  local cache, count = {}, 0
+  function Desktop.widthReset() cache, count = {}, 0 end
+  function TMP.width(text, font, size)
+    local byFont = cache[font]
+    local bySize = byFont and byFont[size]
+    local w = bySize and bySize[text]
+    if w then return w end
+    ui.pushDWriteFont(font)
+    w = ui.measureDWriteText(text, size).x
+    ui.popDWriteFont()
+    if count >= WIDTH_MAX then cache, count = {}, 0 end
+    byFont = cache[font] or {}
+    cache[font] = byFont
+    bySize = byFont[size] or {}
+    byFont[size] = bySize
+    bySize[text] = w
+    count = count + 1
+    return w
+  end
+end
 local function textWidth(text, font, size)
-  size = math.max(size, Desktop.text.minPx)
-  ui.pushDWriteFont(font)
-  local tw = ui.measureDWriteText(text, size).x
-  ui.popDWriteFont()
-  return tw
+  return TMP.width(text, font, math.max(size, Desktop.text.minPx))
 end
 local FIT_MAX = 200
 local fitCache, fitCount = {}, 0
@@ -9772,19 +9802,38 @@ function Desktop.setOpacity(v)
   Desktop.opacity = math.min(math.max(v, 0.2), 1)
   ac.storage['rc.opacity'] = string.format('%.2f', Desktop.opacity)
 end
+do
+  local byF, nF = {}, 0
+  local CLEAR = rgbm(1, 1, 1, 0)
+  function TMP.panelColors(f, border)
+    local c = byF[f]
+    if not c then
+      if nF >= 64 then byF, nF = {}, 0 end
+      c = { shadow = rgbm(0, 0, 0, 0.35 * f), fill = rgbm(0.04, 0.04, 0.05, 0.9 * f), light = rgbm(1, 1, 1, 0.06 * f), clear = CLEAR, borders = {} }
+      byF[f], nF = c, nF + 1
+    end
+    if f >= 1 then return c, border end
+    local b = c.borders[border]
+    if not b then
+      b = rgbm(border.r, border.g, border.b, (border.mult or 1) * f)
+      c.borders[border] = b
+    end
+    return c, b
+  end
+end
 local function drawPanel(p1, p2, border, s, alpha)
   Drag.hit(p1, p2)
   local a = alpha or 1
   local f = a * Desktop.opacity
   local r = px(8 * s)
   local o = px(3 * s)
-  ui.drawRectFilled(vec2(p1.x + o, p1.y + o), vec2(p2.x + o, p2.y + o), rgbm(0, 0, 0, 0.35 * f), r)
-  ui.drawRectFilled(p1, p2, rgbm(0.04, 0.04, 0.05, 0.9 * f), r)
+  local C
+  C, border = TMP.panelColors(f, border)
+  ui.drawRectFilled(TMP.a:set(p1.x + o, p1.y + o), TMP.b:set(p2.x + o, p2.y + o), C.shadow, r)
+  ui.drawRectFilled(p1, p2, C.fill, r)
   local i = px(4 * s)
-  ui.drawRectFilledMultiColor(vec2(p1.x + i, p1.y + i), vec2(p2.x - i, p2.y - i),
-    rgbm(1, 1, 1, 0.06 * f), rgbm(1, 1, 1, 0.06 * f), rgbm(1, 1, 1, 0), rgbm(1, 1, 1, 0))
-  if f < 1 then border = rgbm(border.r, border.g, border.b, (border.mult or 1) * f) end
-  ui.drawRectFilled(vec2(p1.x + px(3 * s), p1.y + px(8 * s)), vec2(p1.x + px(7 * s), p2.y - px(8 * s)), border,
+  ui.drawRectFilledMultiColor(TMP.a:set(p1.x + i, p1.y + i), TMP.b:set(p2.x - i, p2.y - i), C.light, C.light, C.clear, C.clear)
+  ui.drawRectFilled(TMP.a:set(p1.x + px(3 * s), p1.y + px(8 * s)), TMP.b:set(p1.x + px(7 * s), p2.y - px(8 * s)), border,
     px(2 * s))
   ui.drawRect(p1, p2, border, r, nil, 1.5 * s)
 end
@@ -9869,14 +9918,16 @@ local function drawFlagBox(p1, p2, s, border, disc, title, titleColor, line1, li
   drawText(line1 or '', FONT_TEXT, 12 * s, vec2(tx, p1.y + 23 * s), COLOR_TITLE)
   drawText(line2 or '', FONT_MONO, 12 * s, vec2(tx, p1.y + 38 * s), line2Color or COLOR_TEXT)
 end
+TMP.sepColor = rgbm(1, 1, 1, 0.12)
+TMP.dark, TMP.edge30, TMP.edge35 = rgbm(0.07, 0.07, 0.07, 1), rgbm(1, 1, 1, 0.3), rgbm(1, 1, 1, 0.35)
 local function drawSeparator(p1, p2, y, s)
-  ui.drawSimpleLine(vec2(p1.x + px(16 * s), px(y)), vec2(p2.x - px(16 * s), px(y)), rgbm(1, 1, 1, 0.12), 1)
+  ui.drawSimpleLine(TMP.a:set(p1.x + px(16 * s), px(y)), TMP.b:set(p2.x - px(16 * s), px(y)), TMP.sepColor, 1)
 end
 local function drawTextRight(text, font, size, xRight, y, color)
   size = math.max(size, Desktop.text.minPx)
+  local tw = TMP.width(text, font, size)
   ui.pushDWriteFont(font)
-  local tw = ui.measureDWriteText(text, size).x
-  ui.dwriteDrawText(text, size, vec2(px(xRight - tw), px(y)), color)
+  ui.dwriteDrawText(text, size, TMP.text:set(px(xRight - tw), px(y)), color)
   ui.popDWriteFont()
 end
 local drawPitBox
@@ -9984,10 +10035,10 @@ do
     local p2 = vec2(p1.x + bw, p1.y + bh)
     drawPanel(p1, p2, Desktop.focus == 'pitbox' and BORDER_YELLOW or BORDER_GREEN, s)
     local gap = (boxH - BOX.head - (math.max(#rows, stopN) + 1) * ROW_H) / 4 * s
-    drawText(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s, vec2(p1.x + BOX.side * s, p1.y + 4 * s), strategy and COLOR_DIM or COLOR_TITLE)
+    drawText(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + BOX.side * s, p1.y + 4 * s), strategy and COLOR_DIM or COLOR_TITLE)
     if presets > 1 then
       local tx = p1.x + BOX.side * s + textWidth(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s) + 8 * s
-      drawText('|  ' .. TEXTS.pitStrategyTab, FONT_TITLE, 12 * s, vec2(tx, p1.y + 4 * s), strategy and COLOR_SEL or COLOR_DIM)
+      drawText('|  ' .. TEXTS.pitStrategyTab, FONT_TITLE, 12 * s, TMP.a:set(tx, p1.y + 4 * s), strategy and COLOR_SEL or COLOR_DIM)
     end
     local total = string.format(TEXTS.pitBoxTotal, mmss(p.total))
     drawTextRight(total, FONT_MONO, 11 * s, p2.x - BOX.side * s, p1.y + 5 * s, COLOR_TITLE)
@@ -10015,7 +10066,7 @@ do
       local ly, dash, gapD = y + fs + 2 * s, 4 * s, 3 * s
       local x = x1
       while x < x2 do
-        ui.drawSimpleLine(vec2(x, ly), vec2(math.min(x + dash, x2), ly), COLOR_SEL, 1)
+        ui.drawSimpleLine(TMP.a:set(x, ly), TMP.b:set(math.min(x + dash, x2), ly), COLOR_SEL, 1)
         x = x + dash + gapD
       end
     end
@@ -10023,10 +10074,10 @@ do
     for i, r in ipairs(rows) do
       local y = rowsTop + (i - 1) * ROW_H * s
       local sel = not sv and r[1] ~= nil and r[1] == chosen
-      drawText(r[2], FONT_TEXT, fs, vec2(p1.x + BOX.side * s, y), (r[1] and not r.off) and COLOR_TITLE or COLOR_OFF)
+      drawText(r[2], FONT_TEXT, fs, TMP.a:set(p1.x + BOX.side * s, y), (r[1] and not r.off) and COLOR_TITLE or COLOR_OFF)
       if r[1] == 'tyres' then
         for wIdx = 0, 3 do
-          drawText(TEXTS.wheelCode[PitBox.WHEELS[wIdx]], FONT_MONO, fs, vec2(vx + wIdx * 26 * s, y),
+          drawText(TEXTS.wheelCode[PitBox.WHEELS[wIdx]], FONT_MONO, fs, TMP.a:set(vx + wIdx * 26 * s, y),
             chips[wIdx] and (sel and COLOR_SEL or COLOR_SWAP) or COLOR_OFF)
         end
         if sel then cursorLine(vx, vx + 3 * 26 * s + textWidth(TEXTS.wheelCode[PitBox.WHEELS[3]], FONT_MONO, fs), y) end
@@ -10034,10 +10085,10 @@ do
         local value = p.repair[r[1]] and TEXTS.pitRepairYes
           or (PitBox.damaged(car, r[1]) and (PitBox.repairLocked() and TEXTS.pitRepairLocked or TEXTS.pitRepairNo)
           or TEXTS.pitRepairNone)
-        drawText(value, FONT_MONO, fs, vec2(vx, y), sel and COLOR_SEL or COLOR_TITLE)
+        drawText(value, FONT_MONO, fs, TMP.a:set(vx, y), sel and COLOR_SEL or COLOR_TITLE)
         if sel then cursorLine(vx, vx + textWidth(value, FONT_MONO, fs), y) end
       else
-        drawText(r[3], FONT_MONO, fs, vec2(vx, y), sel and COLOR_SEL or ((r[1] and not r.off) and COLOR_TITLE or COLOR_OFF))
+        drawText(r[3], FONT_MONO, fs, TMP.a:set(vx, y), sel and COLOR_SEL or ((r[1] and not r.off) and COLOR_TITLE or COLOR_OFF))
         if sel then cursorLine(vx, vx + textWidth(tostring(r[3] or ''), FONT_MONO, fs), y) end
       end
       if r[4] then
@@ -10053,7 +10104,7 @@ do
     local modeSel = not sv and chosen == 'mode'
     local footer = sv and TEXTS.pitBoxServing or strategy and TEXTS.pitStrategyHint
       or string.format(TEXTS.pitBoxMode, PitBox.isAuto() and TEXTS.pitModeAuto or TEXTS.pitModeManual) .. TEXTS.pitBoxStart
-    drawText(footer, FONT_TEXT, fs, vec2(p1.x + BOX.side * s, fy),
+    drawText(footer, FONT_TEXT, fs, TMP.a:set(p1.x + BOX.side * s, fy),
       sv and COLOR_SWAP or (modeSel and COLOR_SEL or COLOR_TITLE))
     if modeSel then cursorLine(p1.x + BOX.side * s, p1.x + BOX.side * s + textWidth(footer, FONT_TEXT, fs), fy) end
     drawTextRight(string.format('%s / %s', mmss(elapsed), mmss(p.total)), FONT_MONO, fs, p2.x - BOX.side * s, fy,
@@ -10153,10 +10204,10 @@ local drawStatus
     for n, r in ipairs(m.rows) do
       local y = y0 + (n - 1) * lh
       if r.title then
-        drawText(r.title, FONT_TITLE, SETUP.title * s, vec2(x1, y - (SETUP.title - SETUP.font) * s / 2), COLOR_DIM)
+        drawText(r.title, FONT_TITLE, SETUP.title * s, TMP.a:set(x1, y - (SETUP.title - SETUP.font) * s / 2), COLOR_DIM)
       else
-        if r[1] then drawText(r[1], FONT_TEXT, fs, vec2(x1, y), COLOR_OFF) end
-        if r[2] then drawText(r[2], FONT_MONO, fs, vec2(axisX, y), SETUP.axisColor) end
+        if r[1] then drawText(r[1], FONT_TEXT, fs, TMP.a:set(x1, y), COLOR_OFF) end
+        if r[2] then drawText(r[2], FONT_MONO, fs, TMP.a:set(axisX, y), SETUP.axisColor) end
         local vals = r[3]
         local at = #vals == 1 and { m.cols } or (#vals == 2 and m.cols == 4 and { 2, 4 }) or nil
         for i, v in ipairs(vals) do
@@ -10244,7 +10295,7 @@ local drawStatus
     drawPanel(p1, p2, Desktop.focus == 'setup' and BORDER_YELLOW or BORDER_BASE, s)
     local fs, gap, lh = SETUP.font * s, SETUP.gap * s, SETUP.lh * s
     local x0, xr = p1.x + SETUP.side * s, p2.x - SETUP.side * s
-    drawText(TEXTS.setupTitle, FONT_TITLE, 12 * s, vec2(x0, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.setupTitle, FONT_TITLE, 12 * s, TMP.a:set(x0, p1.y + 4 * s), COLOR_TITLE)
     drawTextRight(string.format(TEXTS.setupLap, car.lapCount + 1), FONT_MONO, 11 * s, xr, p1.y + 5 * s, COLOR_TITLE)
     drawSeparator(p1, p2, p1.y + SETUP.head * s, s)
     local y0 = p1.y + SETUP.head * s + gap
@@ -10267,14 +10318,14 @@ local drawStatus
       local pairW = textWidth('8', FONT_MONO, fs) + 4 * s + textWidth('0.000', FONT_MONO, fs)
       local gw = math.max(2 * pairW + 10 * s, textWidth(TEXTS.setupGears, FONT_TITLE, SETUP.title * s) + textWidth('  F 0.000', FONT_MONO, fs))
       local half = gw / 2
-      drawText(TEXTS.setupGears, FONT_TITLE, SETUP.title * s, vec2(x0, ty - (SETUP.title - SETUP.font) * s / 2), COLOR_DIM)
+      drawText(TEXTS.setupGears, FONT_TITLE, SETUP.title * s, TMP.a:set(x0, ty - (SETUP.title - SETUP.font) * s / 2), COLOR_DIM)
       drawTextRight(string.format('F %.3f', final), FONT_MONO, fs, x0 + gw, ty, COLOR_TITLE)
       for g, r in ipairs(gears) do
         local col, line = (g - 1) % 2, math.floor((g - 1) / 2)
         if line < 5 then
           local cx = x0 + col * (half + 5 * s)
           local gy = ty + (line + 1) * lh
-          drawText(tostring(g), FONT_MONO, fs, vec2(cx, gy), SETUP.axisColor)
+          drawText(tostring(g), FONT_MONO, fs, TMP.a:set(cx, gy), SETUP.axisColor)
           drawTextRight(string.format('%.3f', r), FONT_MONO, fs, cx + half - 5 * s, gy, COLOR_TITLE)
         end
       end
@@ -10282,9 +10333,9 @@ local drawStatus
       local lx = math.floor(x0 + gw + colGap / 2 + 0.5)
       ui.drawSimpleLine(vec2(lx, ty), vec2(lx, ty + 6 * lh - 2 * s), rgbm(1, 1, 1, 0.12), 1)
     end
-    drawText(TEXTS.setupTyres, FONT_TITLE, SETUP.title * s, vec2(tx, ty - (SETUP.title - SETUP.font) * s / 2), COLOR_DIM)
+    drawText(TEXTS.setupTyres, FONT_TITLE, SETUP.title * s, TMP.a:set(tx, ty - (SETUP.title - SETUP.font) * s / 2), COLOR_DIM)
     local wx1 = tx + (SETUP.tyreLabelW + SETUP.wheelGap) * s
-    drawText(tostring(ac.getTyresLongName(0, -1) or '-'), FONT_MONO, fs, vec2(wx1, ty), COLOR_TITLE)
+    drawText(tostring(ac.getTyresLongName(0, -1) or '-'), FONT_MONO, fs, TMP.a:set(wx1, ty), COLOR_TITLE)
     local wGap = SETUP.wheelGap * s
     local cw = (xr - wx1 - 3 * wGap) / 4
     for i = 0, 3 do
@@ -10303,19 +10354,19 @@ local drawStatus
       drawTextRight(lapLife and string.format(TEXTS.setupLapsOf, laps, lapLimit and tostring(lapLimit) or '--')
         or tostring(laps), FONT_MONO, fs, x, ty + 5 * lh, lapLife and lifeColor(lapLife) or COLOR_TITLE)
     end
-    drawText(TEXTS.setupPsi, FONT_TEXT, fs, vec2(tx, ty + 2 * lh), COLOR_OFF)
-    drawText(TEXTS.setupLife, FONT_TEXT, fs, vec2(tx, ty + 3 * lh), COLOR_OFF)
-    drawText(TEXTS.setupKm, FONT_TEXT, fs, vec2(tx, ty + 4 * lh), COLOR_OFF)
-    drawText(TEXTS.setupLaps, FONT_TEXT, fs, vec2(tx, ty + 5 * lh), COLOR_OFF)
+    drawText(TEXTS.setupPsi, FONT_TEXT, fs, TMP.a:set(tx, ty + 2 * lh), COLOR_OFF)
+    drawText(TEXTS.setupLife, FONT_TEXT, fs, TMP.a:set(tx, ty + 3 * lh), COLOR_OFF)
+    drawText(TEXTS.setupKm, FONT_TEXT, fs, TMP.a:set(tx, ty + 4 * lh), COLOR_OFF)
+    drawText(TEXTS.setupLaps, FONT_TEXT, fs, TMP.a:set(tx, ty + 5 * lh), COLOR_OFF)
     local sep2 = ty + 6 * lh + gap
     drawSeparator(p1, p2, sep2, s)
     local ex = x0
     for _, e in ipairs({ { 'ABS', car.absMode }, { 'TC', car.tractionControlMode }, { 'TC2', car.tractionControl2 },
         { 'EB', car.currentEngineBrakeSetting }, { 'MAP', car.fuelMap } }) do
-      drawText(e[1], FONT_MONO, fs, vec2(ex, sep2 + gap), COLOR_OFF)
+      drawText(e[1], FONT_MONO, fs, TMP.a:set(ex, sep2 + gap), COLOR_OFF)
       ex = ex + textWidth(e[1] .. ' ', FONT_MONO, fs)
       local v = string.format('%d', num(e[2]))
-      drawText(v, FONT_MONO, fs, vec2(ex, sep2 + gap), COLOR_TITLE)
+      drawText(v, FONT_MONO, fs, TMP.a:set(ex, sep2 + gap), COLOR_TITLE)
       ex = ex + textWidth(v, FONT_MONO, fs) + 9 * s
     end
     Drag.icons('setup', p1, p2, s)
@@ -10340,9 +10391,13 @@ local drawStatus
   F1.NOSE_EXTRA2, F1.EXTRA2_Y = 0.6, -25
   F1.SHIFT = -4
   F1.WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }
+  F1.RING, F1.at = { vec2(0, 0), vec2(0, 0), vec2(0, 0), vec2(0, 0) }, 0
   local function drawF1(cx, cy, s)
     local body = COLOR_TITLE
-    local function P(x, y) return vec2(cx + x * s, cy + y * s) end
+    local function P(x, y)
+      F1.at = F1.at % 4 + 1
+      return F1.RING[F1.at]:set(cx + x * s, cy + y * s)
+    end
     local noseY = F1.BODY[2] + F1.NOSE_R
     local function half(y)
       if y >= F1.COCKPIT_Y then return F1.BODY[3] end
@@ -10397,7 +10452,7 @@ local drawStatus
     local p2 = vec2(p1.x + STATUS_W * s, p1.y + statusH * s)
     local rp = state.repair
     drawPanel(p1, p2, Desktop.focus == 'status' and BORDER_YELLOW or BORDER_BASE, s)
-    drawText(TEXTS.statusTitle, FONT_TITLE, 12 * s, vec2(p1.x + L.side * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.statusTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + L.side * s, p1.y + 4 * s), COLOR_TITLE)
     if rp.class == 'repair' then
       drawTextRight(TEXTS.statusRepair, FONT_MONO, 11 * s, p2.x - L.side * s, p1.y + 5 * s, COLOR_ORANGE)
     elseif rp.class == 'beyond' then
@@ -10407,7 +10462,7 @@ local drawStatus
     local x1, x2 = p1.x + L.side * s, p2.x - L.side * s
     local tileW = (x2 - x1 - L.tileGap * s) / 2
     local function blockTitle(text, y)
-      drawText(text, FONT_TITLE, SETUP.title * s, vec2(x1, y), COLOR_DIM)
+      drawText(text, FONT_TITLE, SETUP.title * s, TMP.a:set(x1, y), COLOR_DIM)
     end
     local function tile(tx, ty, tw, name, value, color)
       local strong = color == COLOR_ORANGE or color == BORDER_RED
@@ -10416,8 +10471,8 @@ local drawStatus
       local border = (strong or color == COLOR_WARN) and rgbm(color.r, color.g, color.b, 0.65) or rgbm(0.23, 0.25, 0.27, 1)
       ui.drawRect(q1, q2, border, 3 * s, nil, 1)
       ui.drawCircleFilled(vec2(px(tx + 8 * s), px(ty + L.tileH * s / 2)), 3 * s, color, 12)
-      drawText(name, FONT_TEXT, L.font * s, vec2(tx + 15 * s, ty + 2 * s), COLOR_TITLE)
-      drawText(value, FONT_MONO, L.font * s, vec2(tx + 15 * s, ty + 13 * s), color)
+      drawText(name, FONT_TEXT, L.font * s, TMP.a:set(tx + 15 * s, ty + 2 * s), COLOR_TITLE)
+      drawText(value, FONT_MONO, L.font * s, TMP.a:set(tx + 15 * s, ty + 13 * s), color)
     end
     local y = p1.y + (L.head + L.gap) * s
     blockTitle(TEXTS.statusWheels, y)
@@ -10443,7 +10498,7 @@ local drawStatus
     y = y + (L.tileH + L.tileGap) * s
     local kg, rs = num(car.ballast), num(car.restrictor)
     ui.drawRect(vec2(px(x1), px(y)), vec2(px(x2), px(y + L.bopH * s)), rgbm(0.23, 0.25, 0.27, 1), 3 * s, nil, 1)
-    drawText(TEXTS.statusBop, FONT_TEXT, L.font * s, vec2(x1 + 6 * s, y + 2 * s), COLOR_TITLE)
+    drawText(TEXTS.statusBop, FONT_TEXT, L.font * s, TMP.a:set(x1 + 6 * s, y + 2 * s), COLOR_TITLE)
     drawTextRight((kg == 0 and rs == 0) and '-' or string.format('%.0f kg  %.0f%%', kg, rs), FONT_MONO, L.font * s,
       x2 - 6 * s, y + 2 * s, (kg == 0 and rs == 0) and COLOR_OFF or COLOR_TITLE)
     y = y + (L.bopH + L.gap) * s
@@ -10475,11 +10530,11 @@ local drawStatus
     hbar(cy - 58 * s, kF, cF)
     local bf = L.font * s
     local fText, bText = string.format('%s %.0f', TEXTS.side.front, vF), string.format('%s %.0f', TEXTS.side.back, vB)
-    drawText(fText, FONT_MONO, bf, vec2(cx - textWidth(fText, FONT_MONO, bf) / 2, cy - 53 * s), cF)
-    drawText(bText, FONT_MONO, bf, vec2(cx - textWidth(bText, FONT_MONO, bf) / 2, cy + 40 * s), cB)
+    drawText(fText, FONT_MONO, bf, TMP.a:set(cx - textWidth(fText, FONT_MONO, bf) / 2, cy - 53 * s), cF)
+    drawText(bText, FONT_MONO, bf, TMP.a:set(cx - textWidth(bText, FONT_MONO, bf) / 2, cy + 40 * s), cB)
     hbar(cy + 54 * s, kB, cB)
     vbar(p1.x + 12 * s, kL, cL)
-    drawText(string.format('%s %.0f', TEXTS.side.left, vL), FONT_MONO, bf, vec2(p1.x + 19 * s, cy - 6 * s), cL)
+    drawText(string.format('%s %.0f', TEXTS.side.left, vL), FONT_MONO, bf, TMP.a:set(p1.x + 19 * s, cy - 6 * s), cL)
     drawTextRight(string.format('%s %.0f', TEXTS.side.right, vR), FONT_MONO, bf, p2.x - 19 * s, cy - 6 * s, cR)
     vbar(p2.x - 15 * s, kR, cR)
     drawF1(cx, cy + F1.SHIFT * s, s)
@@ -10546,7 +10601,7 @@ local drawRaceScreens = (function()
       return top, p2, p1.y + 26 * s, true
     end
     drawPanel(p1, p2, Desktop.focus == g and BORDER_YELLOW or BORDER_BASE, s)
-    drawText(title, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(title, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     if right then drawTextRight(right, FONT_MONO, 11 * s, p2.x - 14 * s, p1.y + 5 * s, COLOR_TITLE) end
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     return p1, p2, p1.y + 26 * s
@@ -10562,7 +10617,7 @@ local drawRaceScreens = (function()
       local tw = textWidth(t, FONT_MONO, 9 * s)
       local a, b = vec2(p2.x - 14 * s - tw - 6 * s, p1.y + 5 * s), vec2(p2.x - 14 * s, p1.y + 18 * s)
       ui.drawRectFilled(a, b, YELLOW, 2 * s)
-      drawText(t, FONT_MONO, 9 * s, vec2(a.x + 3 * s, a.y + 1 * s), rgbm(0.07, 0.07, 0.07, 1))
+      drawText(t, FONT_MONO, 9 * s, TMP.a:set(a.x + 3 * s, a.y + 1 * s), TMP.dark)
       Drag.clickable(a, b, function()
         local at = 1
         for i, c in ipairs(list) do if c == filter[g] then at = i end end
@@ -10576,8 +10631,8 @@ local drawRaceScreens = (function()
       local tw = textWidth(t, FONT_MONO, 9 * s)
       local a, b = vec2(x - tw - 6 * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
       local on = filter[g] == t
-      if on then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
-      drawText(t, FONT_MONO, 9 * s, vec2(a.x + 3 * s, a.y + 1 * s), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
+      if on then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
+      drawText(t, FONT_MONO, 9 * s, TMP.a:set(a.x + 3 * s, a.y + 1 * s), on and TMP.dark or COLOR_DIM)
       Drag.clickable(a, b, function() filter[g] = t end)
       x = a.x - 4 * s
     end
@@ -10587,7 +10642,7 @@ local drawRaceScreens = (function()
       local font = c[5] or FONT_MONO
       local col = c[1] == '-' and COLOR_OFF or (c[3] or COLOR_TITLE)
       if c[4] then drawTextRight(c[1], font, FS * s, p1.x + c[2] * s, y, col)
-      else drawText(c[1], font, FS * s, vec2(p1.x + c[2] * s, y), col) end
+      else drawText(c[1], font, FS * s, TMP.a:set(p1.x + c[2] * s, y), col) end
     end
   end
   local function carClick(index, a, b)
@@ -10703,8 +10758,8 @@ local drawRaceScreens = (function()
     local p1, p2, y = frame('laptime', w, h, s, 10.2, TEXTS.scrLapTime, nil)
     local on = Drag.mode('delta') ~= 'hidden'
     local a, b = vec2(p2.x - 34 * s, p1.y + 5 * s), vec2(p2.x - 14 * s, p1.y + 18 * s)
-    if on then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
-    drawText(TEXTS.scrDeltaButton, FONT_TEXT, 9 * s, vec2(a.x + 6 * s, a.y), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
+    if on then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
+    drawText(TEXTS.scrDeltaButton, FONT_TEXT, 9 * s, TMP.a:set(a.x + 6 * s, a.y), on and TMP.dark or COLOR_DIM)
     Drag.clickable(a, b, function() Drag.setMode('delta', on and 'hidden' or 'auto') end)
     row(p1, y, s, { { TEXTS.scrCurrent, 14, COLOR_DIM, false, FONT_TEXT },
       { lapTime(CarRead.num(car.lapTimeMs)), 246, car.isLapValid == false and RED or COLOR_TITLE, true } })
@@ -10779,8 +10834,8 @@ local drawRaceScreens = (function()
         local a, b = vec2(x - tw - 6 * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
         local avail = refOn(r)
         if deltaRef == r and avail then ui.drawRectFilled(a, b, YELLOW, 2 * s)
-        else ui.drawRect(a, b, avail and rgbm(1, 1, 1, 0.3) or rgbm(1, 1, 1, 0.12), 2 * s) end
-        drawText(t, FONT_MONO, 9 * s, vec2(a.x + 3 * s, a.y + 1 * s), (deltaRef == r and avail) and rgbm(0.07, 0.07, 0.07, 1)
+        else ui.drawRect(a, b, avail and TMP.edge30 or rgbm(1, 1, 1, 0.12), 2 * s) end
+        drawText(t, FONT_MONO, 9 * s, TMP.a:set(a.x + 3 * s, a.y + 1 * s), (deltaRef == r and avail) and TMP.dark
           or avail and COLOR_DIM or COLOR_OFF)
         if avail then Drag.clickable(a, b, function() setDeltaRef(r) end) end
         x = a.x - 4 * s
@@ -10802,7 +10857,7 @@ local drawRaceScreens = (function()
     elseif (d or 0) < 0 then ui.drawRectFilled(vec2(mid - f, y), vec2(mid, y + 7 * s), GREEN, 2 * s) end
     ui.drawSimpleLine(vec2(mid, y - 2 * s), vec2(mid, y + 9 * s), COLOR_TITLE, 1)
     y = y + 10 * s
-    if car.isLapValid == false then drawText(TEXTS.scrInvalid, FONT_MONO, 9 * s, vec2(bx1, y + 2 * s), RED) end
+    if car.isLapValid == false then drawText(TEXTS.scrInvalid, FONT_MONO, 9 * s, TMP.a:set(bx1, y + 2 * s), RED) end
     drawTextRight(d and string.format('%+.3f', d) or '-', FONT_MONO, 13 * s, bx2, y, not d and COLOR_OFF or d > 0 and RED or GREEN)
     y = y + 15 * s
     local refSplit = deltaRef == 'optimal' and car.bestSplits or car.bestLapSplits
@@ -10854,7 +10909,7 @@ local drawRaceScreens = (function()
     chips('map', p1, p2, s)
     local toScreen = drawMap(vec2(p1.x + 10 * s, y), vec2(p2.x - 10 * s, p2.y - 30 * s))
     if not toScreen then
-      drawText(TEXTS.scrNoMap, FONT_MONO, 9 * s, vec2(p1.x + 14 * s, y), COLOR_OFF)
+      drawText(TEXTS.scrNoMap, FONT_MONO, 9 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_OFF)
     else
       local me = RaceTable.byIndex[0]
       for _, r in ipairs(RaceTable.rows) do
@@ -10866,8 +10921,8 @@ local drawRaceScreens = (function()
         end
       end
     end
-    drawText(TEXTS.scrMapLegend[1], FONT_MONO, 8.5 * s, vec2(p1.x + 14 * s, p2.y - 27 * s), COLOR_DIM)
-    drawText(TEXTS.scrMapLegend[2], FONT_MONO, 8.5 * s, vec2(p1.x + 14 * s, p2.y - 15 * s), COLOR_DIM)
+    drawText(TEXTS.scrMapLegend[1], FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 14 * s, p2.y - 27 * s), COLOR_DIM)
+    drawText(TEXTS.scrMapLegend[2], FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 14 * s, p2.y - 15 * s), COLOR_DIM)
     Drag.icons('map', p1, p2, s)
   end
   local Weather = { forecast = nil }
@@ -11346,7 +11401,7 @@ float4 main(PS_IN pin) {
       while r < half * 1.5 do
         ui.drawCircle(c, r * kk, rgbm(0.27, 0.35, 0.39, 1), 48, 1)
         if r % (stepM * 2) == 0 and r * kk < side / 2 - 8 * s then
-          drawText(string.format('%g km', r / 1000), FONT_MONO, 8 * s, vec2(c.x + r * kk * 0.707 + 2 * s, c.y - r * kk * 0.707 - 11 * s), rgbm(0.51, 0.59, 0.63, 1))
+          drawText(string.format('%g km', r / 1000), FONT_MONO, 8 * s, TMP.a:set(c.x + r * kk * 0.707 + 2 * s, c.y - r * kk * 0.707 - 11 * s), rgbm(0.51, 0.59, 0.63, 1))
         end
         r = r + stepM
       end
@@ -11362,9 +11417,9 @@ float4 main(PS_IN pin) {
         ui.pathStroke(rgbm(1, 1, 1, 1), true, (zoom == 'track' and 1.2 or 1.6) * s)
       end
     else
-      drawText(TEXTS.scrRadarNoTrack, FONT_MONO, 9 * s, vec2(a.x + 8 * s, a.y + 8 * s), COLOR_OFF)
+      drawText(TEXTS.scrRadarNoTrack, FONT_MONO, 9 * s, TMP.a:set(a.x + 8 * s, a.y + 8 * s), COLOR_OFF)
     end
-    drawText(TEXTS.compass[1], FONT_TITLE, 10 * s, vec2(b.x - 13 * s, a.y + 3 * s), rgbm(1, 1, 1, 1))
+    drawText(TEXTS.compass[1], FONT_TITLE, 10 * s, TMP.a:set(b.x - 13 * s, a.y + 3 * s), rgbm(1, 1, 1, 1))
     ui.drawTriangleFilled(vec2(b.x - 9 * s, a.y + 16 * s), vec2(b.x - 13 * s, a.y + 25 * s), vec2(b.x - 5 * s, a.y + 25 * s), rgbm(1, 1, 1, 1))
     if big then
       local w = vec2(a.x + 20 * s, b.y - 20 * s)
@@ -11374,9 +11429,9 @@ float4 main(PS_IN pin) {
       ui.drawSimpleLine(vec2(w.x + 10 * s * math.sin(bb), w.y - 10 * s * math.cos(bb)), e, rgbm(1, 1, 1, 1), 2 * s)
       ui.drawCircleFilled(e, 2.5 * s, rgbm(1, 1, 1, 1), 8)
       drawText(string.format('%s %.0f-%.0f km/h', compass(sl.dir), sl.vmin * 3.6, sl.vmax * 3.6),
-        FONT_MONO, 9 * s, vec2(w.x + 18 * s, w.y - 6 * s), rgbm(1, 1, 1, 1))
+        FONT_MONO, 9 * s, TMP.a:set(w.x + 18 * s, w.y - 6 * s), rgbm(1, 1, 1, 1))
     else
-      drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 9 * s, vec2(a.x + 5 * s, b.y - 14 * s), YELLOW)
+      drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 9 * s, TMP.a:set(a.x + 5 * s, b.y - 14 * s), YELLOW)
       local x1, x2 = a.x + 46 * s, b.x - 6 * s
       ui.drawRect(vec2(x1, b.y - 9 * s), vec2(x2, b.y - 5 * s), rgbm(0.35, 0.35, 0.35, 1))
       ui.drawRectFilled(vec2(x1, b.y - 9 * s), vec2(x1 + (x2 - x1) * k / 5, b.y - 5 * s), YELLOW)
@@ -11418,7 +11473,7 @@ float4 main(PS_IN pin) {
     end
     local clock = string.format('%02d:%02d', CarRead.num(sim.timeHours), CarRead.num(sim.timeMinutes)) .. utc
     if mode == 'map' then
-      drawText(clock, FONT_MONO, 11 * s, vec2(p1.x + 14 * s + textWidth(TEXTS.scrWeather, FONT_TITLE, 12 * s) + 10 * s, p1.y + 5 * s),
+      drawText(clock, FONT_MONO, 11 * s, TMP.a:set(p1.x + 14 * s + textWidth(TEXTS.scrWeather, FONT_TITLE, 12 * s) + 10 * s, p1.y + 5 * s),
         COLOR_TITLE)
     end
     local x = p2.x - 14 * s
@@ -11427,8 +11482,8 @@ float4 main(PS_IN pin) {
       local t = TEXTS.scrWeatherModes[m]
       local tw = textWidth(t, FONT_MONO, 9 * s)
       local a, b = vec2(x - tw - 6 * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
-      if mode == m then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
-      drawText(t, FONT_MONO, 9 * s, vec2(a.x + 3 * s, a.y + 1 * s), mode == m and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
+      if mode == m then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
+      drawText(t, FONT_MONO, 9 * s, TMP.a:set(a.x + 3 * s, a.y + 1 * s), mode == m and TMP.dark or COLOR_DIM)
       Drag.clickable(a, b, function() filter.weather = m end)
       x = a.x - 4 * s
     end
@@ -11442,21 +11497,21 @@ float4 main(PS_IN pin) {
         local tw = textWidth(z[2], FONT_MONO, 9 * s)
         local za, zb = vec2(zx, y), vec2(zx + tw + 8 * s, y + 13 * s)
         if z[1] ~= 0 then
-          ui.drawRect(za, zb, rgbm(1, 1, 1, 0.3), 2 * s)
+          ui.drawRect(za, zb, TMP.edge30, 2 * s)
           Drag.clickable(za, zb, function() Radar.zoomStep(z[1]) end)
         end
-        drawText(z[2], FONT_MONO, 9 * s, vec2(za.x + 4 * s, za.y + 1 * s), z[1] == 0 and YELLOW or COLOR_DIM)
+        drawText(z[2], FONT_MONO, 9 * s, TMP.a:set(za.x + 4 * s, za.y + 1 * s), z[1] == 0 and YELLOW or COLOR_DIM)
         zx = zb.x + 4 * s
       end
       local st = big and TEXTS.scrRadarSmall or TEXTS.scrRadarBig
       local sw = textWidth(st, FONT_MONO, 9 * s)
       local sa, sb = vec2(p2.x - 10 * s - sw - 8 * s, y), vec2(p2.x - 10 * s, y + 13 * s)
-      ui.drawRect(sa, sb, rgbm(1, 1, 1, 0.3), 2 * s)
-      drawText(st, FONT_MONO, 9 * s, vec2(sa.x + 4 * s, sa.y + 1 * s), COLOR_DIM)
+      ui.drawRect(sa, sb, TMP.edge30, 2 * s)
+      drawText(st, FONT_MONO, 9 * s, TMP.a:set(sa.x + 4 * s, sa.y + 1 * s), COLOR_DIM)
       Drag.clickable(sa, sb, function() filter.radarBig = not big end)
       local minute, sl = Radar.draw(vec2(p1.x + 10 * s, y + 18 * s), side, s, fc, big)
       if big then
-        drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 10 * s, vec2(zx + 6 * s, y), YELLOW)
+        drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 10 * s, TMP.a:set(zx + 6 * s, y), YELLOW)
         local wet = sl.mmh >= 0.01
         local xr = sa.x - 6 * s
         local xc = xr - textWidth('0.00 mm/h', FONT_MONO, 9 * s) - 6 * s
@@ -11466,9 +11521,9 @@ float4 main(PS_IN pin) {
         end
         local nm, room = Radar.skyOf(sl), xc - textWidth('100%', FONT_MONO, 9 * s) - 6 * s - (zx + 46 * s)
         nm = fitText(nm, FONT_MONO, 9 * s, room)
-        drawText(nm, FONT_MONO, 9 * s, vec2(zx + 46 * s, y + 1 * s), COLOR_TITLE)
+        drawText(nm, FONT_MONO, 9 * s, TMP.a:set(zx + 46 * s, y + 1 * s), COLOR_TITLE)
         local ly = y + 18 * s + side + 8 * s
-        drawText(TEXTS.scrRadarPrec, FONT_MONO, 8.5 * s, vec2(p1.x + 14 * s, ly), COLOR_DIM)
+        drawText(TEXTS.scrRadarPrec, FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 14 * s, ly), COLOR_DIM)
         local bx1, bx2 = p1.x + 100 * s, p2.x - 14 * s
         local n = 64
         for i = 0, n - 1 do
@@ -11482,13 +11537,13 @@ float4 main(PS_IN pin) {
           ui.drawSimpleLine(vec2(cx, ly), vec2(cx, ly + 11 * s), rgbm(1, 1, 1, 1), 2 * s)
           ui.drawTriangleFilled(vec2(cx - 4 * s, ly - 5 * s), vec2(cx + 4 * s, ly - 5 * s), vec2(cx, ly), rgbm(1, 1, 1, 1))
         end
-        drawText(TEXTS.scrRadarLight, FONT_MONO, 8 * s, vec2(bx1, ly + 11 * s), COLOR_DIM)
-        drawText(TEXTS.scrRadarHeavy, FONT_MONO, 8 * s, vec2(bx1 + (bx2 - bx1) * 0.55 - 12 * s, ly + 11 * s), COLOR_DIM)
+        drawText(TEXTS.scrRadarLight, FONT_MONO, 8 * s, TMP.a:set(bx1, ly + 11 * s), COLOR_DIM)
+        drawText(TEXTS.scrRadarHeavy, FONT_MONO, 8 * s, TMP.a:set(bx1 + (bx2 - bx1) * 0.55 - 12 * s, ly + 11 * s), COLOR_DIM)
         drawTextRight(TEXTS.scrRadarExtreme, FONT_MONO, 8 * s, bx2, ly + 11 * s, COLOR_DIM)
         local lroom = p2.x - 14 * s - (p1.x + 14 * s)
         local function fit(text) return fitText(text, FONT_MONO, 8 * s, lroom) end
-        drawText(fit(TEXTS.scrRadarClouds), FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 25 * s), COLOR_DIM)
-        drawText(fit(string.format(TEXTS.scrRadarLoop, #fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic)), FONT_MONO, 8 * s, vec2(p1.x + 14 * s, ly + 37 * s), COLOR_DIM)
+        drawText(fit(TEXTS.scrRadarClouds), FONT_MONO, 8 * s, TMP.a:set(p1.x + 14 * s, ly + 25 * s), COLOR_DIM)
+        drawText(fit(string.format(TEXTS.scrRadarLoop, #fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic)), FONT_MONO, 8 * s, TMP.a:set(p1.x + 14 * s, ly + 37 * s), COLOR_DIM)
       end
     else
       local kmhW = CarRead.num(sim.windSpeedKmh)
@@ -11515,7 +11570,7 @@ float4 main(PS_IN pin) {
           local t = string.format(TEXTS.scrWxPage, wxPage, wxPages(segs))
           local tw = textWidth(t, FONT_MONO, FS * s)
           local cx = p1.x + 145 * s
-          drawText(t, FONT_MONO, FS * s, vec2(cx - tw / 2, y), COLOR_DIM)
+          drawText(t, FONT_MONO, FS * s, TMP.a:set(cx - tw / 2, y), COLOR_DIM)
           Drag.clickable(vec2(cx - tw / 2 - 4 * s, y), vec2(cx, y + ROW * s), function() Desktop.weatherStep(-1) end)
           Drag.clickable(vec2(cx, y), vec2(cx + tw / 2 + 4 * s, y + ROW * s), function() Desktop.weatherStep(1) end)
         end
@@ -11580,7 +11635,7 @@ float4 main(PS_IN pin) {
     local p2 = vec2(pr.x, pr.y + (26 + n * ROW + 10) * s)
     local p1 = vec2(pr.x - 380 * s, pr.y)
     drawPanel(p1, p2, BORDER_YELLOW, s)
-    drawText(eventTitle(), FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(eventTitle(), FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     drawTextRight(TEXTS.scrEventInfo, FONT_MONO, 11 * s, p2.x - 14 * s, p1.y + 5 * s, COLOR_TITLE)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     eventDraw(p1, p2, p1.y + 26 * s, s)
@@ -11633,8 +11688,8 @@ float4 main(PS_IN pin) {
     local function button(t, on, fn)
       local tw = textWidth(t, FONT_MONO, 9 * s)
       local a, b = vec2(x - tw - 6 * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
-      if on then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
-      drawText(t, FONT_MONO, 9 * s, vec2(a.x + 3 * s, a.y + 1 * s), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
+      if on then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
+      drawText(t, FONT_MONO, 9 * s, TMP.a:set(a.x + 3 * s, a.y + 1 * s), on and TMP.dark or COLOR_DIM)
       Drag.clickable(a, b, fn)
       x = a.x - 4 * s
     end
@@ -11719,8 +11774,8 @@ float4 main(PS_IN pin) {
     local et = TEXTS.scrLapsMore
     local etw = textWidth(et, FONT_MONO, 9 * s)
     local ea, eb = vec2(p2.x - 14 * s - etw - 6 * s, p1.y + 5 * s), vec2(p2.x - 14 * s, p1.y + 18 * s)
-    ui.drawRect(ea, eb, rgbm(1, 1, 1, 0.3), 2 * s)
-    drawText(et, FONT_MONO, 9 * s, vec2(ea.x + 3 * s, ea.y + 1 * s), COLOR_DIM)
+    ui.drawRect(ea, eb, TMP.edge30, 2 * s)
+    drawText(et, FONT_MONO, 9 * s, TMP.a:set(ea.x + 3 * s, ea.y + 1 * s), COLOR_DIM)
     Drag.clickable(ea, eb, function() LapsView.big = true end)
     drawTextRight(string.format(TEXTS.scrLapN, car.lapCount + 1), FONT_MONO, 11 * s, ea.x - 8 * s, p1.y + 5 * s, COLOR_TITLE)
     local function sum(list) local t = 0; for _, l in ipairs(list) do t = t + l.ms end; return t end
@@ -11729,7 +11784,7 @@ float4 main(PS_IN pin) {
     local tot = RaceTable.driveMs() or ms
     local stintCol = (rule.minMinutes <= 0 and rule.maxMinutes <= 0) and COLOR_DIM or ((rule.maxMinutes > 0 and tot > rule.maxMinutes * 60000) and RED)
       or ((rule.minMinutes > 0 and tot < rule.minMinutes * 60000) and YELLOW) or GREEN
-    drawText(string.format(TEXTS.scrStintN, #stints, now.driver), FONT_TITLE, 10.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+    drawText(string.format(TEXTS.scrStintN, #stints, now.driver), FONT_TITLE, 10.5 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
     drawTextRight(string.format(TEXTS.scrStintInfo, #now.laps, hms(ms)) .. ((rule.minMinutes > 0 or rule.maxMinutes > 0) and
       (' - ' .. string.format(TEXTS.scrDriveTotal, hms(tot)) .. (rule.minMinutes > 0 and string.format(TEXTS.scrStintMin, rule.minMinutes) or '')) or ''),
       FONT_MONO, 10 * s, p2.x - 14 * s, y, stintCol)
@@ -11756,7 +11811,7 @@ float4 main(PS_IN pin) {
         total = total + l.ms
         if l.valid and (pb == 0 or l.ms < pb) then pb = l.ms end
       end
-      drawText(string.format(TEXTS.scrStintN, #stints - 1, prev.driver), FONT_TITLE, 10.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+      drawText(string.format(TEXTS.scrStintN, #stints - 1, prev.driver), FONT_TITLE, 10.5 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
       drawTextRight(string.format(TEXTS.scrStintInfo, #prev.laps, hms(total)), FONT_MONO, 10 * s, p2.x - 14 * s, y, COLOR_DIM)
       y = y + ROW * s
       row(p1, y, s, { { string.format(TEXTS.scrBestAvg, lapTime(pb), lapTime(#prev.laps > 0 and total / #prev.laps or 0)), 14,
@@ -11774,8 +11829,8 @@ float4 main(PS_IN pin) {
     local a, b = vec2(p.x, p.y), vec2(p.x + wdt, p.y + CHIP_H * s)
     ui.drawRect(a, b, rgbm(1, 1, 1, 0.2), 3 * s)
     ui.drawCircleFilled(vec2(a.x + 10 * s, a.y + CHIP_H * s / 2), 3 * s, light, 12)
-    drawText(title, FONT_TITLE, 9 * s, vec2(a.x + 19 * s, a.y + 3 * s), COLOR_TITLE)
-    drawText(value, FONT_MONO, FS * s, vec2(a.x + 19 * s, a.y + 15 * s), value == '-' and COLOR_OFF or light)
+    drawText(title, FONT_TITLE, 9 * s, TMP.a:set(a.x + 19 * s, a.y + 3 * s), COLOR_TITLE)
+    drawText(value, FONT_MONO, FS * s, TMP.a:set(a.x + 19 * s, a.y + 15 * s), value == '-' and COLOR_OFF or light)
   end
   local function raceScreen(car, w, h, s)
     local me = RaceTable.byIndex[0]
@@ -11798,7 +11853,7 @@ float4 main(PS_IN pin) {
       or '')) or '-')
     line(TEXTS.scrLap, tostring(me and me.laps + 1 or car.lapCount + 1))
     sep()
-    drawText(TEXTS.scrGaps, FONT_TITLE, 9 * s, vec2(x0, y), COLOR_DIM)
+    drawText(TEXTS.scrGaps, FONT_TITLE, 9 * s, TMP.a:set(x0, y), COLOR_DIM)
     y = y + ROW * s
     local rows = RaceTable.rows
     local function gapRow(label, r)
@@ -11816,7 +11871,7 @@ float4 main(PS_IN pin) {
     gapRow(TEXTS.scrAhead, me and me.pos and rows[me.pos - 1])
     gapRow(TEXTS.scrBehind, me and me.pos and me.pos < (RaceTable.present or 0) and rows[me.pos + 1] or nil)
     sep()
-    drawText(TEXTS.scrObligations, FONT_TITLE, 9 * s, vec2(x0, y), COLOR_DIM)
+    drawText(TEXTS.scrObligations, FONT_TITLE, 9 * s, TMP.a:set(x0, y), COLOR_DIM)
     y = y + ROW * s
     local cw = (p2.x - p1.x - 28 * s - CHIP_GAP * s) / 2
     local req = config.pitStopsRequired
@@ -11918,8 +11973,8 @@ float4 main(PS_IN pin) {
       if bare then return end
       local tw = textWidth(t, FONT_MONO, fs * s)
       local a, b = vec2(x - tw - 2 * pad * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
-      if on then ui.drawRectFilled(a, b, color, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 2 * s) end
-      drawText(t, FONT_MONO, fs * s, vec2(a.x + pad * s, a.y + 1 * s), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_DIM)
+      if on then ui.drawRectFilled(a, b, color, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
+      drawText(t, FONT_MONO, fs * s, TMP.a:set(a.x + pad * s, a.y + 1 * s), on and TMP.dark or COLOR_DIM)
       Drag.clickable(a, b, fn)
       x = a.x - (small and 2 or 4) * s
     end
@@ -11965,7 +12020,7 @@ float4 main(PS_IN pin) {
       local a, b = vec2(bx, gy1 + (small and 0 or 12) * s), vec2(bx + barW, gy2)
       ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.08), 2 * s)
       ui.drawRectFilled(vec2(a.x, b.y - (b.y - a.y) * val), b, TELE_COLOR[k], 2 * s)
-      if not small then drawText(string.format('%d', math.floor(val * 100 + 0.5)), FONT_MONO, 8 * s, vec2(a.x, gy1), COLOR_DIM) end
+      if not small then drawText(string.format('%d', math.floor(val * 100 + 0.5)), FONT_MONO, 8 * s, TMP.a:set(a.x, gy1), COLOR_DIM) end
       bx = bx + barGap
     end
     local c = vec2(p2.x - (small and 8 or 14) * s - r - (small and 2 or 10) * s, (gy1 + gy2) / 2)
@@ -11978,12 +12033,12 @@ float4 main(PS_IN pin) {
     local gt = gear < 0 and 'R' or gear == 0 and 'N' or tostring(gear)
     local gsz = (small and 13 or 30) * s
     local gw = textWidth(gt, FONT_TITLE, gsz)
-    drawText(gt, FONT_TITLE, gsz, vec2(c.x - gw / 2, c.y - gsz * (small and 0.9 or 0.57)), COLOR_TITLE)
+    drawText(gt, FONT_TITLE, gsz, TMP.a:set(c.x - gw / 2, c.y - gsz * (small and 0.9 or 0.57)), COLOR_TITLE)
     local kmh = math.floor(CarRead.num(car.speedKmh) + 0.5)
     local st = small and tostring(kmh) or string.format('%d km/h', kmh)
     local ssz = (small and 6.5 or 9) * s
     local sw = textWidth(st, FONT_MONO, ssz)
-    drawText(st, FONT_MONO, ssz, vec2(c.x - sw / 2, small and (c.y + 1 * s) or (c.y - r + 8 * s)), COLOR_DIM)
+    drawText(st, FONT_MONO, ssz, TMP.a:set(c.x - sw / 2, small and (c.y + 1 * s) or (c.y - r + 8 * s)), COLOR_DIM)
     Drag.icons('telemetry', p1, p2, s)
   end
   local Perf = { fps = 0, cpu = 0, gpu = 0, top = 60 }
@@ -12008,7 +12063,7 @@ float4 main(PS_IN pin) {
       { TEXTS.perfRows.gpu, Perf.gpu / 100, string.format('%.0f%%', Perf.gpu) },
     }
     for _, r in ipairs(rows) do
-      drawText(r[1], FONT_MONO, FS * s, vec2(p1.x + 8 * s, y), COLOR_DIM)
+      drawText(r[1], FONT_MONO, FS * s, TMP.a:set(p1.x + 8 * s, y), COLOR_DIM)
       local a, b = vec2(p1.x + 34 * s, y + 3 * s), vec2(p2.x - 42 * s, y + 10 * s)
       ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.08), 2 * s)
       ui.drawRectFilled(a, vec2(a.x + (b.x - a.x) * math.max(0, math.min(1, r[2])), b.y), BORDER_BLUE, 2 * s)
@@ -12070,13 +12125,13 @@ float4 main(PS_IN pin) {
     ui.drawRectFilled(a, b, on and rgbm(0.2, 0.6, 0.3, 0.9) or rgbm(1, 1, 1, 0.08), 3 * s)
     ui.drawIcon(ui.Icons.VideoCamera, vec2(a.x + 3 * s, a.y + 3 * s), vec2(b.x - 3 * s, b.y - 3 * s), on and COLOR_TITLE or COLOR_DIM)
     Drag.clickable(a, b, function() RecordSync.base.rrShare(not on) end)
-    drawText(on and TEXTS.shareOn or TEXTS.shareOff, FONT_TITLE, 10 * s, vec2(b.x + 10 * s, y), on and GREEN or COLOR_DIM)
+    drawText(on and TEXTS.shareOn or TEXTS.shareOff, FONT_TITLE, 10 * s, TMP.a:set(b.x + 10 * s, y), on and GREEN or COLOR_DIM)
     local room, level = RecordSync.base.rrRoom()
     local roomW = p2.x - 14 * s - (b.x + 10 * s)
     room = fitText(room, FONT_TEXT, 9 * s, roomW)
-    drawText(room, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + 13 * s), ({ ok = COLOR_TITLE, warn = YELLOW, bad = RED })[level] or COLOR_DIM)
+    drawText(room, FONT_TEXT, 9 * s, TMP.a:set(b.x + 10 * s, y + 13 * s), ({ ok = COLOR_TITLE, warn = YELLOW, bad = RED })[level] or COLOR_DIM)
     for i, line in ipairs(lines) do
-      drawText(line, FONT_TEXT, 9 * s, vec2(b.x + 10 * s, y + (13 + 13 * i) * s), ({ warn = YELLOW, bad = RED })[askLevel] or COLOR_DIM)
+      drawText(line, FONT_TEXT, 9 * s, TMP.a:set(b.x + 10 * s, y + (13 + 13 * i) * s), ({ warn = YELLOW, bad = RED })[askLevel] or COLOR_DIM)
     end
     local function mark(row, ry, rh) if shareRow == row then ui.drawRectFilled(vec2(p1.x + 9 * s, ry + 2 * s), vec2(p1.x + 11 * s, ry + (rh - 2) * s), YELLOW) end end
     mark(1, y, 22)
@@ -12087,10 +12142,10 @@ float4 main(PS_IN pin) {
     ui.drawRectFilled(oa, ob, hidden and rgbm(1, 1, 1, 0.08) or rgbm(0.2, 0.6, 0.3, 0.9), 3 * s)
     ui.drawIcon(hidden and ui.Icons.Hide or ui.Icons.Eye, vec2(oa.x + 3 * s, oa.y + 3 * s), vec2(ob.x - 3 * s, ob.y - 3 * s), hidden and COLOR_DIM or COLOR_TITLE)
     Drag.clickable(oa, ob, function() RecordSync.base.rrOwn(not hidden) end)
-    drawText(hidden and TEXTS.ownOff or TEXTS.ownOn, FONT_TITLE, 10 * s, vec2(ob.x + 10 * s, oy), hidden and COLOR_DIM or GREEN)
+    drawText(hidden and TEXTS.ownOff or TEXTS.ownOn, FONT_TITLE, 10 * s, TMP.a:set(ob.x + 10 * s, oy), hidden and COLOR_DIM or GREEN)
     local osubW = p2.x - 14 * s - (ob.x + 10 * s)
     local osub = fitText(TEXTS.ownHint, FONT_TEXT, 9 * s, osubW)
-    drawText(osub, FONT_TEXT, 9 * s, vec2(ob.x + 10 * s, oy + 13 * s), COLOR_DIM)
+    drawText(osub, FONT_TEXT, 9 * s, TMP.a:set(ob.x + 10 * s, oy + 13 * s), COLOR_DIM)
     mark(2, oy, 22)
     local fy = oy + 2 * ROW * s
     local fa = vec2(p1.x + 14 * s, fy)
@@ -12102,18 +12157,18 @@ float4 main(PS_IN pin) {
     mark(3, fy, 22)
     local chosen
     if fo then for _, p in ipairs(fo.people) do if p.steam == fo.with then chosen = p.name end end end
-    drawText(fon and TEXTS.focusOn or TEXTS.focusOff, FONT_TITLE, 10 * s, vec2(fb.x + 10 * s, fy), fon and GREEN or COLOR_DIM)
+    drawText(fon and TEXTS.focusOn or TEXTS.focusOff, FONT_TITLE, 10 * s, TMP.a:set(fb.x + 10 * s, fy), fon and GREEN or COLOR_DIM)
     local sub = not (fo and fo.room) and TEXTS.focusNoRoom or fon and (chosen and string.format(TEXTS.focusWith, chosen) or TEXTS.focusNobody) or TEXTS.focusHint
     local subW = p2.x - 14 * s - (fb.x + 10 * s)
     sub = fitText(sub, FONT_TEXT, 9 * s, subW)
-    drawText(sub, FONT_TEXT, 9 * s, vec2(fb.x + 10 * s, fy + 13 * s), (fo and fo.room) and COLOR_DIM or YELLOW)
+    drawText(sub, FONT_TEXT, 9 * s, TMP.a:set(fb.x + 10 * s, fy + 13 * s), (fo and fo.room) and COLOR_DIM or YELLOW)
     if fo and fo.room then
       local ny = fy + 2 * ROW * s
       for i, p in ipairs(fo.people) do
         local on = fon and p.steam == fo.with
         local nm = fitText(p.name, FONT_TEXT, FS * s, subW, '')
-        drawText(nm, FONT_TEXT, FS * s, vec2(fb.x + 10 * s, ny), on and GREEN or COLOR_TITLE)
-        if on then drawText('>', FONT_MONO, FS * s, vec2(fa.x + 6 * s, ny), GREEN) end
+        drawText(nm, FONT_TEXT, FS * s, TMP.a:set(fb.x + 10 * s, ny), on and GREEN or COLOR_TITLE)
+        if on then drawText('>', FONT_MONO, FS * s, TMP.a:set(fa.x + 6 * s, ny), GREEN) end
         mark(3 + i, ny, ROW)
         Drag.clickable(vec2(p1.x + 10 * s, ny), vec2(p2.x - 10 * s, ny + ROW * s), function() shareRow = 3 + i; RecordSync.base.rrFocus(true, p.steam) end)
         ny = ny + ROW * s
@@ -12160,18 +12215,18 @@ float4 main(PS_IN pin) {
       local own = key == 'ffb' or key:match('^vol%.')
       t = string.format('%.0f %%', own and v * 100 or f * 100)
       if not own then
-        drawText(cockpitValue(key, v), FONT_MONO, FS * s, vec2(b.x + 22 * s, a.y), COLOR_DIM)
+        drawText(cockpitValue(key, v), FONT_MONO, FS * s, TMP.a:set(b.x + 22 * s, a.y), COLOR_DIM)
       end
     end
-    ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s)
+    ui.drawRect(a, b, TMP.edge35, 2 * s)
     local tw = textWidth(t, FONT_MONO, FS * s)
-    drawText(t, FONT_MONO, FS * s, vec2((a.x + b.x) / 2 - tw / 2, a.y), on and rgbm(0.07, 0.07, 0.07, 1) or COLOR_TITLE)
+    drawText(t, FONT_MONO, FS * s, TMP.a:set((a.x + b.x) / 2 - tw / 2, a.y), on and TMP.dark or COLOR_TITLE)
   end
   local function stepBox(text, a, s, fn)
     local b = vec2(a.x + 14 * s, a.y + 12 * s)
-    ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s)
+    ui.drawRect(a, b, TMP.edge35, 2 * s)
     local tw = textWidth(text, FONT_MONO, 10 * s)
-    drawText(text, FONT_MONO, 10 * s, vec2(a.x + (14 * s - tw) / 2, a.y), COLOR_TITLE)
+    drawText(text, FONT_MONO, 10 * s, TMP.a:set(a.x + (14 * s - tw) / 2, a.y), COLOR_TITLE)
     Drag.clickable(a, b, fn)
   end
   local COCKPIT_RIGHT = 50
@@ -12186,12 +12241,12 @@ float4 main(PS_IN pin) {
       local name = tostring(ac.getCarName and ac.getCarName(0) or ac.getCarID(0) or '')
       local tw = a.x - 8 * s - (p1.x + 14 * s)
       local t = fitText(string.format(TEXTS.cockpitCar, name), FONT_TEXT, FS * s, tw)
-      drawText(t, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+      drawText(t, FONT_TEXT, FS * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
       local lit = AppLink.cockpitSavedT and state.ui.clock - AppLink.cockpitSavedT < 3
-      if lit then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s) end
+      if lit then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge35, 2 * s) end
       local label = lit and TEXTS.cockpitSaved or TEXTS.cockpitSave
       local lw = textWidth(label, FONT_MONO, 9 * s)
-      drawText(label, FONT_MONO, 9 * s, vec2((a.x + b.x) / 2 - lw / 2, a.y + 0.5 * s), lit and rgbm(0.07, 0.07, 0.07, 1) or COLOR_TITLE)
+      drawText(label, FONT_MONO, 9 * s, TMP.a:set((a.x + b.x) / 2 - lw / 2, a.y + 0.5 * s), lit and TMP.dark or COLOR_TITLE)
       Drag.clickable(a, b, function()
         AppLink.cockpit('save')
         if AppLink.alive then AppLink.cockpitSavedT = state.ui.clock end
@@ -12200,7 +12255,7 @@ float4 main(PS_IN pin) {
     end
     for i, r in ipairs(COCKPIT_ROWS) do
       local on = focus and cockpit.row == i
-      drawText(TEXTS.cockpitRows[r.key], FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), on and YELLOW or COLOR_DIM)
+      drawText(TEXTS.cockpitRows[r.key], FONT_TEXT, FS * s, TMP.a:set(p1.x + 14 * s, y), on and YELLOW or COLOR_DIM)
       local vx = p2.x - 14 * s - 70 * s
       stepBox('-', vec2(vx - 70 * s, y), s, function() cockpit.row = i; cockpitSend(r.key, -1, r.step) end)
       slider(r.key, st[r.key], vec2(vx - 54 * s, y), vec2(vx - 2 * s, y + 12 * s), s, on)
@@ -12208,8 +12263,8 @@ float4 main(PS_IN pin) {
       if r.key == 'vol.main' then
         local a = vec2(p2.x - 14 * s - COCKPIT_RIGHT * s, y)
         local b = vec2(p2.x - 14 * s, a.y + 12 * s)
-        if cockpit.audio then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s) end
-        drawText(TEXTS.cockpitMore, FONT_MONO, 9 * s, vec2(a.x + 4 * s, a.y + 0.5 * s), cockpit.audio and rgbm(0.07, 0.07, 0.07, 1) or COLOR_TITLE)
+        if cockpit.audio then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge35, 2 * s) end
+        drawText(TEXTS.cockpitMore, FONT_MONO, 9 * s, TMP.a:set(a.x + 4 * s, a.y + 0.5 * s), cockpit.audio and TMP.dark or COLOR_TITLE)
         Drag.clickable(a, b, function() cockpit.audio = not cockpit.audio end)
       end
       y = y + ROW * s
@@ -12218,12 +12273,12 @@ float4 main(PS_IN pin) {
       local a1 = vec2(p1.x, p2.y + 6 * s)
       local a2 = vec2(p2.x, a1.y + (26 + #CHANNELS * ROW + 2) * s)
       drawPanel(a1, a2, BORDER_BASE, s)
-      drawText(TEXTS.cockpitAudio, FONT_TITLE, 12 * s, vec2(a1.x + 14 * s, a1.y + 4 * s), COLOR_TITLE)
+      drawText(TEXTS.cockpitAudio, FONT_TITLE, 12 * s, TMP.a:set(a1.x + 14 * s, a1.y + 4 * s), COLOR_TITLE)
       drawSeparator(a1, a2, a1.y + 21 * s, s)
       local ay = a1.y + 26 * s
       for _, ch in ipairs(CHANNELS) do
         local key = 'vol.' .. ch
-        drawText(TEXTS.cockpitChannels[ch] or ch, FONT_TEXT, FS * s, vec2(a1.x + 14 * s, ay), COLOR_DIM)
+        drawText(TEXTS.cockpitChannels[ch] or ch, FONT_TEXT, FS * s, TMP.a:set(a1.x + 14 * s, ay), COLOR_DIM)
         local vx = a2.x - 14 * s - 70 * s
         stepBox('-', vec2(vx - 70 * s, ay), s, function() cockpitSend(key, -1, 0.05) end)
         slider(key, st[key], vec2(vx - 54 * s, ay), vec2(vx - 2 * s, ay + 12 * s), s, false)
@@ -12371,17 +12426,17 @@ float4 main(PS_IN pin) {
       y = y + 8 * s
       local it = items[sel]
       local label = it.sc and (it.name .. ' - ' .. TEXTS.calcFields[it.p.k]) or TEXTS.calcParams[it.p.k]
-      drawText(label, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), YELLOW)
+      drawText(label, FONT_TEXT, FS * s, TMP.a:set(p1.x + 14 * s, y), YELLOW)
       local vx = p2.x - 14 * s - 50 * s
       stepBox('-', vec2(vx - 84 * s, y), s, function() step(-1) end)
       local vt = value(it) and string.format(it.p.fmt, value(it)) or TEXTS.calcNoDataShort
       local vw = textWidth(vt, FONT_MONO, FS * s)
-      drawText(vt, FONT_MONO, FS * s, vec2(vx - 42 * s - vw / 2, y), COLOR_TITLE)
+      drawText(vt, FONT_MONO, FS * s, TMP.a:set(vx - 42 * s - vw / 2, y), COLOR_TITLE)
       stepBox('+', vec2(vx - 14 * s, y), s, function() step(1) end)
       local a, b = vec2(vx + 6 * s, y), vec2(p2.x - 14 * s, y + 12 * s)
-      ui.drawRect(a, b, rgbm(1, 1, 1, 0.35), 2 * s)
+      ui.drawRect(a, b, TMP.edge35, 2 * s)
       local aw = textWidth(TEXTS.calcAuto, FONT_MONO, 9 * s)
-      drawText(TEXTS.calcAuto, FONT_MONO, 9 * s, vec2((a.x + b.x) / 2 - aw / 2, a.y + 0.5 * s), V[it.key] == nil and COLOR_DIM or COLOR_TITLE)
+      drawText(TEXTS.calcAuto, FONT_MONO, 9 * s, TMP.a:set((a.x + b.x) / 2 - aw / 2, a.y + 0.5 * s), V[it.key] == nil and COLOR_DIM or COLOR_TITLE)
       Drag.clickable(a, b, function() V[it.key] = nil; save() end)
       y = y + ROW * s
       local msg
@@ -12389,7 +12444,7 @@ float4 main(PS_IN pin) {
       elseif #missing > 0 then msg = string.format(TEXTS.calcMissing, table.concat(missing, ', '))
       elseif not best and #res[1].miss > 0 then msg = string.format(TEXTS.calcMissing, NAMES[1] .. ': ' .. table.concat(res[1].miss, ', '))
       else msg = best and string.format(TEXTS.calcBest, NAMES[best]) or TEXTS.calcNone end
-      drawText(msg, FONT_TEXT, FS * s, vec2(p1.x + 14 * s, y), best and GREEN or RED)
+      drawText(msg, FONT_TEXT, FS * s, TMP.a:set(p1.x + 14 * s, y), best and GREEN or RED)
       Drag.icons('calc', p1, p2, s)
     end
   end)()
@@ -12574,12 +12629,12 @@ local KmrEvents = (function()
     local y = p1.y + 26 * s
     local tx = chip(TEXTS.kmrEvBack, vec2(x0, y), s, false, nil, function() M.view = nil end)
     drawText(string.format('%s  %s  -  %s  %s', hhmmss(e.ts), (TEXTS.kmrEvKinds[e.type] or e.type), who(e), detail(e)),
-      FONT_TEXT, 10 * s, vec2(tx + 8 * s, y + 1 * s), COLOR_TITLE)
+      FONT_TEXT, 10 * s, TMP.a:set(tx + 8 * s, y + 1 * s), COLOR_TITLE)
     y = y + 22 * s
     if not d then
       ask(e)
       drawText(io.asked[tostring(e.ts)] and state.ui.clock - io.asked[tostring(e.ts)] > 15 and TEXTS.kmrEvNoData or TEXTS.kmrEvLoading,
-        FONT_MONO, 9.5 * s, vec2(x0, y), COLOR_DIM)
+        FONT_MONO, 9.5 * s, TMP.a:set(x0, y), COLOR_DIM)
       return
     end
     local track = io.tracks[tostring(d.track or e.track)] or {}
@@ -12678,9 +12733,9 @@ local KmrEvents = (function()
       if pos then
         local pt = sp(pos)
         ui.drawCircleFilled(pt, 5 * s, c.color, 16)
-        drawText(c.name, FONT_TEXT, 9 * s, vec2(pt.x + 8 * s, pt.y - 7 * s), c.color)
+        drawText(c.name, FONT_TEXT, 9 * s, TMP.a:set(pt.x + 8 * s, pt.y - 7 * s), c.color)
         drawText(string.format('%s  %d km/h  %s %s  %d rpm', c.name, math.floor((q.velocity_modulus or 0) + 0.5), TEXTS.kmrEvGear,
-          tostring(q.gear or '-'), math.floor(q.engine_rpm or 0)), FONT_MONO, 9 * s, vec2(ma.x + 8 * s, ly), c.color)
+          tostring(q.gear or '-'), math.floor(q.engine_rpm or 0)), FONT_MONO, 9 * s, TMP.a:set(ma.x + 8 * s, ly), c.color)
         ly = ly + 13 * s
       end
     end
@@ -12698,7 +12753,7 @@ local KmrEvents = (function()
     local m = ui.mousePos()
     local over = m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y
     if over then ui.captureMouse(true) end
-    drawText(TEXTS.kmrEvTitle, FONT_TITLE, 12 * s, vec2(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.kmrEvTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() M.open = false end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     if M.view then
@@ -12721,15 +12776,15 @@ local KmrEvents = (function()
     local fit = math.max(math.floor((p2.y - 8 * s - top) / ROWE), 1)
     if over then M.scroll = M.scroll - math.floor(ui.mouseWheel() * 3) end
     M.scroll = math.min(math.max(M.scroll, 0), math.max(#list - fit, 0))
-    if #list == 0 then drawText(TEXTS.kmrEvNone, FONT_MONO, 9.5 * s, vec2(x0, y), COLOR_DIM) end
+    if #list == 0 then drawText(TEXTS.kmrEvNone, FONT_MONO, 9.5 * s, TMP.a:set(x0, y), COLOR_DIM) end
     ui.pushClipRect(vec2(p1.x, top), vec2(p2.x, p2.y - 4 * s))
     for i = M.scroll + 1, math.min(#list, M.scroll + fit) do
       local e = list[i]
       local col = e.type == 'collision' and PANEL_COLORS.red or e.type == 'cut' and PANEL_COLORS.yellow or COLOR_DIM
-      drawText(hhmmss(e.ts), FONT_MONO, 9 * s, vec2(x0, y), COLOR_DIM)
-      drawText(TEXTS.kmrEvKinds[e.type] or tostring(e.type), FONT_MONO, 9 * s, vec2(x0 + 66 * s, y), col)
-      drawText(who(e), FONT_TEXT, 9 * s, vec2(x0 + 150 * s, y), COLOR_TITLE)
-      drawText((e.car_lap and (TEXTS.kmrEvLap .. tostring(e.car_lap) .. '  ') or '') .. detail(e), FONT_MONO, 9 * s, vec2(x0 + 440 * s, y), COLOR_DIM)
+      drawText(hhmmss(e.ts), FONT_MONO, 9 * s, TMP.a:set(x0, y), COLOR_DIM)
+      drawText(TEXTS.kmrEvKinds[e.type] or tostring(e.type), FONT_MONO, 9 * s, TMP.a:set(x0 + 66 * s, y), col)
+      drawText(who(e), FONT_TEXT, 9 * s, TMP.a:set(x0 + 150 * s, y), COLOR_TITLE)
+      drawText((e.car_lap and (TEXTS.kmrEvLap .. tostring(e.car_lap) .. '  ') or '') .. detail(e), FONT_MONO, 9 * s, TMP.a:set(x0 + 440 * s, y), COLOR_DIM)
       drawTextRight(penalty(e), FONT_MONO, 9 * s, p2.x - 90 * s, y, COLOR_TITLE)
       if hasReplay(e) then
         chip(TEXTS.kmrEvReplay, vec2(p2.x - 80 * s, y - 2 * s), s, false, nil, function() M.view = { e = e, speed = 0.5, zoom = 2 } ; ask(e) end)
@@ -12830,12 +12885,12 @@ local drawDesktopUI = (function()
   local function chip(text, p, s, on, color, fn)
     local tw = textWidth(text, FONT_MONO, 9 * s)
     local a, b = vec2(p.x, p.y), vec2(p.x + tw + 10 * s, p.y + 14 * s)
-    if on then ui.drawRectFilled(a, b, PANEL_COLORS.yellow, 3 * s) else ui.drawRect(a, b, rgbm(1, 1, 1, 0.3), 3 * s) end
+    if on then ui.drawRectFilled(a, b, PANEL_COLORS.yellow, 3 * s) else ui.drawRect(a, b, TMP.edge30, 3 * s) end
     local cs = math.max(9 * s, Desktop.text.minPx)
     ui.pushDWriteFont(FONT_MONO)
     local th = ui.measureDWriteText(text, cs).y
     ui.popDWriteFont()
-    drawText(text, FONT_MONO, 9 * s, vec2(a.x + 5 * s, a.y + (b.y - a.y - th) / 2), on and rgbm(0.07, 0.07, 0.07, 1) or (color or COLOR_DIM))
+    drawText(text, FONT_MONO, 9 * s, TMP.a:set(a.x + 5 * s, a.y + (b.y - a.y - th) / 2), on and TMP.dark or (color or COLOR_DIM))
     if fn then Drag.clickable(a, b, fn) end
     return b.x + 4 * s
   end
@@ -12858,7 +12913,7 @@ local drawDesktopUI = (function()
     local move = moving and moving.id == 'editor'
     drawPanel(p1, p2, BORDER_BASE, s)
     local desk = Desktop.editDesk
-    drawText(TEXTS.edTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.edTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     local right = desk == 'pit' and TEXTS.edPitDesk or string.format(TEXTS.edDeskOf, desk, Desktop.count)
     drawTextRight(right, FONT_MONO, 11 * s, p2.x - 34 * s, p1.y + 5 * s, COLOR_TITLE)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.editor = false end)
@@ -12870,7 +12925,7 @@ local drawDesktopUI = (function()
     end
     x = chip('+', vec2(x, ty), s, false, nil, Desktop.addDesktop)
     x = chip(TEXTS.edPitTag, vec2(x, ty), s, desk == 'pit', PANEL_COLORS.green, function() Desktop.editDesk = 'pit' end)
-    drawText(TEXTS.edHint, FONT_MONO, 8.5 * s, vec2(x + 6 * s, ty + 2 * s), COLOR_DIM)
+    drawText(TEXTS.edHint, FONT_MONO, 8.5 * s, TMP.a:set(x + 6 * s, ty + 2 * s), COLOR_DIM)
     local c1 = vec2(p1.x + 14 * s, p1.y + 47 * s)
     local c2 = vec2(c1.x + CANVAS_W * s, c1.y + canvasH * s)
     ui.drawRectFilled(c1, c2, rgbm(0.06, 0.07, 0.09, 1), 3 * s)
@@ -12888,14 +12943,14 @@ local drawDesktopUI = (function()
       drag = { g = 'panel', dx = (m.x - pa.x) / cs, dy = (m.y - pa.y) / cs, base = pr.base,
         size = vec2(pr.max.x - pr.min.x, pr.max.y - pr.min.y) }
     end
-    drawText(TEXTS.rcTitle, FONT_TEXT, 7.5 * s, vec2(pa.x + 3 * s, pa.y + 1 * s), COLOR_DIM)
+    drawText(TEXTS.rcTitle, FONT_TEXT, 7.5 * s, TMP.a:set(pa.x + 3 * s, pa.y + 1 * s), COLOR_DIM)
     local guard = panelGuard(w, h)
     local sa, sb = toCanvas(guard.x1, guard.sTop), toCanvas(guard.x2, guard.sBottom)
     dashedRect(sa, sb, rgbm(1, 1, 1, 0.45), s)
-    drawText(TEXTS.edStrip, FONT_TEXT, 6.5 * s, vec2(sa.x + 3 * s, sa.y + 0.5 * s), COLOR_DIM)
+    drawText(TEXTS.edStrip, FONT_TEXT, 6.5 * s, TMP.a:set(sa.x + 3 * s, sa.y + 0.5 * s), COLOR_DIM)
     local fa, fb = toCanvas(guard.x1, guard.fTop), toCanvas(guard.x2, guard.fBottom)
     dashedRect(fa, fb, rgbm(1, 1, 1, 0.45), s)
-    drawText(TEXTS.edFlagStrip, FONT_TEXT, 6.5 * s, vec2(fa.x + 3 * s, fa.y + 0.5 * s), COLOR_DIM)
+    drawText(TEXTS.edFlagStrip, FONT_TEXT, 6.5 * s, TMP.a:set(fa.x + 3 * s, fa.y + 0.5 * s), COLOR_DIM)
     local lists = { { Desktop.place.all, true } }
     if Desktop.place[desk] then lists[#lists + 1] = { Desktop.place[desk], false } end
     for _, L in ipairs(lists) do
@@ -12912,7 +12967,7 @@ local drawDesktopUI = (function()
           ui.drawRectFilled(a, b, rgbm(0.16, 0.17, 0.2, 0.95), 2 * s)
           ui.drawRect(a, b, dragging and PANEL_COLORS.yellow or (L[2] and PANEL_COLORS.green or rgbm(1, 1, 1, 0.45)), 2 * s)
           ui.pushClipRect(a, b)
-          drawText(TEXTS.screenNames[g] or g, FONT_TEXT, 7.5 * s, vec2(a.x + 3 * s, a.y + 1 * s), COLOR_TITLE)
+          drawText(TEXTS.screenNames[g] or g, FONT_TEXT, 7.5 * s, TMP.a:set(a.x + 3 * s, a.y + 1 * s), COLOR_TITLE)
           ui.popClipRect()
           local isz = 9 * s
           local ix, iy = b.x - 4 * (isz + 2 * s) - 1 * s, b.y - isz - 2 * s
@@ -12958,7 +13013,7 @@ local drawDesktopUI = (function()
       end
     end
     local lx, ly = c2.x + 12 * s, c1.y
-    drawText(TEXTS.edScreens, FONT_TITLE, 10 * s, vec2(lx, ly), COLOR_DIM)
+    drawText(TEXTS.edScreens, FONT_TITLE, 10 * s, TMP.a:set(lx, ly), COLOR_DIM)
     ly = ly + 15 * s
     local colGap = 6 * s
     local colW = (p2.x - 14 * s - lx - colGap) / 2
@@ -12971,7 +13026,7 @@ local drawDesktopUI = (function()
       local wtext = where(g)
       local ww = textWidth(wtext, FONT_MONO, 8.5 * s)
       ui.pushClipRect(a, vec2(b.x - ww - 8 * s, b.y))
-      drawText(TEXTS.screenNames[g] or g, FONT_TEXT, 8.5 * s, vec2(a.x + 5 * s, a.y + 1.5 * s), COLOR_TITLE)
+      drawText(TEXTS.screenNames[g] or g, FONT_TEXT, 8.5 * s, TMP.a:set(a.x + 5 * s, a.y + 1.5 * s), COLOR_TITLE)
       ui.popClipRect()
       drawTextRight(wtext, FONT_MONO, 8.5 * s, b.x - 5 * s, a.y + 1.5 * s, on and PANEL_COLORS.yellow or COLOR_DIM)
       Drag.clickable(a, b, function() Desktop.toggle(desk, g) end)
@@ -12987,13 +13042,13 @@ local drawDesktopUI = (function()
     chip(Desktop.pitOn and TEXTS.edPitOn or TEXTS.edPitOff, vec2(bx, by), s, false,
       Desktop.pitOn and PANEL_COLORS.green or PANEL_COLORS.red, function() Desktop.pitOn = not Desktop.pitOn; Desktop.save() end)
     if not Desktop.pitOn then
-      drawText(TEXTS.edPitWarning, FONT_MONO, 8.5 * s, vec2(c1.x, by + 18 * s), PANEL_COLORS.yellow)
+      drawText(TEXTS.edPitWarning, FONT_MONO, 8.5 * s, TMP.a:set(c1.x, by + 18 * s), PANEL_COLORS.yellow)
     end
     local ny = by + (Desktop.pitOn and 20 or 34) * s
     local nav = Desktop.NAV
     local function bound(b) return b.boundTo and b:boundTo() or nil end
     drawText(string.format(TEXTS.edButtons, bound(nav.nextScreen) or '-', bound(nav.prevScreen) or '-',
-      bound(nav.nextDesktop) or '-', bound(nav.prevDesktop) or '-'), FONT_MONO, 8.5 * s, vec2(c1.x, ny), COLOR_DIM)
+      bound(nav.nextDesktop) or '-', bound(nav.prevDesktop) or '-'), FONT_MONO, 8.5 * s, TMP.a:set(c1.x, ny), COLOR_DIM)
   end
   local function indicator(w, h, s)
     local names = {}
@@ -13008,7 +13063,7 @@ local drawDesktopUI = (function()
     local p2 = vec2(p1.x + tw + 24 * s, p1.y + 22 * s)
     Drag.group = nil
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(text, FONT_MONO, 11 * s, vec2(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(text, FONT_MONO, 11 * s, TMP.a:set(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
   end
   local function closeWindows()
     Desktop.editor, Audit.open, Desktop.buttons, Desktop.settingsOpen, Desktop.redOpen = false, false, false, false, false
@@ -13032,7 +13087,7 @@ local drawDesktopUI = (function()
       local a = vec2(p1.x + 12 * s, p1.y + (8 + (i - 1) * 22) * s)
       local b = vec2(p2.x - 10 * s, a.y + 18 * s)
       ui.drawRect(a, b, rgbm(1, 1, 1, 0.25), 3 * s)
-      drawText(it[1], FONT_TEXT, 10 * s, vec2(a.x + 6 * s, a.y + 2 * s), COLOR_TITLE)
+      drawText(it[1], FONT_TEXT, 10 * s, TMP.a:set(a.x + 6 * s, a.y + 2 * s), COLOR_TITLE)
       Drag.clickable(a, b, function() it[2](); Desktop.menu = false end)
     end
   end
@@ -13049,7 +13104,7 @@ local drawDesktopUI = (function()
     local over = m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y
     if over then ui.captureMouse(true) end
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(TEXTS.auditTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.auditTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     local pts = Audit.points and string.format(TEXTS.auditPoints, Audit.points, config.kmrPoints.limit)
       or string.format(TEXTS.auditPoints, 0, config.kmrPoints.limit):gsub('^(%S+ %S+ )0', '%1-')
     local rating = string.format(TEXTS.auditRating, Audit.rating and Audit.num(Audit.rating) or '-')
@@ -13070,13 +13125,13 @@ local drawDesktopUI = (function()
       if not it then break end
       local sec = math.max(math.floor(it.t / 1000), 0)
       drawText(string.format('%d:%02d:%02d', math.floor(sec / 3600), math.floor(sec / 60) % 60, sec % 60), FONT_MONO,
-        9.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
-      drawText(it.src, FONT_MONO, 9.5 * s, vec2(p1.x + 76 * s, y), SRC_COLOR[it.src] or COLOR_TITLE)
-      drawText(it.text, FONT_TEXT, 9.5 * s, vec2(p1.x + 118 * s, y), COLOR_TITLE)
+        9.5 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
+      drawText(it.src, FONT_MONO, 9.5 * s, TMP.a:set(p1.x + 76 * s, y), SRC_COLOR[it.src] or COLOR_TITLE)
+      drawText(it.text, FONT_TEXT, 9.5 * s, TMP.a:set(p1.x + 118 * s, y), COLOR_TITLE)
       y = y + ROW2 * s
     end
     ui.popClipRect()
-    if n == 0 then drawText(TEXTS.auditEmpty, FONT_MONO, 9.5 * s, vec2(p1.x + 14 * s, y), COLOR_DIM) end
+    if n == 0 then drawText(TEXTS.auditEmpty, FONT_MONO, 9.5 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM) end
   end
   local function NAV_ROWS() return { { 'nextScreen', TEXTS.navNextScreen }, { 'prevScreen', TEXTS.navPrevScreen },
     { 'nextDesktop', TEXTS.navNextDesktop }, { 'prevDesktop', TEXTS.navPrevDesktop },
@@ -13113,7 +13168,7 @@ local drawDesktopUI = (function()
     local m = ui.mousePos()
     if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(TEXTS.navTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.navTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     local tx = p1.x + 150 * s
     for _, k in ipairs({ 'nav', 'screens' }) do
       tx = chip(TEXTS.navTabs[k], vec2(tx, p1.y + 4 * s), s, Desktop.buttonsTab == k, nil, function()
@@ -13124,8 +13179,8 @@ local drawDesktopUI = (function()
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.buttons = false; Desktop.capture = nil end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 30 * s
-    drawText(TEXTS.navOwn, FONT_TITLE, 9 * s, vec2(p1.x + ownX, y), COLOR_DIM)
-    drawText(TEXTS.navCsp, FONT_TITLE, 9 * s, vec2(p1.x + cspX, y), COLOR_DIM)
+    drawText(TEXTS.navOwn, FONT_TITLE, 9 * s, TMP.a:set(p1.x + ownX, y), COLOR_DIM)
+    drawText(TEXTS.navCsp, FONT_TITLE, 9 * s, TMP.a:set(p1.x + cspX, y), COLOR_DIM)
     y = y + 16 * s
     for _, r in ipairs(rows) do
       local name, cap, own, conflict = r.name, r.cap, r.own, r.conflict
@@ -13133,15 +13188,15 @@ local drawDesktopUI = (function()
       if lit then
         ui.drawRectFilled(vec2(p1.x + 8 * s, y - 2 * s), vec2(p2.x - 8 * s, y + 18 * s), rgbm(0.1, 0.55, 0.25, 0.35), 2 * s)
       end
-      drawText(r.label, FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y + 1 * s), lit and PANEL_COLORS.green or COLOR_TITLE)
-      drawText(own, FONT_MONO, 9.5 * s, vec2(p1.x + ownX, y + 1.5 * s), conflict and PANEL_COLORS.red
+      drawText(r.label, FONT_TEXT, 10 * s, TMP.a:set(p1.x + 14 * s, y + 1 * s), lit and PANEL_COLORS.green or COLOR_TITLE)
+      drawText(own, FONT_MONO, 9.5 * s, TMP.a:set(p1.x + ownX, y + 1.5 * s), conflict and PANEL_COLORS.red
         or (cap and PANEL_COLORS.yellow or (own == '-' and COLOR_OFF or COLOR_TITLE)))
       if conflict then
-        drawText(conflict, FONT_MONO, 8.5 * s, vec2(p1.x + ownX, y + 12 * s), PANEL_COLORS.red)
+        drawText(conflict, FONT_MONO, 8.5 * s, TMP.a:set(p1.x + ownX, y + 12 * s), PANEL_COLORS.red)
       end
       local x = chip(TEXTS.navSet, vec2(p1.x + setX, y), s, cap, nil, function() Desktop.startCapture(name) end)
       chip(TEXTS.navClear, vec2(x, y), s, false, PANEL_COLORS.red, function() Desktop.clearBind(name) end)
-      drawText(r.csp, FONT_MONO, 9.5 * s, vec2(p1.x + cspX, y + 1.5 * s), r.csp == '-' and COLOR_OFF or COLOR_TITLE)
+      drawText(r.csp, FONT_MONO, 9.5 * s, TMP.a:set(p1.x + cspX, y + 1.5 * s), r.csp == '-' and COLOR_OFF or COLOR_TITLE)
       y = y + 22 * s
     end
   end
@@ -13248,13 +13303,13 @@ local drawDesktopUI = (function()
     for _, it in ipairs(Controls.list) do if it.group == Controls.group then items[#items + 1] = it end end
     local p2 = vec2(p1.x + 196 * s, p1.y + 56 * s)
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(TEXTS.ctlGroup[Controls.group] or '', FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, p1.y + 5 * s), PANEL_COLORS.yellow)
+    drawText(TEXTS.ctlGroup[Controls.group] or '', FONT_TITLE, 9 * s, TMP.a:set(p1.x + 12 * s, p1.y + 5 * s), PANEL_COLORS.yellow)
     local cw = (p2.x - p1.x - 20 * s) / 3
     for i, it in ipairs(items) do
       local x = p1.x + 12 * s + (i - 1) * cw
       local on = it.key == Controls.changed
-      drawText(it.label, FONT_TITLE, 9 * s, vec2(x, p1.y + 19 * s), on and PANEL_COLORS.yellow or COLOR_DIM)
-      drawText(it.value, FONT_MONO, 12 * s, vec2(x, p1.y + 31 * s), on and PANEL_COLORS.yellow or COLOR_TITLE)
+      drawText(it.label, FONT_TITLE, 9 * s, TMP.a:set(x, p1.y + 19 * s), on and PANEL_COLORS.yellow or COLOR_DIM)
+      drawText(it.value, FONT_MONO, 12 * s, TMP.a:set(x, p1.y + 31 * s), on and PANEL_COLORS.yellow or COLOR_TITLE)
     end
   end
   local function aeroBox(p1, s)
@@ -13264,9 +13319,9 @@ local drawDesktopUI = (function()
     local p2 = vec2(p1.x + vw + 24 * s, p1.y + 56 * s)
     local open = Controls.drs == true
     drawPanel(p1, p2, open and BORDER_GREEN or BORDER_BASE, s)
-    drawText(B.aero, FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, p1.y + 5 * s), open and PANEL_COLORS.green or COLOR_TITLE)
-    drawText(B.drs, FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, p1.y + 19 * s), COLOR_DIM)
-    drawText(open and B.open or B.closed, FONT_MONO, 12 * s, vec2(p1.x + 12 * s, p1.y + 31 * s),
+    drawText(B.aero, FONT_TITLE, 9 * s, TMP.a:set(p1.x + 12 * s, p1.y + 5 * s), open and PANEL_COLORS.green or COLOR_TITLE)
+    drawText(B.drs, FONT_TITLE, 9 * s, TMP.a:set(p1.x + 12 * s, p1.y + 19 * s), COLOR_DIM)
+    drawText(open and B.open or B.closed, FONT_MONO, 12 * s, TMP.a:set(p1.x + 12 * s, p1.y + 31 * s),
       open and PANEL_COLORS.green or COLOR_TITLE)
   end
   local function pitBox(p1, s)
@@ -13275,9 +13330,9 @@ local drawDesktopUI = (function()
     local p2 = vec2(p1.x + vw + 24 * s, p1.y + 56 * s)
     local on = Controls.pit == true
     drawPanel(p1, p2, on and BORDER_GREEN or BORDER_BASE, s)
-    drawText(B.pit, FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, p1.y + 5 * s), on and PANEL_COLORS.green or COLOR_TITLE)
-    drawText(B.limiter, FONT_TITLE, 9 * s, vec2(p1.x + 12 * s, p1.y + 19 * s), COLOR_DIM)
-    drawText(on and B.on or B.off, FONT_MONO, 12 * s, vec2(p1.x + 12 * s, p1.y + 31 * s), on and PANEL_COLORS.green or COLOR_TITLE)
+    drawText(B.pit, FONT_TITLE, 9 * s, TMP.a:set(p1.x + 12 * s, p1.y + 5 * s), on and PANEL_COLORS.green or COLOR_TITLE)
+    drawText(B.limiter, FONT_TITLE, 9 * s, TMP.a:set(p1.x + 12 * s, p1.y + 19 * s), COLOR_DIM)
+    drawText(on and B.on or B.off, FONT_MONO, 12 * s, TMP.a:set(p1.x + 12 * s, p1.y + 31 * s), on and PANEL_COLORS.green or COLOR_TITLE)
   end
   local function controlsShown()
     local ctl = Settings.ctl
@@ -13304,7 +13359,7 @@ local drawDesktopUI = (function()
     local m = ui.mousePos()
     if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(TEXTS.setTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.setTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     local x = p1.x + 150 * s
     for _, t in ipairs({ 'messages', 'controls', 'text', 'design', 'app', 'room' }) do
       x = chip(TEXTS.setTabs[t], vec2(x, p1.y + 4 * s), s, Settings.tab == t, nil, function()
@@ -13318,7 +13373,7 @@ local drawDesktopUI = (function()
     local x0 = p1.x + 14 * s
     if Settings.tab == 'messages' then
       local px = x0 + 50 * s
-      drawText(TEXTS.setPreset, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      drawText(TEXTS.setPreset, FONT_TITLE, 9 * s, TMP.a:set(x0, y + 1 * s), COLOR_DIM)
       for _, name in ipairs(PRESET_ORDER) do
         px = chip(TEXTS.setPresets[name], vec2(px, y), s, Settings.preset == name, nil, function()
           applyPreset(name)
@@ -13327,13 +13382,13 @@ local drawDesktopUI = (function()
       end
       y = y + 22 * s
       tick(vec2(x0, y), true, s, true)
-      drawText(TEXTS.setAreas.rc, FONT_TEXT, 10 * s, vec2(x0 + 16 * s, y), COLOR_TITLE)
+      drawText(TEXTS.setAreas.rc, FONT_TEXT, 10 * s, TMP.a:set(x0 + 16 * s, y), COLOR_TITLE)
       drawTextRight(TEXTS.setAlways, FONT_MONO, 9 * s, p2.x - 14 * s, y + 1 * s, COLOR_OFF)
       y = y + 18 * s
       for _, a in ipairs(AREAS) do
         local on = Settings.areas[a] == true
         tick(vec2(x0, y), on, s)
-        drawText(TEXTS.setAreas[a], FONT_TEXT, 10 * s, vec2(x0 + 16 * s, y), on and COLOR_TITLE or COLOR_DIM)
+        drawText(TEXTS.setAreas[a], FONT_TEXT, 10 * s, TMP.a:set(x0 + 16 * s, y), on and COLOR_TITLE or COLOR_DIM)
         drawTextRight(TEXTS.setAreaHint[a], FONT_MONO, 9 * s, p2.x - 14 * s, y + 1 * s, COLOR_OFF)
         Drag.clickable(vec2(x0, y), vec2(p2.x - 14 * s, y + 14 * s), function()
           Settings.areas[a] = not on or nil
@@ -13346,9 +13401,9 @@ local drawDesktopUI = (function()
       for _, f in ipairs(Desktop.text.sets) do
         local on = Desktop.text.id == f.id
         tick(vec2(x0, y), on, s, not f.ready)
-        drawText(f.name, FONT_TEXT, 10 * s, vec2(x0 + 16 * s, y), on and COLOR_TITLE or COLOR_DIM)
+        drawText(f.name, FONT_TEXT, 10 * s, TMP.a:set(x0 + 16 * s, y), on and COLOR_TITLE or COLOR_DIM)
         if not f.ready then
-          drawText(TEXTS.setFontMissing, FONT_MONO, 9 * s, vec2(x0 + 150 * s, y + 1 * s), COLOR_OFF)
+          drawText(TEXTS.setFontMissing, FONT_MONO, 9 * s, TMP.a:set(x0 + 150 * s, y + 1 * s), COLOR_OFF)
           y = y + 18 * s
           goto nextFont
         end
@@ -13363,58 +13418,58 @@ local drawDesktopUI = (function()
         ::nextFont::
       end
       y = y + 6 * s
-      drawText(TEXTS.setTextMin, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      drawText(TEXTS.setTextMin, FONT_TITLE, 9 * s, TMP.a:set(x0, y + 1 * s), COLOR_DIM)
       local cx = x0 + 110 * s
       for _, v in ipairs({ 0, 10, 11, 12 }) do
         cx = chip(v == 0 and TEXTS.setTextMinOff or (v .. ' px'), vec2(cx, y), s, Desktop.text.min == v, nil,
           function() Desktop.textApply(Desktop.text.id, v) end)
       end
     elseif Settings.tab == 'design' then
-      drawText(TEXTS.setOpacity, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      drawText(TEXTS.setOpacity, FONT_TITLE, 9 * s, TMP.a:set(x0, y + 1 * s), COLOR_DIM)
       local ba = vec2(x0 + 110 * s, y)
       local bb = vec2(p2.x - 14 * s, y + 14 * s)
       local frac = (Desktop.opacity - 0.2) / 0.8
       ui.drawRectFilled(ba, bb, rgbm(1, 1, 1, 0.10), 2 * s)
       ui.drawRectFilled(ba, vec2(ba.x + (bb.x - ba.x) * frac, bb.y), rgbm(0.36, 0.38, 0.98, 0.9), 2 * s)
-      ui.drawRect(ba, bb, rgbm(1, 1, 1, 0.35), 2 * s)
+      ui.drawRect(ba, bb, TMP.edge35, 2 * s)
       local ot = string.format('%.0f %%', Desktop.opacity * 100)
-      drawText(ot, FONT_MONO, 9 * s, vec2((ba.x + bb.x) / 2 - textWidth(ot, FONT_MONO, 9 * s) / 2, y + 1.5 * s), COLOR_TITLE)
+      drawText(ot, FONT_MONO, 9 * s, TMP.a:set((ba.x + bb.x) / 2 - textWidth(ot, FONT_MONO, 9 * s) / 2, y + 1.5 * s), COLOR_TITLE)
       Drag.clickable(ba, bb, function()
         local mx = ui.mousePos().x
         Desktop.setOpacity(0.2 + 0.8 * math.min(math.max((mx - ba.x) / (bb.x - ba.x), 0), 1))
       end)
     elseif Settings.tab == 'room' then
       local Rr = RecordSync.base.rr
-      drawText(TEXTS.setShareSource, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      drawText(TEXTS.setShareSource, FONT_TITLE, 9 * s, TMP.a:set(x0, y + 1 * s), COLOR_DIM)
       local cx = x0 + 70 * s
       for _, k in ipairs({ 'game', 'screen1', 'screen2', 'screen3' }) do
         cx = chip(TEXTS.setShareSources[k], vec2(cx, y), s, Rr.source == k, nil, function() RecordSync.base.rrSet(k, nil) end)
       end
       y = y + 22 * s
-      drawText(TEXTS.setShareLayout, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      drawText(TEXTS.setShareLayout, FONT_TITLE, 9 * s, TMP.a:set(x0, y + 1 * s), COLOR_DIM)
       cx = x0 + 70 * s
       for _, k in ipairs({ 'single', 'triple', 'center' }) do
         cx = chip(TEXTS.setShareLayouts[k], vec2(cx, y), s, Rr.layout == k, nil, function() RecordSync.base.rrSet(nil, k) end)
       end
       y = y + 22 * s
-      drawText(TEXTS.setShareScope, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
+      drawText(TEXTS.setShareScope, FONT_TITLE, 9 * s, TMP.a:set(x0, y + 1 * s), COLOR_DIM)
       cx = x0 + 70 * s
       for _, k in ipairs({ 'all', 'room' }) do
         cx = chip(TEXTS.setShareScopes[k], vec2(cx, y), s, Rr.scope == k, nil, function() RecordSync.base.rrSet(nil, nil, k) end)
       end
       y = y + 22 * s
-      drawText(TEXTS.setShareVr, FONT_MONO, 9 * s, vec2(x0, y), COLOR_DIM)
+      drawText(TEXTS.setShareVr, FONT_MONO, 9 * s, TMP.a:set(x0, y), COLOR_DIM)
       y = y + 20 * s
       local room, level = RecordSync.base.rrRoom()
-      drawText(TEXTS.lobbyRoom, FONT_TITLE, 9 * s, vec2(x0, y + 1 * s), COLOR_DIM)
-      drawText(room, FONT_TEXT, 10 * s, vec2(x0 + 70 * s, y), ({ ok = PANEL_COLORS.green, warn = PANEL_COLORS.yellow, bad = PANEL_COLORS.red })[level] or COLOR_DIM)
+      drawText(TEXTS.lobbyRoom, FONT_TITLE, 9 * s, TMP.a:set(x0, y + 1 * s), COLOR_DIM)
+      drawText(room, FONT_TEXT, 10 * s, TMP.a:set(x0 + 70 * s, y), ({ ok = PANEL_COLORS.green, warn = PANEL_COLORS.yellow, bad = PANEL_COLORS.red })[level] or COLOR_DIM)
       y = y + 20 * s
       chip(Rr.game and TEXTS.setShareStop or TEXTS.setShareGo, vec2(x0, y), s, Rr.game, nil, function() RecordSync.base.rrShare(not Rr.game) end)
     elseif Settings.tab == 'controls' then
       for _, c in ipairs(CTL) do
         local on = Settings.ctl[c]
         tick(vec2(x0, y), on, s)
-        drawText(TEXTS.setCtl[c], FONT_TEXT, 10 * s, vec2(x0 + 16 * s, y), on and COLOR_TITLE or COLOR_DIM)
+        drawText(TEXTS.setCtl[c], FONT_TEXT, 10 * s, TMP.a:set(x0 + 16 * s, y), on and COLOR_TITLE or COLOR_DIM)
         Drag.clickable(vec2(x0, y), vec2(p2.x - 14 * s, y + 14 * s), function()
           Settings.ctl[c] = not on
           settingsSave()
@@ -13444,8 +13499,8 @@ local drawDesktopUI = (function()
       for _, r in ipairs(list) do
         local ok = r[2] ~= nil and r[2] ~= ''
         all = all and ok
-        drawText(ok and 'OK' or '--', FONT_MONO, 10 * s, vec2(x0, y), ok and PANEL_COLORS.green or PANEL_COLORS.red)
-        drawText(r[1], FONT_TEXT, 10 * s, vec2(x0 + 30 * s, y), COLOR_TITLE)
+        drawText(ok and 'OK' or '--', FONT_MONO, 10 * s, TMP.a:set(x0, y), ok and PANEL_COLORS.green or PANEL_COLORS.red)
+        drawText(r[1], FONT_TEXT, 10 * s, TMP.a:set(x0 + 30 * s, y), COLOR_TITLE)
         drawTextRight(ok and r[2] or (r[1] == TEXTS.setApp and AppLink.waiting() and TEXTS.setChecking or TEXTS.setMissing), FONT_MONO, 10 * s, p2.x - 14 * s, y, ok and COLOR_TITLE or PANEL_COLORS.red)
         y = y + 18 * s
       end
@@ -13453,10 +13508,10 @@ local drawDesktopUI = (function()
       if all then
         Settings.appT = Settings.appT or state.ui.clock
         local left = math.max(math.ceil(5 - (state.ui.clock - Settings.appT)), 0)
-        drawText(string.format(TEXTS.setAllGood, left), FONT_MONO, 9 * s, vec2(x0, y), COLOR_DIM)
+        drawText(string.format(TEXTS.setAllGood, left), FONT_MONO, 9 * s, TMP.a:set(x0, y), COLOR_DIM)
         if left <= 0 then Desktop.settingsOpen = false end
       else
-        drawText(TEXTS.setNotGood, FONT_MONO, 9 * s, vec2(x0, y), PANEL_COLORS.red)
+        drawText(TEXTS.setNotGood, FONT_MONO, 9 * s, TMP.a:set(x0, y), PANEL_COLORS.red)
       end
     end
   end
@@ -13581,12 +13636,12 @@ local drawDesktopUI = (function()
     return y - 1 * s + (14 * s - th) / 2
   end
   local function rowLabel(text, font, size, x, y, s, color)
-    drawText(text, font, size, vec2(x, rowY(text, font, size, y, s)), color)
+    drawText(text, font, size, TMP.a:set(x, rowY(text, font, size, y, s)), color)
   end
   local function ownField(key, fa, fb, value, masked, s)
     local on = Direction.focus == key
     ui.drawRectFilled(fa, fb, rgbm(0, 0, 0, 0.5), 2 * s)
-    ui.drawRect(fa, fb, on and PANEL_COLORS.yellow or rgbm(1, 1, 1, 0.35), 2 * s)
+    ui.drawRect(fa, fb, on and PANEL_COLORS.yellow or TMP.edge35, 2 * s)
     local caret = on and math.floor(state.ui.clock * 2) % 2 == 0 and '|' or ''
     ui.pushClipRect(fa, fb)
     local shown = (masked and string.rep('*', Lang.letters.count(value)) or value) .. caret
@@ -13594,7 +13649,7 @@ local drawDesktopUI = (function()
     ui.pushDWriteFont(FONT_MONO)
     local th = ui.measureDWriteText(shown ~= '' and shown or 'X', ms).y
     ui.popDWriteFont()
-    drawText(shown, FONT_MONO, 10 * s, vec2(fa.x + 4 * s, fa.y + (fb.y - fa.y - th) / 2), COLOR_TITLE)
+    drawText(shown, FONT_MONO, 10 * s, TMP.a:set(fa.x + 4 * s, fa.y + (fb.y - fa.y - th) / 2), COLOR_TITLE)
     ui.popClipRect()
     Drag.clickable(fa, fb, function() Direction.focus = key end)
     local enter = false
@@ -13733,7 +13788,7 @@ local drawDesktopUI = (function()
     local p1 = vec2(math.floor(x), math.floor(dp1.y))
     local p2 = vec2(p1.x + LW, math.min(p1.y + lh, h - 4 * s))
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(TEXTS.dirList, FONT_TITLE, 12 * s, vec2(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.dirList, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Direction.listOpen = false end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 26 * s
@@ -13741,16 +13796,16 @@ local drawDesktopUI = (function()
     local function row(n, col)
       local a, b = vec2(p1.x + 8 * s, y - 1 * s), vec2(p2.x - 8 * s, y + ROWL - 2 * s)
       if Direction.target == n then ui.drawRectFilled(a, b, rgbm(1, 1, 1, 0.12), 2 * s) end
-      drawText(n, FONT_TEXT, 9.5 * s, vec2(p1.x + 12 * s, y), col)
+      drawText(n, FONT_TEXT, 9.5 * s, TMP.a:set(p1.x + 12 * s, y), col)
       drawTextRight(Direction.guids[n] or '-', FONT_MONO, 9 * s, p2.x - 12 * s, y + 1 * s,
         Direction.guids[n] and COLOR_TITLE or COLOR_OFF)
       local we = Direction.web.byName[n]
       local car = onCar[n]
       local extra = car and string.format(TEXTS.dirBalRes, CarRead.num(car.ballast), CarRead.num(car.restrictor)) or nil
       if we then
-        drawText((extra and (extra .. '  -  ') or '') .. webLine(we), FONT_MONO, 8 * s, vec2(p1.x + 12 * s, y + 12 * s), COLOR_DIM)
+        drawText((extra and (extra .. '  -  ') or '') .. webLine(we), FONT_MONO, 8 * s, TMP.a:set(p1.x + 12 * s, y + 12 * s), COLOR_DIM)
       elseif extra then
-        drawText(extra, FONT_MONO, 8 * s, vec2(p1.x + 12 * s, y + 12 * s), COLOR_DIM)
+        drawText(extra, FONT_MONO, 8 * s, TMP.a:set(p1.x + 12 * s, y + 12 * s), COLOR_DIM)
       end
       Drag.clickable(a, b, function()
         Direction.target = n
@@ -13763,16 +13818,16 @@ local drawDesktopUI = (function()
     end
     for _, n in ipairs(names) do row(n, COLOR_TITLE) end
     if #off > 0 then
-      drawText(webList and TEXTS.dirWebOthers or TEXTS.dirLeft, FONT_TITLE, 8.5 * s, vec2(p1.x + 12 * s, y), COLOR_DIM)
+      drawText(webList and TEXTS.dirWebOthers or TEXTS.dirLeft, FONT_TITLE, 8.5 * s, TMP.a:set(p1.x + 12 * s, y), COLOR_DIM)
       y = y + ROWL
       for _, n in ipairs(off) do row(n, COLOR_DIM) end
     end
     ui.popClipRect()
     if Direction.web.err then
-      drawText(string.format(TEXTS.dirWebErr, Direction.web.err), FONT_MONO, 8.5 * s, vec2(p1.x + 12 * s, p2.y - 16 * s),
+      drawText(string.format(TEXTS.dirWebErr, Direction.web.err), FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 12 * s, p2.y - 16 * s),
         PANEL_COLORS.red)
     elseif config.kmrStatsUrl == '' then
-      drawText(TEXTS.dirWebOff, FONT_MONO, 8.5 * s, vec2(p1.x + 12 * s, p2.y - 16 * s), COLOR_DIM)
+      drawText(TEXTS.dirWebOff, FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 12 * s, p2.y - 16 * s), COLOR_DIM)
     end
   end
   Direction.cmdTab, Direction.cmdScroll = 'rc', 0
@@ -13786,7 +13841,7 @@ local drawDesktopUI = (function()
     local m = ui.mousePos()
     local over = m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y
     if over then ui.captureMouse(true) end
-    drawText(TEXTS.dirCmdTitle, FONT_TITLE, 12 * s, vec2(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.dirCmdTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Direction.cmdOpen = false end)
     local tx = p1.x + 110 * s
     local group
@@ -13798,7 +13853,7 @@ local drawDesktopUI = (function()
     end
     group = group or Desktop.commands[1]
     drawSeparator(p1, p2, p1.y + 21 * s, s)
-    drawText(TEXTS.dirCmdHow .. group.how, FONT_MONO, 8.5 * s, vec2(p1.x + 12 * s, p1.y + 25 * s), PANEL_COLORS.yellow)
+    drawText(TEXTS.dirCmdHow .. group.how, FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 12 * s, p1.y + 25 * s), PANEL_COLORS.yellow)
     local top = p1.y + 42 * s
     local rowsFit = math.max(math.floor((p2.y - 6 * s - top) / ROWC), 1)
     local maxScroll = math.max(#group.rows - rowsFit, 0)
@@ -13812,8 +13867,8 @@ local drawDesktopUI = (function()
     local y = top
     for i = Direction.cmdScroll + 1, math.min(#group.rows, Direction.cmdScroll + rowsFit) do
       local r = group.rows[i]
-      drawText(r[1], FONT_MONO, 9 * s, vec2(p1.x + 12 * s, y), COLOR_TITLE)
-      drawText(r[2], FONT_TEXT, 9 * s, vec2(p1.x + 380 * s, y), COLOR_DIM)
+      drawText(r[1], FONT_MONO, 9 * s, TMP.a:set(p1.x + 12 * s, y), COLOR_TITLE)
+      drawText(r[2], FONT_TEXT, 9 * s, TMP.a:set(p1.x + 380 * s, y), COLOR_DIM)
       y = y + ROWC
     end
     ui.popClipRect()
@@ -13991,8 +14046,8 @@ local drawDesktopUI = (function()
     local m = ui.mousePos()
     if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
     drawPanel(p1, p2, state.redFlag and BORDER_RED or BORDER_BASE, s)
-    drawText(TEXTS.dirTitle, FONT_TITLE, 12 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
-    drawText(TEXTS.dirRole[config.role] or '', FONT_MONO, 10 * s, vec2(p1.x + 170 * s, p1.y + 5 * s), COLOR_DIM)
+    drawText(TEXTS.dirTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.dirRole[config.role] or '', FONT_MONO, 10 * s, TMP.a:set(p1.x + 170 * s, p1.y + 5 * s), COLOR_DIM)
     local flagText = state.redFlag and TEXTS.flagRed or TEXTS.redNone
     drawTextRight(flagText, FONT_MONO, 10 * s, p2.x - 40 * s, p1.y + 5 * s, state.redFlag and PANEL_COLORS.red or COLOR_DIM)
     chip(TEXTS.dirResetBtn, vec2(p2.x - 40 * s - textWidth(flagText, FONT_MONO, 10 * s) - textWidth(TEXTS.dirResetBtn, FONT_MONO, 9 * s) - 24 * s,
@@ -14001,7 +14056,7 @@ local drawDesktopUI = (function()
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 28 * s
     local x0 = p1.x + 14 * s
-    drawText(sessionLine(), FONT_MONO, 10 * s, vec2(x0, y), COLOR_TITLE)
+    drawText(sessionLine(), FONT_MONO, 10 * s, TMP.a:set(x0, y), COLOR_TITLE)
     local cbx = p2.x - 14 * s - textWidth(TEXTS.dirCmdBtn, FONT_MONO, 9 * s) - 10 * s
     chip(TEXTS.dirCmdBtn, vec2(cbx, y - 1 * s), s, Direction.cmdOpen, nil, function() Direction.cmdOpen = not Direction.cmdOpen end)
     chip(TEXTS.kmrEvBtn, vec2(cbx - textWidth(TEXTS.kmrEvBtn, FONT_MONO, 9 * s) - 20 * s, y - 1 * s), s, KmrEvents.open, nil,
@@ -14138,11 +14193,11 @@ local drawDesktopUI = (function()
     local status = Direction.status or (cmd and not state.kmrAdmin and TEXTS.redKmrOff or '')
     local maxW = p2.x - x0 - 14 * s
     status = fitText(status, FONT_MONO, 9 * s, maxW)
-    drawText(status, FONT_MONO, 9 * s, vec2(x0, y), Direction.statusColor or PANEL_COLORS.yellow)
+    drawText(status, FONT_MONO, 9 * s, TMP.a:set(x0, y), Direction.statusColor or PANEL_COLORS.yellow)
     y = y + 18 * s
     if #alerts > 0 then
       local text = fitText(TEXTS.connAlert .. table.concat(alerts, '  -  '), FONT_MONO, 9 * s, maxW, '')
-      drawText(text, FONT_MONO, 9 * s, vec2(x0, y), PANEL_COLORS.red)
+      drawText(text, FONT_MONO, 9 * s, TMP.a:set(x0, y), PANEL_COLORS.red)
       y = y + 14 * s
     end
     local inPits, over = 0, 0
@@ -14153,12 +14208,12 @@ local drawDesktopUI = (function()
       if c.isInPitlane then inPits = inPits + 1 end
       local fast = not c.isInPitlane and kmh > config.flags.redSpeedKmh
       if fast then over = over + 1 end
-      drawText('#' .. tostring(ac.getDriverNumber(e.i) or e.i), FONT_MONO, 9.5 * s, vec2(x0, y), COLOR_TITLE)
+      drawText('#' .. tostring(ac.getDriverNumber(e.i) or e.i), FONT_MONO, 9.5 * s, TMP.a:set(x0, y), COLOR_TITLE)
       connLight(vec2(p1.x + 50 * s, y + 6.5 * s), s, Connection.heat(e.i))
       local carName = tostring(ac.getDriverName(e.i) or '')
-      drawText(carName, FONT_TEXT, 9.5 * s, vec2(p1.x + 60 * s, y), Direction.target == carName and PANEL_COLORS.yellow or COLOR_TITLE)
+      drawText(carName, FONT_TEXT, 9.5 * s, TMP.a:set(p1.x + 60 * s, y), Direction.target == carName and PANEL_COLORS.yellow or COLOR_TITLE)
       if cmd then Drag.clickable(vec2(x0, y - 1 * s), vec2(p1.x + 205 * s, y + 13 * s), function() Direction.target = carName end) end
-      drawText(where, FONT_MONO, 9.5 * s, vec2(p1.x + 210 * s, y),
+      drawText(where, FONT_MONO, 9.5 * s, TMP.a:set(p1.x + 210 * s, y),
         c.isInPit and PANEL_COLORS.green or (c.isInPitlane and PANEL_COLORS.yellow or PANEL_COLORS.red))
       drawTextRight(string.format('%.0f', kmh), FONT_MONO, 9.5 * s, p1.x + 300 * s, y, fast and PANEL_COLORS.red or COLOR_TITLE)
       if cmd then
@@ -14196,29 +14251,29 @@ local drawDesktopUI = (function()
       local ly = y + 16 * s
       local cx = p1.x + 60 * s
       for k, cell in ipairs(cells[e.i] or {}) do
-        drawText(cell[1], FONT_MONO, 8.5 * s, vec2(cx, ly), cell[2])
+        drawText(cell[1], FONT_MONO, 8.5 * s, TMP.a:set(cx, ly), cell[2])
         cx = cx + (colW[k] or 0) + 14 * s
       end
       ly = ly + 12 * s
       local sl, slColor = swapLine(e.i, c)
-      if sl then drawText(sl, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, ly), slColor); ly = ly + 12 * s end
-      for _, t in ipairs(fitLines(pen, 8.5 * s, lw)) do drawText(t, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, ly), penColor); ly = ly + 12 * s end
-      for _, t in ipairs(fitLines(kline, 8.5 * s, lw)) do drawText(t, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, ly), COLOR_DIM); ly = ly + 12 * s end
+      if sl then drawText(sl, FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 60 * s, ly), slColor); ly = ly + 12 * s end
+      for _, t in ipairs(fitLines(pen, 8.5 * s, lw)) do drawText(t, FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 60 * s, ly), penColor); ly = ly + 12 * s end
+      for _, t in ipairs(fitLines(kline, 8.5 * s, lw)) do drawText(t, FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 60 * s, ly), COLOR_DIM); ly = ly + 12 * s end
       y = math.max(y + 44 * s, ly + 4 * s)
     end
     if #gone > 0 then
-      drawText(TEXTS.connGoneTitle, FONT_TITLE, 8.5 * s, vec2(x0, y), COLOR_DIM)
+      drawText(TEXTS.connGoneTitle, FONT_TITLE, 8.5 * s, TMP.a:set(x0, y), COLOR_DIM)
       y = y + 16 * s
       for _, g in ipairs(gone) do
-        drawText('#' .. tostring(ac.getDriverNumber(g.i) or g.i), FONT_MONO, 9.5 * s, vec2(x0, y), COLOR_DIM)
-        drawText(g.e.name, FONT_TEXT, 9.5 * s, vec2(p1.x + 60 * s, y), COLOR_DIM)
-        drawText(TEXTS.connLeft, FONT_MONO, 9.5 * s, vec2(p1.x + 210 * s, y), PANEL_COLORS.red)
+        drawText('#' .. tostring(ac.getDriverNumber(g.i) or g.i), FONT_MONO, 9.5 * s, TMP.a:set(x0, y), COLOR_DIM)
+        drawText(g.e.name, FONT_TEXT, 9.5 * s, TMP.a:set(p1.x + 60 * s, y), COLOR_DIM)
+        drawText(TEXTS.connLeft, FONT_MONO, 9.5 * s, TMP.a:set(p1.x + 210 * s, y), PANEL_COLORS.red)
         local sl, slColor = swapLine(g.i, nil)
-        if sl then drawText(sl, FONT_MONO, 8.5 * s, vec2(p1.x + 60 * s, y + 14 * s), slColor) end
+        if sl then drawText(sl, FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 60 * s, y + 14 * s), slColor) end
         y = y + 30 * s
       end
     end
-    drawText(string.format(TEXTS.redCount, inPits, #cars, over), FONT_MONO, 9 * s, vec2(x0, y + 2 * s), COLOR_DIM)
+    drawText(string.format(TEXTS.redCount, inPits, #cars, over), FONT_MONO, 9 * s, TMP.a:set(x0, y + 2 * s), COLOR_DIM)
     if cmd and Direction.listOpen then driversList(w, h, s, p1, p2) end
     if Direction.cmdOpen then commandsList(w, h, s, p1, p2) end
     if KmrEvents.open then KmrEvents.draw(w, h, s, p1, p2, chip) end
@@ -14253,7 +14308,7 @@ local drawDesktopUI = (function()
     Drag.group = nil
     drawPanel(p1, p2, BORDER_BLUE, s)
     drawText(config.eventName ~= '' and Lang.letters.upper(config.eventName) or TEXTS.lobbyTitle, FONT_TITLE, 12 * s,
-      vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+      TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     drawTextRight(TEXTS.sessionName[sim.raceSessionType] or '', FONT_MONO, 10 * s, p2.x - 14 * s, p1.y + 5 * s, COLOR_TITLE)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 27 * s
@@ -14270,26 +14325,26 @@ local drawDesktopUI = (function()
       { TEXTS.lobbyWeather, string.format('%.0f / %.0f C', CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature)) },
     }
     for _, r in ipairs(rows) do
-      drawText(r[1], FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+      drawText(r[1], FONT_TEXT, 10 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
       drawTextRight(r[2], FONT_MONO, 10 * s, p2.x - 14 * s, y, r[2] == '-' and COLOR_OFF or COLOR_TITLE)
       y = y + 13 * s
     end
     drawSeparator(p1, p2, y + 3 * s, s)
     y = y + 8 * s
-    drawText(TEXTS.lobbyRc, FONT_TITLE, 10 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+    drawText(TEXTS.lobbyRc, FONT_TITLE, 10 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
     y = y + 14 * s
     for _, r in ipairs(rcRows) do
-      drawText(r[1], FONT_TEXT, 10 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+      drawText(r[1], FONT_TEXT, 10 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
       drawTextRight(r[2], FONT_MONO, 10 * s, p2.x - 14 * s, y, r[3])
       y = y + 13 * s
     end
     drawSeparator(p1, p2, y + 3 * s, s)
     y = y + 8 * s
-    drawText(TEXTS.lobbyMessages, FONT_TITLE, 10 * s, vec2(p1.x + 14 * s, y), COLOR_DIM)
+    drawText(TEXTS.lobbyMessages, FONT_TITLE, 10 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
     y = y + 14 * s
-    if #msgs == 0 then drawText(TEXTS.auditEmpty, FONT_MONO, 9 * s, vec2(p1.x + 14 * s, y), COLOR_OFF) end
+    if #msgs == 0 then drawText(TEXTS.auditEmpty, FONT_MONO, 9 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_OFF) end
     for _, it in ipairs(msgs) do
-      drawText(it.src, FONT_TITLE, 9 * s, vec2(p1.x + 14 * s, y), SRC_COLOR[it.src] or COLOR_TITLE)
+      drawText(it.src, FONT_TITLE, 9 * s, TMP.a:set(p1.x + 14 * s, y), SRC_COLOR[it.src] or COLOR_TITLE)
       ui.pushDWriteFont(FONT_TEXT)
       ui.setCursor(vec2(p1.x + 60 * s, y))
       ui.dwriteTextAligned(it.text, 9 * s, ui.Alignment.Start, ui.Alignment.Start, vec2(LW - 74 * s, 22 * s), true, COLOR_TITLE)
@@ -14440,7 +14495,7 @@ local drawDesktopUI = (function()
     local p1 = vec2(x0 + cw + gapW, math.floor(y))
     local p2 = vec2(x0 + rw, p1.y + mh)
     drawPanel(p1, p2, BORDER_BASE, s)
-    drawText(TEXTS.msgTitle, FONT_TITLE, 10 * s, vec2(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    drawText(TEXTS.msgTitle, FONT_TITLE, 10 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     drawTextRight(msg.src, FONT_MONO, 9 * s, p2.x - 14 * s, p1.y + 5 * s, SRC_COLOR[msg.src] or COLOR_DIM)
     ui.pushDWriteFont(FONT_TEXT)
     ui.setCursor(vec2(p1.x + 14 * s, p1.y + 17 * s))
@@ -14463,7 +14518,7 @@ local drawDesktopUI = (function()
     if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
     drawPanel(p1, p2, BORDER_YELLOW, s)
     drawText('#' .. tostring(ac.getDriverNumber(cm.index) or cm.index) .. '  ' .. name, FONT_TITLE, 11 * s,
-      vec2(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
+      TMP.a:set(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.carMenu = nil end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 27 * s
@@ -14476,7 +14531,7 @@ local drawDesktopUI = (function()
       end)
       chip(TEXTS.cmMine, vec2(x, y), s, false, nil, function() ac.focusCar(0) end)
     else
-      drawText(TEXTS.cmNoWatch, FONT_MONO, 8.5 * s, vec2(x, y + 2 * s), COLOR_DIM)
+      drawText(TEXTS.cmNoWatch, FONT_MONO, 8.5 * s, TMP.a:set(x, y + 2 * s), COLOR_DIM)
     end
     if config.canCommand and cm.index ~= 0 then
       y = y + 22 * s
@@ -14491,7 +14546,7 @@ local drawDesktopUI = (function()
       confirmChip(TEXTS.dirChip.kick, 'mkick' .. slot, vec2(ax, y), s, PANEL_COLORS.red, function() sendKmr('player_kick ' .. slot, string.format(TEXTS.dirAct.kick, name)) end)
     end
     if Direction.status and state.ui.clock - Direction.statusT < 5 then
-      drawText(Direction.status, FONT_MONO, 8.5 * s, vec2(p1.x + 12 * s, p2.y - 14 * s), Direction.statusColor or PANEL_COLORS.yellow)
+      drawText(Direction.status, FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 12 * s, p2.y - 14 * s), Direction.statusColor or PANEL_COLORS.yellow)
     end
   end
   return function(w, h, s)
@@ -14675,7 +14730,7 @@ function script.drawUI(exclusive)
       local p1 = vec2(x, ySd)
       local p2 = vec2(x + boxW, ySd + sdH)
       drawPanel(p1, p2, BORDER_YELLOW, s)
-      drawText(TEXTS.liftTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+      drawText(TEXTS.liftTitle, FONT_TITLE, 14 * s, TMP.a:set(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
       drawSeparator(p1, p2, p1.y + 24 * s, s)
       local bx1, bx2 = p1.x + 16 * s, p2.x - 16 * s
       local by1, by2 = p1.y + 30 * s, p1.y + 38 * s
@@ -14691,7 +14746,7 @@ function script.drawUI(exclusive)
       ui.drawRectFilled(vec2(px(mx - 1.5 * s), px(by1 - 3 * s)), vec2(px(mx + 1.5 * s), px(by2 + 3 * s)),
         rgbm(1, 1, 1, 0.75 + 0.25 * pulse), px(1 * s))
       local ly = p1.y + 41 * s
-      drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, vec2(bx1, ly), COLOR_DIM)
+      drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, TMP.a:set(bx1, ly), COLOR_DIM)
       local mid = string.format(TEXTS.liftLimit, cc.zone.gainTolerance)
       local ms = math.max(10 * s, Desktop.text.minPx)
       ui.pushDWriteFont(FONT_MONO)
@@ -14707,19 +14762,19 @@ function script.drawUI(exclusive)
         local p1 = vec2(x, ySd + sdH + gap)
         local p2 = vec2(x + boxW, ySd + sdH + gap + msgH)
         drawPanel(p1, p2, BORDER_GREEN, s)
-        drawText(TEXTS.swapTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+        drawText(TEXTS.swapTitle, FONT_TITLE, 14 * s, TMP.a:set(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
         drawSeparator(p1, p2, p1.y + 24 * s, s)
         local total = config.swapMinSeconds
         local left = total * (1 - k)
-        drawText(string.format(TEXTS.swapWait, mmss(left)), FONT_TEXT, 12 * s, vec2(p1.x + 16 * s, p1.y + 29 * s), COLOR_SWAP)
+        drawText(string.format(TEXTS.swapWait, mmss(left)), FONT_TEXT, 12 * s, TMP.a:set(p1.x + 16 * s, p1.y + 29 * s), COLOR_SWAP)
         drawText(string.format(TEXTS.swapTimes, mmss(total - left), mmss(total)), FONT_MONO, 12 * s,
-          vec2(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE)
+          TMP.a:set(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE)
       else
         local p1 = vec2(x, ySd)
         local p2 = vec2(x + boxW, ySd + sdH)
         drawPanel(p1, p2, BORDER_YELLOW, s)
         drawText(intro.box == 'lift' and TEXTS.liftTitle or TEXTS.sdTitle, FONT_TITLE, 14 * s,
-          vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+          TMP.a:set(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
         drawSeparator(p1, p2, p1.y + 24 * s, s)
         if intro.box == 'lift' then
           local bx1, bx2 = p1.x + 16 * s, p2.x - 16 * s
@@ -14732,7 +14787,7 @@ function script.drawUI(exclusive)
           ui.drawRectFilled(vec2(px(mx - 1.5 * s), px(by1 - 3 * s)), vec2(px(mx + 1.5 * s), px(by2 + 3 * s)),
             rgbm(1, 1, 1, 0.75 + 0.25 * pulse), px(1 * s))
           local ly = p1.y + 41 * s
-          drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, vec2(bx1, ly), COLOR_DIM)
+          drawText(TEXTS.liftSlower, FONT_MONO, 10 * s, TMP.a:set(bx1, ly), COLOR_DIM)
           drawTextRight(TEXTS.liftFaster, FONT_MONO, 10 * s, bx2, ly, COLOR_DIM)
         else
           local num = rgbm(COLOR_TEXT.r, COLOR_TEXT.g, COLOR_TEXT.b, 0.3 + 0.7 * pulse)
@@ -14759,7 +14814,7 @@ function script.drawUI(exclusive)
         local p1 = vec2(x, ySd)
         local p2 = vec2(x + boxW, ySd + sdH)
         drawPanel(p1, p2, BORDER_YELLOW, s)
-        drawText(sd.title, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+        drawText(sd.title, FONT_TITLE, 14 * s, TMP.a:set(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
         drawSeparator(p1, p2, p1.y + 24 * s, s)
         local numColor = COLOR_TEXT
         if (sd.pulseHz or 0) > 0 then
@@ -14796,7 +14851,7 @@ function script.drawUI(exclusive)
     drawPanel(p1, p2, BORDER_RED, s)
     local stopping = StopAndGo.stopping
     drawText(stopping and TEXTS.sgBoxTitle or TEXTS.sgBoxInterrupted, FONT_TITLE, 14 * s,
-      vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+      TMP.a:set(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
     drawTextRight(stopping and mmss(left) or string.format(TEXTS.sgBoxLeft, mmss(left)), FONT_MONO, 14 * s,
       p2.x - 16 * s, p1.y + 5 * s, COLOR_TITLE)
     drawSeparator(p1, p2, p1.y + 24 * s, s)
@@ -14805,16 +14860,16 @@ function script.drawUI(exclusive)
       local back = config.sgReturnSeconds > 0 and StopAndGo.returnLeft and StopAndGo.returnLeft()
       line1 = back and string.format(TEXTS.sgBoxReturnWithin, mmss(back)) or TEXTS.sgBoxSameDriver
     end
-    drawText(line1, FONT_TEXT, 12 * s, vec2(p1.x + 16 * s, p1.y + 29 * s), BORDER_RED)
+    drawText(line1, FONT_TEXT, 12 * s, TMP.a:set(p1.x + 16 * s, p1.y + 29 * s), BORDER_RED)
     if stopping then
       local bx1, bx2, by = p1.x + 16 * s, p2.x - 16 * s, p1.y + 47 * s
       ui.drawRectFilled(vec2(px(bx1), px(by)), vec2(px(bx2), px(by + 5 * s)), rgbm(1, 1, 1, 0.12), px(2 * s))
       local k = total > 0 and math.min(math.max((total - left) / total, 0), 1) or 0
       ui.drawRectFilled(vec2(px(bx1), px(by)), vec2(px(bx1 + (bx2 - bx1) * k), px(by + 5 * s)), BORDER_RED, px(2 * s))
       drawText(string.format(TEXTS.sgBoxTimes, mmss(total - left), mmss(total)), FONT_MONO, 12 * s,
-        vec2(p1.x + 16 * s, p1.y + 56 * s), COLOR_TITLE)
+        TMP.a:set(p1.x + 16 * s, p1.y + 56 * s), COLOR_TITLE)
     else
-      drawText(TEXTS.sgBoxResume, FONT_MONO, 12 * s, vec2(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE)
+      drawText(TEXTS.sgBoxResume, FONT_MONO, 12 * s, TMP.a:set(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE)
     end
     yNext = p2.y + gap
   end
@@ -14839,11 +14894,11 @@ function script.drawUI(exclusive)
     local p1 = vec2(x, yNext)
     local p2 = vec2(x + boxW, yNext + msgH)
     drawPanel(p1, p2, BORDER_RED, s)
-    drawText(TEXTS.damageBeyondTitle, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+    drawText(TEXTS.damageBeyondTitle, FONT_TITLE, 14 * s, TMP.a:set(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
     drawSeparator(p1, p2, p1.y + 24 * s, s)
-    drawText(TEXTS.damageBeyond, FONT_TEXT, 12 * s, vec2(p1.x + 16 * s, p1.y + 29 * s), BORDER_RED)
+    drawText(TEXTS.damageBeyond, FONT_TEXT, 12 * s, TMP.a:set(p1.x + 16 * s, p1.y + 29 * s), BORDER_RED)
     drawText(string.format('%s - %s', rp.text or '', rp.detail or ''), FONT_MONO, 12 * s,
-      vec2(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE)
+      TMP.a:set(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE)
     yNext = p2.y + gap
   end
   local ww = WrongWay.back or 0
@@ -14890,10 +14945,10 @@ function script.drawUI(exclusive)
       local p1 = vec2(x, ySwap)
       local p2 = vec2(x + boxW, ySwap + msgH)
       drawPanel(p1, p2, BORDER_GREEN, s)
-      drawText(title, FONT_TITLE, 14 * s, vec2(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
+      drawText(title, FONT_TITLE, 14 * s, TMP.a:set(p1.x + 16 * s, p1.y + 5 * s), COLOR_TITLE)
       drawSeparator(p1, p2, p1.y + 24 * s, s)
-      drawText(line1, FONT_TEXT, 12 * s, vec2(p1.x + 16 * s, p1.y + 29 * s), COLOR_SWAP)
-      if line2 then drawText(line2, FONT_MONO, 12 * s, vec2(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE) end
+      drawText(line1, FONT_TEXT, 12 * s, TMP.a:set(p1.x + 16 * s, p1.y + 29 * s), COLOR_SWAP)
+      if line2 then drawText(line2, FONT_MONO, 12 * s, TMP.a:set(p1.x + 16 * s, p1.y + 45 * s), COLOR_TITLE) end
     end
   end
   if config.mode == 'CSP' and Intro.done then
