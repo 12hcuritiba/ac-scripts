@@ -1149,20 +1149,27 @@ end
 local function serverTimeMs() return sim.currentSessionTime or 0 end
 local CarRead = {}
 CarRead.staffLogged = {}
+CarRead.staffIndex = nil
 function CarRead.isStaff(i)
-  local slotOf = ac.getCar.serverSlot
-  if not slotOf then return false end
-  for what, n in pairs(config.staffPits) do
-    local c = n > 0 and slotOf(n - 1) or nil
-    if c and c.index == i and (i == 0 or c.isConnected) then
-      if not CarRead.staffLogged[i] then
-        CarRead.staffLogged[i] = true
-        ac.log(string.format('race-control: car %d (position %d of the entry list, %s): out of the race', i, n, what))
+  local idx = CarRead.staffIndex
+  if not idx then
+    idx = {}
+    local slotOf = ac.getCar.serverSlot
+    if slotOf then
+      for what, n in pairs(config.staffPits) do
+        local c = n > 0 and slotOf(n - 1) or nil
+        if c then idx[c.index] = { what = what, n = n } end
       end
-      return true
     end
+    CarRead.staffIndex = idx
   end
-  return false
+  local s = idx[i]
+  if not s then return false end
+  if not CarRead.staffLogged[i] then
+    CarRead.staffLogged[i] = true
+    ac.log(string.format('race-control: car %d (position %d of the entry list, %s): out of the race', i, s.n, s.what))
+  end
+  return true
 end
 function CarRead.num(v) return tonumber(v) or 0 end
 function CarRead.flagOn(v)
