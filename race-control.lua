@@ -3598,10 +3598,11 @@ ac.onChatMessage(function(message, senderCarIndex)
     local prefix = tostring(ac.getDriverName(0) or '') .. ':'
     local text = message
     if message:sub(1, #prefix) == prefix then text = message:sub(#prefix + 1):gsub('^%s+', '') end
-    showNotice(TEXTS.kmrTitle, text, nil, SERVER_NOTICE_SECONDS)
+    local nextRace = hasAny(low, DICT.kmr.nextRace)
+    if not nextRace then showNotice(TEXTS.kmrTitle, text, nil, SERVER_NOTICE_SECONDS) end
     local t, n = state.chat.stamp()
     state.kmrMessages[#state.kmrMessages + 1] = { text = text, sender = senderCarIndex, t = t, n = n }
-    Audit.add('KMR', text)
+    if not nextRace then Audit.add('KMR', text) end
     return true
   end
   if server and onDriverSwapMessage(message) then
@@ -5129,7 +5130,7 @@ do
     p.setupPress = {}
     if #TYRE_CHOICES[tyres][2] > 0 then for k, v in pairs(PitBox.setupPress) do p.setupPress[k] = v end end
     p.presetIdx = PitBox.presetIndex()
-    p.switch = presetCount() > 1 and p.presetIdx ~= num(sim.currentQuickPitPreset)
+    p.switch = presetCount() > 1 and PitBox.presetIdx ~= nil and p.presetIdx ~= num(sim.currentQuickPitPreset)
     return p
   end
   local function planText(p)
@@ -5285,7 +5286,7 @@ do
         end
       end
     else
-      PitBox.repair[what] = not PitBox.repair[what]
+      PitBox.repair[what] = dir > 0
     end
     PitBox.touched = true
   end
@@ -5363,7 +5364,7 @@ do
       for k, v in tostring(b.press):gmatch('([%w_]+):(%-?%d+)') do PitBox.setupPress[k] = tonumber(v) end
     end
     if b.preset and b.preset >= 0 and b.preset < presetCount() then PitBox.presetIdx = b.preset end
-    PitBox.touched = true
+    if b.fuel or b.compound or b.tyres or b.repair or b.press or b.preset then PitBox.touched = true end
     if b.start then PitBox.remoteUntil = state.ui.clock + REMOTE_START_S end
   end
   function PitBox.stateBody(car)
@@ -13809,7 +13810,13 @@ local drawDesktopUI = (function()
     drawPanel(p1, p2, BORDER_BLUE, s)
     drawText(config.eventName ~= '' and Lang.letters.upper(config.eventName) or TEXTS.lobbyTitle, FONT_TITLE, 12 * s,
       TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
-    drawTextRight(TEXTS.sessionName[sim.raceSessionType] or '', FONT_MONO, 10 * s, p2.x - 14 * s, p1.y + 5 * s, COLOR_TITLE)
+    local when = ''
+    local stamp = tonumber(sim.timestamp)
+    if stamp and stamp > 0 then
+      local okD, d = pcall(os.dateGlobal or function(f, t) return os.date('!' .. f, t) end, '%d/%m/%Y %H:%M', stamp)
+      if okD and d then when = '  ' .. d end
+    end
+    drawTextRight((TEXTS.sessionName[sim.raceSessionType] or '') .. when, FONT_MONO, 10 * s, p2.x - 14 * s, p1.y + 5 * s, COLOR_TITLE)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 27 * s
     local pen = Panel.cellPenalties()

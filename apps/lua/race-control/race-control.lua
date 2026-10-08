@@ -569,47 +569,19 @@ local function LANG_PACK(t)
   return table.concat(out, '\n')
 end
 local LANG_EVENT, LANG_STORE, LANG_OK = 'amxracing.race-control.lang', '.amxracing.race-control.lang', 'amxracing.race-control.lang.ok'
-local function lzfDecode(s, from)
-  local out, n, i, len = {}, 0, from, #s
-  while i <= len do
-    local c = s:byte(i)
-    i = i + 1
-    if c < 32 then
-      for k = i, i + c do n = n + 1; out[n] = s:byte(k) end
-      i = i + c + 1
-    else
-      local l = math.floor(c / 32)
-      if l == 7 then l = l + s:byte(i); i = i + 1 end
-      local ref = n - (c % 32) * 256 - s:byte(i)
-      i = i + 1
-      for k = 0, l + 1 do n = n + 1; out[n] = out[ref + k] end
-    end
-  end
-  local parts, unpackIt = {}, table.unpack or unpack
-  for k = 1, n, 4096 do parts[#parts + 1] = string.char(unpackIt(out, k, math.min(k + 4095, n))) end
-  return table.concat(parts)
+local function winLocale()
+  local before = os.setlocale(nil, 'collate')
+  local name = os.setlocale('', 'collate')
+  os.setlocale(before or 'C', 'collate')
+  return name
 end
-local function cmLocale()
-  local path = tostring(ac.getFolder(ac.FolderID.AppDataLocal) or '') .. '\\AcTools Content Manager\\Values.data'
-  local okOpen, f = pcall(io.open, path, 'rb')
-  if not okOpen or not f then return nil, 'Values.data not opened' end
-  local raw = f:read('*a')
-  f:close()
-  if type(raw) ~= 'string' or raw == '' then return nil, 'Values.data empty' end
-  local okLzf, data = pcall(function() return raw:byte(1) == 11 and lzfDecode(raw, 2) or raw end)
-  if not okLzf then return nil, 'Values.data not decoded: ' .. tostring(data) end
-  for line in data:gmatch('[^\r\n]+') do
-    local k, v = line:match('^([^\t]*)\t(.*)$')
-    if k == 'Settings.LocaleSettings.LocaleName_' then return v, 'Content Manager' end
-  end
-  return nil, 'no language in the Content Manager'
-end
-local okLocale, CM_LOCALE, CM_WHY = pcall(cmLocale)
-if not okLocale then CM_LOCALE, CM_WHY = nil, tostring(CM_LOCALE) end
-local LANG = (type(CM_LOCALE) == 'string' and CM_LOCALE:lower():match('^pt')) and 'pt' or 'en'
+local okLocale, WIN_LOCALE = pcall(winLocale)
+local WIN_WHY = okLocale and 'Windows' or tostring(WIN_LOCALE)
+if not okLocale then WIN_LOCALE = nil end
+local LANG = (type(WIN_LOCALE) == 'string' and (WIN_LOCALE:lower():match('^portuguese') or WIN_LOCALE:lower():match('^pt'))) and 'pt' or 'en'
 local LANG_TEXT = LANG == 'pt' and LANG_PACK(LANG_PT) or ''
-ac.log(string.format('race-control app: language %s (Content Manager: %s, %s), %d characters for the online script', LANG, tostring(CM_LOCALE),
-  tostring(CM_WHY), #LANG_TEXT))
+ac.log(string.format('race-control app: language %s (locale: %s, %s), %d characters for the online script', LANG, tostring(WIN_LOCALE), WIN_WHY,
+  #LANG_TEXT))
 local APP_TEXTS = {
   en = { loading = 'RACING CONTROL - LOADING', waiting = 'Waiting for the Racing Control of the event - please wait (the game closes in %d s if it does not load)',
     pingUnknown = 'Connection: ping not known yet', pingHigh = 'Connection problem: ping %d ms, over the limit of %d ms of the server - check your internet',
