@@ -1931,7 +1931,7 @@ function Record.load(list)
 end
 local OnlineQueue = { items = {}, lastT = -1e9 }
 do
-  local GAP = 0.2
+  local GAP = 0.25
   function OnlineQueue.push(send, msg, target)
     local t, n = state.chat.stamp()
     OnlineQueue.items[#OnlineQueue.items + 1] = { send = send, msg = msg, target = target, t = t, n = n }
