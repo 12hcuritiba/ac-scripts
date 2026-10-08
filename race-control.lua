@@ -1931,7 +1931,7 @@ function Record.load(list)
 end
 local OnlineQueue = { items = {}, lastT = -1e9 }
 do
-  local GAP = 0.25
+  local GAP = 0.2
   function OnlineQueue.push(send, msg, target)
     local t, n = state.chat.stamp()
     OnlineQueue.items[#OnlineQueue.items + 1] = { send = send, msg = msg, target = target, t = t, n = n }
@@ -2625,6 +2625,7 @@ do
   local sendRole = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.staff'),
     staffRole = ac.StructItem.uint8(),
+    staffSpare = ac.StructItem.uint32(),
   }, function(sender, msg)
     if not sender or sender.index == 0 then return end
     if (tonumber(msg.staffRole) or 0) > 0 then
@@ -2633,7 +2634,7 @@ do
     else
       CarRead.staff[sender.index] = nil
     end
-  end, nil, nil, { processPostponed = true })
+  end)
   function B.roleUpdate()
     local R = B.role
     if R.role and state.ui.clock - R.sentT >= ROLE_SEND then
