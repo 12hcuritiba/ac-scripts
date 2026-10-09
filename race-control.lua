@@ -327,6 +327,8 @@ local TEXTS = {
   parkedFuelRace = 'Out of fuel on track - %d s added to your race time', parkedFuelLaps = 'Out of fuel on track - your laps are invalid from now on',
   parkedFuelLapsLog = 'out of fuel - laps invalid from now on',
   timeNotServedLog = '%d s - %s not served at the end of the race', timeNotServedTitle = 'PENALTY NOT SERVED',
+  dtServedWhy = '%s - served in the pit pass (deadline DT%d)', dsqVoided = 'pending when the DSQ came: %s',
+  practiceClearedWhat = 'Practice - cleared at the pit place: %s',
   timeNotServed = '%d s added to your final time: %s not served',
   reason = {
     SD1 = 'Exclusion zone cut - zone 1',
@@ -3867,8 +3869,12 @@ local function carDsq(kind, reason, mode, detail)
   l.dsqReason = reason
   l.seq = l.seq + 1
   if l.dsq == 2 then state.pitDsqActive = true else state.dtDsqActive = true end
+  local voided = {}
+  for _, it in ipairs(l.items) do voided[#voided + 1] = reasonLog(it.cat) end
   Rules.zero()
-  rcLog(TEXTS.rc.dsq, detail and (reason .. ' - ' .. detail) or reason)
+  local why = detail and (reason .. ' - ' .. detail) or reason
+  if #voided > 0 then why = why .. ' - ' .. string.format(TEXTS.dsqVoided, table.concat(voided, ', ')) end
+  rcLog(TEXTS.rc.dsq, why)
 end
 local function carDsqClear(why)
   local l = state.list
@@ -3932,10 +3938,13 @@ function Rules.practiceClear(car)
     return 'dsq'
   end
   if #l.items == 0 and not next(state.slowdowns) and #l.endOfLap == 0 then return nil end
+  local cleared = {}
+  for _, it in ipairs(l.items) do cleared[#cleared + 1] = reasonLog(it.cat) end
   Rules.zero()
   l.invalidLap = nil
   ac.log('race-control: practice, car at its pit place: penalties cleared')
-  rcLog(TEXTS.rc.pit, 'Practice - pending penalties cleared at the pit place')
+  rcLog(TEXTS.rc.pit, #cleared > 0 and string.format(TEXTS.practiceClearedWhat, table.concat(cleared, ', '))
+    or 'Practice - pending penalties cleared at the pit place')
   showNotice(TEXTS.rcTitle, TEXTS.practiceCleared)
   return 'penalties'
 end
@@ -4077,9 +4086,7 @@ function Rules.line(viaPit, g, lapCount)
         listRemove(head)
         state.pitPaid = head
         PitStops.notePaid(head.cat .. ' DT')
-        if TEXTS.kmrReasons[head.cat] then
-          rcLog(TEXTS.rc.dtServed, TEXTS.kmrReasons[head.cat] .. ' - issued by KMR, served under Racing Control')
-        end
+        rcLog(TEXTS.rc.dtServed, string.format(TEXTS.dtServedWhy, reasonLog(head.cat), math.max(head.laps, 0)))
       end
     end
   elseif not frozen then
