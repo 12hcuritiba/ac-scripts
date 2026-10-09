@@ -209,7 +209,7 @@ local LANG_PT = {
   parkedFuelRace = 'Sem combustível na pista - %d s somados ao seu tempo de prova', parkedFuelLaps = 'Sem combustível na pista - suas voltas são inválidas daqui em diante',
   parkedFuelLapsLog = 'sem combustível - voltas inválidas daqui em diante',
   timeNotServedLog = '%d s - %s não cumprido no fim da prova', timeNotServedTitle = 'PENALIDADE NÃO CUMPRIDA',
-  dtServedWhy = '%s - cumprido na passagem pelo pit (prazo DT%d)', dsqVoided = 'pendente quando a DSQ veio: %s',
+  dtServedWhy = '%s - cumprido na passagem pelo pit (prazo DT%d)', holdIncludes = 'inclui %s', dsqVoided = 'pendente quando a DSQ veio: %s',
   practiceClearedWhat = 'Treino - zerado na vaga: %s',
   timeNotServed = '%d s somados ao seu tempo final: %s não cumprido',
   reason = {

@@ -141,7 +141,7 @@ local TEXTS = {
     standingRestart = 'Standing restart', standingRestartOff = 'Standing restart cancelled',
     standingStart = 'Standing start', start = 'Start', teamSetup = 'Team setup', tow = 'Tow', lights = 'Track lights',
     wrongDriver = 'Wrong driver', wrongWay = 'Wrong way', wrongWayOff = 'Wrong way cleared',
-    sgServed = 'Stop & go served', sgServiced = 'Service at the pit - stop & go not served in this pit pass',
+    hold = 'Hold %d s', sgServed = 'Stop & go served', sgServiced = 'Service at the pit - stop & go not served in this pit pass',
     parked = 'Car stopped on track', swapBox = 'DRIVER SWAP', swapInvalid = 'INVALID DRIVER SWAP', conn = 'Connection',
     driver = 'Driver', timePenalty = 'Time penalty', sgSeconds = 'Stop & go %d s',
   },
@@ -327,7 +327,7 @@ local TEXTS = {
   parkedFuelRace = 'Out of fuel on track - %d s added to your race time', parkedFuelLaps = 'Out of fuel on track - your laps are invalid from now on',
   parkedFuelLapsLog = 'out of fuel - laps invalid from now on',
   timeNotServedLog = '%d s - %s not served at the end of the race', timeNotServedTitle = 'PENALTY NOT SERVED',
-  dtServedWhy = '%s - served in the pit pass (deadline DT%d)', dsqVoided = 'pending when the DSQ came: %s',
+  dtServedWhy = '%s - served in the pit pass (deadline DT%d)', holdIncludes = 'includes %s', dsqVoided = 'pending when the DSQ came: %s',
   practiceClearedWhat = 'Practice - cleared at the pit place: %s',
   timeNotServed = '%d s added to your final time: %s not served',
   reason = {
@@ -3965,10 +3965,13 @@ end
 local function applyHold(long)
   local seconds = long and config.holdLong or config.holdShort
   local reason = long and TEXTS.holdTwoDTLong or TEXTS.holdTwoDT
+  local held = {}
+  for _, it in ipairs(state.list.items) do held[#held + 1] = reasonLog(it.cat) end
   startHold(seconds, reason)
   Rules.zero()
   ac.log(string.format('race-control: hold %d s', seconds))
-  rcLog(string.format('Hold %d s', seconds), reason)
+  rcLog(string.format(TEXTS.rc.hold, seconds),
+    #held > 0 and (reason .. ' - ' .. string.format(TEXTS.holdIncludes, table.concat(held, ', '))) or reason)
 end
 local function applyExpiredDSQ(expired, viaPit)
   if sim.raceSessionType ~= ac.SessionType.Race then
@@ -4206,7 +4209,7 @@ local function applyTowHold(tow, damage, reason)
   local d = damage or { powertrain = 0, suspension = 0, body = 0 }
   ac.log(string.format('race-control: tow hold %d s (tow %d, repair %d; collision damage: powertrain %.3f'
     .. ' suspension %.3f body %.1f km/h)', seconds, tow, repair, d.powertrain, d.suspension, d.body))
-  rcLog(string.format('Hold %d s', seconds), string.format('%s - tow %d s + repair %d s', reason, tow, repair))
+  rcLog(string.format(TEXTS.rc.hold, seconds), string.format('%s - tow %d s + repair %d s', reason, tow, repair))
 end
 local TyreUse = {}
 do
