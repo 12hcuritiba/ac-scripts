@@ -303,9 +303,12 @@ local TEXTS = {
   repairReason = 'Repair in the pit stop',
   parkedFlagTitle = 'CAR STOPPED ON TRACK', parkedMove = 'Move on - %d s', parkedLeft = 'Stops tolerated left: %d of %d - over: disqualified', parkedNoGrace = 'Not moving on: disqualified',
   parkedTitle = 'Car stopped on track', parkedLog = 'stop %d of %d tolerated', parkedDsq = 'Car stopped on track',
-  parkedDsqDetail = 'over %d stops of %d s', parkedTimeTitle = 'Time penalty', parkedTimeLog = '%d s - out of fuel on track',
+  parkedDsqDetail = 'over %d stops of %d s', parkedTimeLog = '%d s - out of fuel on track',
+  rcTimePenalty = 'Time penalty', rcStopAndGo = 'Stop & go %d s',
   parkedFuelRace = 'Out of fuel on track - %d s added to your race time', parkedFuelLaps = 'Out of fuel on track - your laps are invalid from now on',
   parkedFuelLapsLog = 'out of fuel - laps invalid from now on',
+  timeNotServedLog = '%d s - %s not served at the end of the race', timeNotServedTitle = 'PENALTY NOT SERVED',
+  timeNotServed = '%d s added to your final time: %s not served',
   reason = {
     SD1 = 'Exclusion zone cut - zone 1',
     SD2 = 'Exclusion zone cut - zone 2',
@@ -819,7 +822,7 @@ local config = (function()
     }
   end
   local STOP_AND_GO = structKey('stopAndGo', { mode = 'HOLD', secondsPerDT = 30, maxDT = 7, deadlineLaps = 1,
-    returnSeconds = 0, holdShort = 45, holdLong = 90 })
+    returnSeconds = 0, holdShort = 45, holdLong = 90, unservedDT = 20 })
   local TOW_RULE = { mode = 'TOW', towSeconds = 120, repairFactor = 1.5 }
   local QUALIFY_RULE = { mode = 'END', towSeconds = 0, repairFactor = 0 }
   local REPAIR_FORMULA = structKey('repairFormula', { baseSeconds = 180, weightEngine = 1.0, weightSuspension = 0.5,
@@ -847,6 +850,7 @@ local config = (function()
     sgMaxDT = STOP_AND_GO.maxDT,
     sgDeadlineLaps = STOP_AND_GO.deadlineLaps,
     sgReturnSeconds = STOP_AND_GO.returnSeconds,
+    sgUnservedDT = STOP_AND_GO.unservedDT,
     wrongDriver = tonumber(K('wrongDriverSeconds')),
     dsqBlackFlagLaps = math.max(math.floor(tonumber(K('dsqBlackFlagLaps')) or 3), 1),
     pitStopOrder = tostring(K('pitStopOrder') or 'F<TR>'),
@@ -3789,7 +3793,7 @@ local function listAdd(cat, laps)
     l.seq = l.seq + 1
     sg.seq = l.seq
     ac.log(string.format('race-control: stop & go +1 (%s): %d DT, %d s', cat, n, sgSeconds(sg)))
-    rcLog(string.format('Stop & go %d s', sgSeconds(sg)), 'includes ' .. reasonLog(cat))
+    rcLog(string.format(TEXTS.rcStopAndGo, sgSeconds(sg)), 'includes ' .. reasonLog(cat))
     if sgSeconds(sg) > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(n) end
     return sg
   end
@@ -3867,6 +3871,51 @@ local function dsqGameFlag(why, rcReason, inGame)
   ac.log('race-control: DSQ black flag in the game, controls locked (' .. why .. ')')
   if rcReason then rcLog('Disqualified', rcReason) end
 end
+function Rules.raceEndTime(car)
+  if Rules.endTimeDone or sim.raceSessionType ~= ac.SessionType.Race or not car.isRaceFinished then return end
+  if state.dtDsqActive or state.pitDsqActive then
+    Rules.endTimeDone = true
+    return
+  end
+  local l = state.list
+  if #l.items == 0 then return end
+  Rules.endTimeDone = true
+  local total, what = 0, {}
+  for _, it in ipairs(l.items) do
+    local sgItemHere = it.kind:sub(1, 2) == 'SG'
+    local seconds = config.sgUnservedDT + (sgItemHere and sgSeconds(it) or 0)
+    local why = sgItemHere and string.format(TEXTS.rcStopAndGo, sgSeconds(it)) or reasonLog(it.cat)
+    total = total + seconds
+    what[#what + 1] = why
+    rcLog(TEXTS.rcTimePenalty, string.format(TEXTS.timeNotServedLog, seconds, why))
+  end
+  ac.log(string.format('race-control: race over with %d penalties pending: %d s added to the final time',
+    #l.items, total))
+  showNotice(TEXTS.timeNotServedTitle, string.format(TEXTS.timeNotServed, total, table.concat(what, ', ')), nil,
+    config.screens.serverNoticeSeconds)
+  Rules.zero()
+end
+function Rules.practiceClear(car)
+  if sim.raceSessionType ~= ac.SessionType.Practice or not CarRead.parked(car) then return nil end
+  local l = state.list
+  local dsqActive = state.dtDsqActive or state.pitDsqActive
+  if dsqActive then
+    if (config.tow[ac.SessionType.Practice].clearDsq or 0) ~= 1 then return nil end
+    carDsqClear('practice, car at its pit place')
+    Rules.zero()
+    l.invalidLap = nil
+    rcLog('Pit', 'Practice - disqualification cleared at the pit place')
+    showNotice(TEXTS.rcTitle, TEXTS.practiceDsqCleared)
+    return 'dsq'
+  end
+  if #l.items == 0 and not next(state.slowdowns) and #l.endOfLap == 0 then return nil end
+  Rules.zero()
+  l.invalidLap = nil
+  ac.log('race-control: practice, car at its pit place: penalties cleared')
+  rcLog('Pit', 'Practice - pending penalties cleared at the pit place')
+  showNotice(TEXTS.rcTitle, TEXTS.practiceCleared)
+  return 'penalties'
+end
 local function pendingDT0()
   local race = sim.raceSessionType == ac.SessionType.Race
   local out = {}
@@ -3922,7 +3971,7 @@ function Rules.sgForm(extra, why)
     givenLap = l.curLap, expireLap = l.curLap + laps, seq = l.seq, dt0OnTrack = false } }
   local seconds = n * config.sgSecondsPerDT + extra
   ac.log(string.format('race-control: stop & go %d s (%d DT)', seconds, n))
-  rcLog(string.format('Stop & go %d s', seconds), 'includes ' .. table.concat(reasons, ', '))
+  rcLog(string.format(TEXTS.rcStopAndGo, seconds), 'includes ' .. table.concat(reasons, ', '))
   if seconds > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(n) end
   listSave()
 end
@@ -3945,7 +3994,7 @@ function Rules.sgAddSeconds(seconds, why)
     l.seq = l.seq + 1
     sg.seq = l.seq
     ac.log(string.format('race-control: stop & go +%d s (%s): %d s', seconds, why, sgSeconds(sg)))
-    rcLog(string.format('Stop & go %d s', sgSeconds(sg)), 'includes ' .. why)
+    rcLog(string.format(TEXTS.rcStopAndGo, sgSeconds(sg)), 'includes ' .. why)
     if sgSeconds(sg) > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(sgCount(sg)) end
     listSave()
   else
@@ -6915,7 +6964,7 @@ do
       P.fuelStop = true
       if sim.raceSessionType == ac.SessionType.Race then
         ac.log(string.format('race-control: car stopped on track out of fuel: %d s added to the final time', rule.fuelRaceSeconds))
-        rcLog(TEXTS.parkedTimeTitle, string.format(TEXTS.parkedTimeLog, rule.fuelRaceSeconds))
+        rcLog(TEXTS.rcTimePenalty, string.format(TEXTS.parkedTimeLog, rule.fuelRaceSeconds))
         showNotice(TEXTS.rcTitle, string.format(TEXTS.parkedFuelRace, rule.fuelRaceSeconds))
       else
         P.fuelInvalid = true
@@ -14548,6 +14597,7 @@ function script.update(dt)
     PitStops.pass = nil
     PitStops.line = 0
     PitStops.endChecked = false
+    Rules.endTimeDone = false
     PassMirror.load()
     if transition then PitStops.settleUntil = state.ui.clock + PitStops.SETTLE_SECONDS end
     DriverTable.reset()
@@ -14621,6 +14671,7 @@ function script.update(dt)
   updateSwapRelay()
   publishOwnList(car)
   PitStops.update(car)
+  Rules.raceEndTime(car)
   DriverTable.update()
   Desktop.update(car)
   if Desktop.teleSample then Desktop.teleSample(car) end
@@ -14709,23 +14760,8 @@ function script.update(dt)
       rcLog('Tow', 'Practice - pending penalties cleared')
       showNotice(TEXTS.rcTitle, TEXTS.practiceTowCleared)
     end
-    local practice = sim.raceSessionType == ac.SessionType.Practice
-    if practice and CarRead.parked(car) then DamageClass.reset() end
-    if practice and CarRead.parked(car) and dsqActive and (config.tow[ac.SessionType.Practice].clearDsq or 0) == 1 then
-      carDsqClear('practice, car at its pit place')
-      Rules.zero()
-      l.invalidLap = nil
-      dsqActive = false
-      rcLog('Pit', 'Practice - disqualification cleared at the pit place')
-      showNotice(TEXTS.rcTitle, TEXTS.practiceDsqCleared)
-    elseif practice and CarRead.parked(car) and not dsqActive
-        and (#l.items > 0 or next(state.slowdowns) or #l.endOfLap > 0) then
-      Rules.zero()
-      l.invalidLap = nil
-      ac.log('race-control: practice, car at its pit place: penalties cleared')
-      rcLog('Pit', 'Practice - pending penalties cleared at the pit place')
-      showNotice(TEXTS.rcTitle, TEXTS.practiceCleared)
-    end
+    if sim.raceSessionType == ac.SessionType.Practice and CarRead.parked(car) then DamageClass.reset() end
+    if Rules.practiceClear(car) == 'dsq' then dsqActive = false end
     if towRule.mode == 'END' and not dsqActive and not state.hold and tw.jumpPending and inPit then
       PitRecord.endQualifying(TEXTS.qualiEndTow)
     end

@@ -206,9 +206,11 @@ local LANG_PT = {
   repairReason = 'Reparo na parada',
   parkedFlagTitle = 'CARRO PARADO NA PISTA', parkedMove = 'Siga - %d s', parkedLeft = 'Paradas toleradas restantes: %d de %d - acima: desclassificado', parkedNoGrace = 'Não seguiu: desclassificado',
   parkedTitle = 'Carro parado na pista', parkedLog = 'parada %d de %d tolerada', parkedDsq = 'Carro parado na pista',
-  parkedDsqDetail = 'mais de %d paradas de %d s', parkedTimeTitle = 'Penalidade de tempo', parkedTimeLog = '%d s - sem combustível na pista',
+  parkedDsqDetail = 'mais de %d paradas de %d s', parkedTimeLog = '%d s - sem combustível na pista',
   parkedFuelRace = 'Sem combustível na pista - %d s somados ao seu tempo de prova', parkedFuelLaps = 'Sem combustível na pista - suas voltas são inválidas daqui em diante',
   parkedFuelLapsLog = 'sem combustível - voltas inválidas daqui em diante',
+  timeNotServedLog = '%d s - %s não cumprido no fim da prova', timeNotServedTitle = 'PENALIDADE NÃO CUMPRIDA',
+  timeNotServed = '%d s somados ao seu tempo final: %s não cumprido',
   reason = {
     SD1 = 'Corte da zona de exclusão - zona 1',
     SD2 = 'Corte da zona de exclusão - zona 2',
