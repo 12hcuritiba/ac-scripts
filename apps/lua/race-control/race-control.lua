@@ -187,7 +187,6 @@ local LANG_PT = {
   dsqOut = 'Fora da sessão - controles travados',
   dsqSafety = 'Risco à segurança - dano além do limite de segurança',
   editedFile = 'Arquivo editado',
-  editedFileDetail = 'registro %s - carro %d - banimento pendente',
   kmrTitle = 'KMR',
   swapActive = 'TROCA DE PILOTO ATIVA',
   swapTitle = 'TROCA DE PILOTO',

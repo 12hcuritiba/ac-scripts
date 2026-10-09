@@ -125,6 +125,26 @@ local cfg = ac.configValues({
 })
 local RC_VERSION = '2026.09.26'
 local TEXTS = {
+  rc = {
+    baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
+    dataCheck = 'Data check', diag = 'Diagnostic', dsq = 'Disqualified', dt = 'Drive-through',
+    dtKmr = 'Drive-through DT', dtAfterDsq = 'Drive-through after the DSQ', dtCancelled = 'Drive-through cancelled',
+    dtCancelledKmr = 'Drive-through cancelled by KMR', dtNotServed = 'Drive-through not served',
+    dtRelaxed = 'Drive-through relaxed', dtServed = 'Drive-through served',
+    dtServedSg = 'Drive-through served in stop & go', swap = 'Driver swap', formation = 'Formation lap',
+    green = 'Green flag', incident = 'Incident', kmrUnread = 'KMR message not read', lastLap = 'Last lap', pit = 'Pit',
+    pitPlan = 'Pit stop plan', pitWindow = 'Pit window', qualiEnd = 'Qualifying ended', raceRestart = 'Race restart',
+    command = 'Racing Control command', commandUnread = 'Racing Control command not understood', red = 'Red flag',
+    redOff = 'Red flag off', regIncomplete = 'Registration incomplete', repairDone = 'Repair done',
+    repairReq = 'Repair required', rollingStart = 'Rolling start', sessionEnd = 'Session end',
+    editedFileDetail = 'record %s - car %d - ban pending',
+    standingRestart = 'Standing restart', standingRestartOff = 'Standing restart cancelled',
+    standingStart = 'Standing start', start = 'Start', teamSetup = 'Team setup', tow = 'Tow', lights = 'Track lights',
+    wrongDriver = 'Wrong driver', wrongWay = 'Wrong way', wrongWayOff = 'Wrong way cleared',
+    sgServed = 'Stop & go served', sgServiced = 'Service at the pit - stop & go not served in this pit pass',
+    parked = 'Car stopped on track', swapBox = 'DRIVER SWAP', swapInvalid = 'INVALID DRIVER SWAP', conn = 'Connection',
+    driver = 'Driver', timePenalty = 'Time penalty', sgSeconds = 'Stop & go %d s',
+  },
   pit = {
     DSQ = 'Pit lane left with the pit closed - disqualified',
   },
@@ -284,7 +304,6 @@ local TEXTS = {
   dsqOut = 'Out of the session - controls locked',
   dsqSafety = 'Safety hazard - damage beyond the safety limit',
   editedFile = 'Edited file',
-  editedFileDetail = 'record %s - car %d - ban pending',
   kmrTitle = 'KMR',
   swapActive = 'DRIVER SWAP ACTIVE',
   swapTitle = 'DRIVER SWAP',
@@ -683,6 +702,7 @@ do
       end
     end
     if n == 0 then return 0 end
+    tbl.rc = nil
     fill(TEXTS, tbl)
     for cat, base in pairs(TEXTS.kmrReasons) do TEXTS.reason[cat] = base .. ' (KMR)' end
     for _, h in ipairs(Lang.hooks) do h() end
@@ -1646,7 +1666,7 @@ do
     e.leftT, e.leftCause, e.inT, e.sameDriver = state.ui.clock, causeOf(i, e), nil, nil
     e.leftAfterStop = e.parkedT and (state.ui.clock - e.parkedT) or nil
     ac.log(string.format('race-control: connection: car %d (%s) left - %s', i, e.name, e.leftCause))
-    if config.isDirector then rcLog(TEXTS.connTitle, string.format(TEXTS.connLog, e.name, TEXTS.connCause[e.leftCause] or e.leftCause)) end
+    if config.isDirector then rcLog(TEXTS.rc.conn, string.format(TEXTS.connLog, e.name, TEXTS.connCause[e.leftCause] or e.leftCause)) end
   end)
   ac.onClientConnected(function(i)
     if i == 0 then return end
@@ -1728,7 +1748,7 @@ do
     local key = kind .. '/' .. who
     if not Trust.refused[key] then
       Trust.refused[key] = true
-      rcLog('Data check', string.format('%s from car %s refused - %s', kind, who, why))
+      rcLog(TEXTS.rc.dataCheck, string.format('%s from car %s refused - %s', kind, who, why))
     end
     return false
   end
@@ -2035,7 +2055,7 @@ do
               .. (lock and 'controls locked until it answers' or 'nothing locked'))
             local what = string.format('base of the event not answering - real name not confirmed - %s',
               lock and 'controls locked (session not started)' or (started and 'session started, driving' or 'not locked'))
-            rcLog('Base offline', what)
+            rcLog(TEXTS.rc.baseOff, what)
             N.alertDue = what
           end
           return
@@ -2056,7 +2076,7 @@ do
           N.status, N.missing = 'missing', missingText(rest)
           if N.told ~= N.missing then
             N.told = N.missing
-            rcLog('Registration incomplete', 'missing: ' .. N.missing)
+            rcLog(TEXTS.rc.regIncomplete, 'missing: ' .. N.missing)
           end
         end
       end)
@@ -2338,14 +2358,14 @@ do
         B.pitBox.remote({ fuel = tonumber(f.fuel), compound = tonumber(f.compound), tyres = tonumber(f.tyres), repair = f.repair,
           preset = tonumber(f.preset), auto = f.mode == 'auto' and true or f.mode == 'manual' and false or nil, start = f.start == '1', press = f.press })
         B.box.nextT, B.box.sig = state.ui.clock + 1, nil
-        rcLog('Pit stop plan', 'box from the Racing Room: ' .. box .. (list ~= '' and ('; ' .. list) or ''))
+        rcLog(TEXTS.rc.pitPlan, 'box from the Racing Room: ' .. box .. (list ~= '' and ('; ' .. list) or ''))
         if f.start == '1' then showNotice(TEXTS.rcTitle, TEXTS.remotePitStart, nil, 6) end
       else
         if #changes == 0 then return end
         if not (B.app and B.app.alive) then P.done = nil; ac.storage['rc.pitplan'] = ''; return end
         B.app.setPreset(changes, tonumber(preset) or 0)
         B.strat.nextT, B.strat.sig = state.ui.clock + 2, nil
-        rcLog('Pit stop plan', string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
+        rcLog(TEXTS.rc.pitPlan, string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
       end
       WebQueue.request('POST', config.baseUrl .. '/v1/pitplan/done', { ['Content-Type'] = 'application/json' },
         '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"id":' .. jsonStr(id) .. '}', function() end)
@@ -2366,7 +2386,7 @@ do
       local id, st, why = done:match('^([%w%-]+)|(%a+)|(.*)$')
       if id and id ~= P.answered then
         P.answered = id
-        rcLog('Team setup', string.format('answer of the driver: %s%s', st, why ~= '' and (' - ' .. why) or ''))
+        rcLog(TEXTS.rc.teamSetup, string.format('answer of the driver: %s%s', st, why ~= '' and (' - ' .. why) or ''))
         pushDone(id, st, why)
       end
     end
@@ -2380,7 +2400,7 @@ do
       P.id = id
       ac.store(PUSH_STORE, id .. '|' .. name .. '\n' .. ini)
       ac.broadcastSharedEvent(PUSH_EVENT, id)
-      rcLog('Team setup', string.format('from the Racing Room: %s - apply it in the setup menu', name))
+      rcLog(TEXTS.rc.teamSetup, string.format('from the Racing Room: %s - apply it in the setup menu', name))
       showNotice(TEXTS.rcTitle, string.format(TEXTS.teamSetup, name), nil, 8)
       pushDone(id, 'entregue', '')
     end)
@@ -3392,7 +3412,7 @@ do
         local text = string.format('%s %s -> %s - inputs: %s - Racing Control: %s', LABEL[k], before[k], cur[k],
           #ins > 0 and table.concat(ins, ', ') or 'none', #acts > 0 and table.concat(acts, ', ') or 'none')
         Audit.add('DIAG', text, true, 'diag')
-        rcLog('Diagnostic', text)
+        rcLog(TEXTS.rc.diag, text)
       end
     end
   end
@@ -3410,7 +3430,7 @@ do
     if p == 'formation' then Start.locked = {} end
     if p == 'go' then Start.goUntil = state.ui.clock + config.flags.greenSeconds end
     ac.log('race-control: rolling start: ' .. p .. ' (' .. tostring(message) .. ')')
-    rcLog('Rolling start', p .. ' - ' .. tostring(message))
+    rcLog(TEXTS.rc.rollingStart, p .. ' - ' .. tostring(message))
   end
   function Start.chat(message)
     local low = message:lower()
@@ -3419,7 +3439,7 @@ do
     local taken = true
     if Start.phase == 'go' and hasAny(low, S.go) then
       Audit.add('KMR', message, true, 'rc')
-      rcLog('Rolling start', 'go (KMR) - ' .. tostring(message))
+      rcLog(TEXTS.rc.rollingStart, 'go (KMR) - ' .. tostring(message))
       return true
     end
     if hasAny(low, S.rules) then phaseTo('rules', message)
@@ -3561,7 +3581,7 @@ ac.onChatMessage(function(message, senderCarIndex)
   end
   if message:sub(1, #TEXTS.rcPrefix) ~= TEXTS.rcPrefix and (hasAny(low, DICT.kmr.driveThrough)
       or hasAny(low, DICT.kmr.penalty)) then
-    rcLog('Chat seen', string.format('sender %s - %s', tostring(senderCarIndex), Lang.letters.head(message, 90)))
+    rcLog(TEXTS.rc.chatSeen, string.format('sender %s - %s', tostring(senderCarIndex), Lang.letters.head(message, 90)))
   end
   if message:sub(1, #TEXTS.rcPrefix) == TEXTS.rcPrefix then
     local car = config.isDirector and message:find(TEXTS.editedFile, 1, true)
@@ -3640,7 +3660,7 @@ ac.onChatMessage(function(message, senderCarIndex)
           state.redFlag = nil
           state.postRed = true
           ac.log('race-control: red flag off: restart under the ' .. kind)
-          rcLog('Red flag off', 'restart under the ' .. kind)
+          rcLog(TEXTS.rc.redOff, 'restart under the ' .. kind)
         end
         if state.code80 ~= kind or redDown then
           state.code80 = kind
@@ -3793,7 +3813,7 @@ local function listAdd(cat, laps)
     l.seq = l.seq + 1
     sg.seq = l.seq
     ac.log(string.format('race-control: stop & go +1 (%s): %d DT, %d s', cat, n, sgSeconds(sg)))
-    rcLog(string.format(TEXTS.rcStopAndGo, sgSeconds(sg)), 'includes ' .. reasonLog(cat))
+    rcLog(string.format(TEXTS.rc.sgSeconds, sgSeconds(sg)), 'includes ' .. reasonLog(cat))
     if sgSeconds(sg) > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(n) end
     return sg
   end
@@ -3848,7 +3868,7 @@ local function carDsq(kind, reason, mode, detail)
   l.seq = l.seq + 1
   if l.dsq == 2 then state.pitDsqActive = true else state.dtDsqActive = true end
   Rules.zero()
-  rcLog('Disqualified', detail and (reason .. ' - ' .. detail) or reason)
+  rcLog(TEXTS.rc.dsq, detail and (reason .. ' - ' .. detail) or reason)
 end
 local function carDsqClear(why)
   local l = state.list
@@ -3869,7 +3889,7 @@ local function dsqGameFlag(why, rcReason, inGame)
   l.dsqStage = 1
   listSave()
   ac.log('race-control: DSQ black flag in the game, controls locked (' .. why .. ')')
-  if rcReason then rcLog('Disqualified', rcReason) end
+  if rcReason then rcLog(TEXTS.rc.dsq, rcReason) end
 end
 function Rules.dsqOn()
   return state.dtDsqActive or state.pitDsqActive
@@ -3890,7 +3910,7 @@ function Rules.raceEndTime(car)
     local why = sgItemHere and string.format(TEXTS.rcStopAndGo, sgSeconds(it)) or reasonLog(it.cat)
     total = total + seconds
     what[#what + 1] = why
-    rcLog(TEXTS.rcTimePenalty, string.format(TEXTS.timeNotServedLog, seconds, why))
+    rcLog(TEXTS.rc.timePenalty, string.format(TEXTS.timeNotServedLog, seconds, why))
   end
   ac.log(string.format('race-control: race over with %d penalties pending: %d s added to the final time',
     #l.items, total))
@@ -3907,7 +3927,7 @@ function Rules.practiceClear(car)
     carDsqClear('practice, car at its pit place')
     Rules.zero()
     l.invalidLap = nil
-    rcLog('Pit', 'Practice - disqualification cleared at the pit place')
+    rcLog(TEXTS.rc.pit, 'Practice - disqualification cleared at the pit place')
     showNotice(TEXTS.rcTitle, TEXTS.practiceDsqCleared)
     return 'dsq'
   end
@@ -3915,7 +3935,7 @@ function Rules.practiceClear(car)
   Rules.zero()
   l.invalidLap = nil
   ac.log('race-control: practice, car at its pit place: penalties cleared')
-  rcLog('Pit', 'Practice - pending penalties cleared at the pit place')
+  rcLog(TEXTS.rc.pit, 'Practice - pending penalties cleared at the pit place')
   showNotice(TEXTS.rcTitle, TEXTS.practiceCleared)
   return 'penalties'
 end
@@ -3974,7 +3994,7 @@ function Rules.sgForm(extra, why)
     givenLap = l.curLap, expireLap = l.curLap + laps, seq = l.seq, dt0OnTrack = false } }
   local seconds = n * config.sgSecondsPerDT + extra
   ac.log(string.format('race-control: stop & go %d s (%d DT)', seconds, n))
-  rcLog(string.format(TEXTS.rcStopAndGo, seconds), 'includes ' .. table.concat(reasons, ', '))
+  rcLog(string.format(TEXTS.rc.sgSeconds, seconds), 'includes ' .. table.concat(reasons, ', '))
   if seconds > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(n) end
   listSave()
 end
@@ -3997,7 +4017,7 @@ function Rules.sgAddSeconds(seconds, why)
     l.seq = l.seq + 1
     sg.seq = l.seq
     ac.log(string.format('race-control: stop & go +%d s (%s): %d s', seconds, why, sgSeconds(sg)))
-    rcLog(string.format(TEXTS.rcStopAndGo, sgSeconds(sg)), 'includes ' .. why)
+    rcLog(string.format(TEXTS.rc.sgSeconds, sgSeconds(sg)), 'includes ' .. why)
     if sgSeconds(sg) > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(sgCount(sg)) end
     listSave()
   else
@@ -4058,7 +4078,7 @@ function Rules.line(viaPit, g, lapCount)
         state.pitPaid = head
         PitStops.notePaid(head.cat .. ' DT')
         if TEXTS.kmrReasons[head.cat] then
-          rcLog('Drive-through served', TEXTS.kmrReasons[head.cat] .. ' - issued by KMR, served under Racing Control')
+          rcLog(TEXTS.rc.dtServed, TEXTS.kmrReasons[head.cat] .. ' - issued by KMR, served under Racing Control')
         end
       end
     end
@@ -4164,7 +4184,7 @@ function PitRecord.endQualifying(reason)
   state.tow.damage = nil
   startHold(left > 0 and math.ceil(left) + 5 or 86400, string.format(TEXTS.qualiEndHold, reason))
   ac.log('race-control: qualifying ended - ' .. reason)
-  rcLog('Qualifying ended', reason)
+  rcLog(TEXTS.rc.qualiEnd, reason)
   showNotice(TEXTS.rcTitle, string.format(TEXTS.qualiEndNotice, reason))
 end
 local function applyTowHold(tow, damage, reason)
@@ -4632,17 +4652,17 @@ do
     if c.class == 'normal' then
       if r.lapsLeft then
         ac.log('race-control: mandatory repair done')
-        rcLog('Repair done', tostring(r.text))
+        rcLog(TEXTS.rc.repairDone, tostring(r.text))
       end
       r.lapsLeft = nil
     elseif c.class == 'repair' and not r.lapsLeft then
       r.lapsLeft = config.damage.repairLaps
       ac.log(string.format('race-control: repair required (%s, %s), %d laps', c.text, c.detail, r.lapsLeft))
-      rcLog('Repair required', string.format('%s - %s - %d laps', c.text, c.detail, r.lapsLeft))
+      rcLog(TEXTS.rc.repairReq, string.format('%s - %s - %d laps', c.text, c.detail, r.lapsLeft))
     end
     if c.class == 'beyond' and r.class ~= 'beyond' then
       ac.log(string.format('race-control: damage beyond the safety limit (%s, %s)', c.text, c.detail))
-      rcLog('Damage beyond safety limit', string.format('%s - %s', c.text, c.detail))
+      rcLog(TEXTS.rc.damageBeyond, string.format('%s - %s', c.text, c.detail))
     end
     if c.class == 'beyond' then
       r.beyondSince = r.beyondSince or serverTimeMs()
@@ -4708,7 +4728,7 @@ do
     local p = PitStops.pass
     PitStops.pass = nil
     if not p or not config.pitStopsEnabled then return end
-    rcLog(TEXTS.pitStopRow, string.format(TEXTS.pitStopRowText, p.id, p.stop and tostring(p.stop) or '-',
+    rcLog(TEXTS.rc.pit, string.format(TEXTS.pitStopRowText, p.id, p.stop and tostring(p.stop) or '-',
       p.entryMs and raceTime(p.entryMs) or TEXTS.pitStopRowInPits, raceTime(sessionElapsedMs()),
       p.service or TEXTS.pitStopRowNoService, #p.paid > 0 and table.concat(p.paid, ', ') or TEXTS.pitStopRowNoPenalty,
       p.jumped and 'tow' or 'driven', p.raceFlag, p.driverFlag, tostring(ac.getDriverTeam(0) or '-'),
@@ -4760,7 +4780,7 @@ do
     SwapRecord.save()
     ac.log('race-control: driver swap not valid: ' .. (sgPaid and 'stop & go served in the same pit stop'
       or 'service in the same pit stop'))
-    rcLog(TEXTS.swapTitle, sgPaid and TEXTS.swapVoidSg or TEXTS.swapVoidService)
+    rcLog(TEXTS.rc.swapBox, sgPaid and TEXTS.swapVoidSg or TEXTS.swapVoidService)
   end
   function PitStops.markService()
     if not state.pitPassServiced then
@@ -4788,7 +4808,7 @@ do
     if #l.items > 0 and not l.owner then l.owner = nameCode(ac.getDriverName(0)) end
     listSave()
     ac.log(string.format('race-control: %s with a service after the stop & go served (%s): the stop & go applies again', why, sg.cat))
-    rcLog(TEXTS.sgServiced, sg.cat)
+    rcLog(TEXTS.rc.sgServiced, sg.cat)
     Rules.finalize()
     state.ui.lastSeq = state.list.seq
     showNotice(TEXTS.rcTitle, TEXTS.sgServiced, sg)
@@ -4895,7 +4915,7 @@ do
     state.pit.missed = true
     Record.save('window', 2, 'missed')
     ac.log('race-control: mandatory pit window missed (no valid driver swap): DSQ')
-    rcLog('Pit window', TEXTS.pitMissedLog)
+    rcLog(TEXTS.rc.pitWindow, TEXTS.pitMissedLog)
     if not Rules.dsqOn() then carDsq(1, TEXTS.pitWindowDsq) end
   end
 end
@@ -4947,7 +4967,7 @@ do
     if not rejoin and swapNo and swapNo > 0 then DriverTable.swapMs = serverTimeMs() end
     sw.swapNo, sw.driver = swapNo, me
     SwapRecord.save()
-    rcLog(TEXTS.driverRow, string.format(TEXTS.driverRowText, swapNo, rejoin and TEXTS.driverRowRejoin or '',
+    rcLog(TEXTS.rc.driver, string.format(TEXTS.driverRowText, swapNo, rejoin and TEXTS.driverRowRejoin or '',
       tostring(ac.getDriverTeam(0) or '-'), tostring(ac.getUserSteamID() or '-')))
   end
 end
@@ -5486,12 +5506,12 @@ function PitSpeed.update(car, inPit, lapCount)
   if paid then
     listAdd(paid.cat, math.max(paid.laps - lost, 0))
     ac.log(string.format('race-control: pit lane speeding: %s DT paid in this pass does not count', paid.cat))
-    rcLog('Drive-through not served', string.format('%s - pit lane speeding %.1f km/h', paid.cat, speed))
+    rcLog(TEXTS.rc.dtNotServed, string.format('%s - pit lane speeding %.1f km/h', paid.cat, speed))
     showNotice(TEXTS.rcTitle, TEXTS.pitSpeedNotPaid)
   end
   listAdd('PSE', math.max(config.pitSpeedDeadlineLaps - lost, 0))
   ac.log(string.format('race-control: PSE pit exit %.1f km/h before=%s after=%s', speed, before, listDump()))
-  rcLog('Drive-through', string.format('%s - %.1f km/h', TEXTS.reason.PSE, speed))
+  rcLog(TEXTS.rc.dt, string.format('%s - %.1f km/h', TEXTS.reason.PSE, speed))
   Rules.finalize()
 end
 local StopAndGo = {
@@ -5611,9 +5631,9 @@ do
         ac.log(string.format('race-control: stop & go served (%d s)', sgSeconds(sg)))
         PitStops.notePaid(string.format('stop & go %d s', sgSeconds(sg)))
         PitStops.countStop()
-        rcLog(TEXTS.sgServed, string.format('%d s', sgSeconds(sg)))
+        rcLog(TEXTS.rc.sgServed, string.format('%d s', sgSeconds(sg)))
         for n in sgKmrSuffix(sg):gmatch('x(%d+)') do
-          rcLog('Drive-through served in stop & go', reasonLog('K' .. n))
+          rcLog(TEXTS.rc.dtServedSg, reasonLog('K' .. n))
         end
         Rules.finalize()
       elseif not CarRead.parked(car) then
@@ -5663,7 +5683,7 @@ do
       l.wrong = nil
       listSave()
       ac.log('race-control: penalties taken over by the new driver (wrongDriverSeconds empty)')
-      rcLog('Driver swap', 'Pending penalties taken over by the new driver')
+      rcLog(TEXTS.rc.swap, 'Pending penalties taken over by the new driver')
       return
     end
     if not l.wrong or l.wrong.driver ~= me then
@@ -5671,7 +5691,7 @@ do
       listSave()
       ac.log(string.format('race-control: wrong driver: pending penalties of another driver, %d s to leave',
         config.wrongDriver))
-      rcLog('Wrong driver', string.format('pending penalties of another driver - %d s to leave', config.wrongDriver))
+      rcLog(TEXTS.rc.wrongDriver, string.format('pending penalties of another driver - %d s to leave', config.wrongDriver))
     end
     if WrongDriver.remaining() <= 0 then
       carDsq(1, TEXTS.dsqWhy.swapPending)
@@ -5701,7 +5721,7 @@ do
       PitRecord.save()
       ac.log(string.format('race-control: invalid driver swap: stop & go served in this stop by another driver, %s s to leave',
         tostring(config.wrongDriver or '-')))
-      rcLog(TEXTS.swapInvalidTitle, TEXTS.swapInvalidLeave)
+      rcLog(TEXTS.rc.swapInvalid, TEXTS.swapInvalidLeave)
     end
     if car.isInPit then
       inv.parked = true
@@ -5744,13 +5764,13 @@ do
     if car.speedKmh < STOPPED_KMH or (pointing and pointing <= rule.angle) then
       WrongWay.back = 0
       if before >= rule.showMeters then
-        rcLog('Wrong way cleared', string.format('%.0f m - %s', before, car.speedKmh < STOPPED_KMH and 'car stopped'
+        rcLog(TEXTS.rc.wrongWayOff, string.format('%.0f m - %s', before, car.speedKmh < STOPPED_KMH and 'car stopped'
           or string.format('back within %d deg (%.0f deg)', rule.angle, pointing)))
       end
     elseif pointing and moving and moving > rule.angle then
       WrongWay.back = WrongWay.back + m.dist
       if before < rule.showMeters and WrongWay.back >= rule.showMeters then
-        rcLog('Wrong way', string.format('%.0f deg from the track - %.0f m', pointing, WrongWay.back))
+        rcLog(TEXTS.rc.wrongWay, string.format('%.0f deg from the track - %.0f m', pointing, WrongWay.back))
       end
     end
     if WrongWay.back > rule.maxMeters then
@@ -5782,7 +5802,7 @@ function Ban.update()
   Ban.pending = nil
   Ban.done = true
   ac.log('race-control: edited record file (' .. list .. '): DSQ and ban pending')
-  carDsq(1, TEXTS.editedFile, nil, string.format(TEXTS.editedFileDetail, list, ac.getCar(0).sessionID))
+  carDsq(1, TEXTS.editedFile, nil, string.format(TEXTS.rc.editedFileDetail, list, ac.getCar(0).sessionID))
   dsqGameFlag('edited file')
 end
 local KmrDT = {}
@@ -5825,7 +5845,7 @@ do
       if it.cat == cat then
         listRemove(it)
         ac.log(string.format('race-control: KMR drive-through cancelled by the KMR (%s): %s', cat, text))
-        rcLog('Drive-through cancelled', base .. ' - cancelled by the KMR race director' .. via)
+        rcLog(TEXTS.rc.dtCancelled, base .. ' - cancelled by the KMR race director' .. via)
         Rules.finalize()
         return
       end
@@ -5839,11 +5859,11 @@ do
       sg.seq = l.seq
       listSave()
       ac.log(string.format('race-control: KMR drive-through cancelled by the KMR (%s): one DT less in the stop & go', cat))
-      rcLog('Drive-through cancelled', base .. ' - cancelled by the KMR race director, one DT less in the stop & go' .. via)
+      rcLog(TEXTS.rc.dtCancelled, base .. ' - cancelled by the KMR race director, one DT less in the stop & go' .. via)
       return
     end
     ac.log(string.format('race-control: KMR drive-through cancelled by the KMR (%s), not in the list as a DT: %s', cat, text))
-    rcLog('Drive-through cancelled by KMR', base .. ' - not a DT of the list (stop & go of two DTs or paid): race direction' .. via)
+    rcLog(TEXTS.rc.dtCancelledKmr, base .. ' - not a DT of the list (stop & go of two DTs or paid): race direction' .. via)
   end
   function KmrDT.update()
     ratingCheck()
@@ -5865,17 +5885,17 @@ do
         if cat == 'K1' then laps = 0 end
         if cat ~= 'K1' and (laps == 'next race' or sim.raceSessionType ~= ac.SessionType.Race) then
           ac.log('race-control: KMR drive-through relaxed (' .. cat .. '): ' .. text)
-          rcLog('Drive-through relaxed', base .. ' - issued by KMR for the next race, not carried over by Racing Control' .. via)
+          rcLog(TEXTS.rc.dtRelaxed, base .. ' - issued by KMR for the next race, not carried over by Racing Control' .. via)
         elseif not Rules.dsqOn() then
           ac.log(string.format('race-control: KMR drive-through DT%d (%s): %s', laps, cat, text))
-          rcLog('Drive-through DT' .. laps, base .. ' - issued by KMR, recorded by Racing Control' .. via)
+          rcLog(TEXTS.rc.dtKmr .. laps, base .. ' - issued by KMR, recorded by Racing Control' .. via)
           listAdd(cat, laps)
           Rules.finalize()
         else
-          rcLog('Drive-through after the DSQ', base .. ' - issued by KMR, logged only' .. via)
+          rcLog(TEXTS.rc.dtAfterDsq, base .. ' - issued by KMR, logged only' .. via)
         end
       else
-        rcLog('KMR message not read', text .. via)
+        rcLog(TEXTS.rc.kmrUnread, text .. via)
       end
     end
   end
@@ -5901,7 +5921,7 @@ do
   end
   local function done(what, detail)
     local text = detail and detail ~= '' and (what .. ' - ' .. detail) or what
-    rcLog('Racing Control command', text)
+    rcLog(TEXTS.rc.command, text)
     showNotice(TEXTS.rcTitle, text, nil, SERVER_NOTICE_SECONDS)
   end
   local function relax(what, reason)
@@ -6006,14 +6026,14 @@ do
         if state.code80 then state.code80Ended = true end
         state.redFlag, state.code80, state.postRed = nil, nil, nil
         TrackList.changed()
-        rcLog('Green flag', reason ~= '' and reason or '-')
+        rcLog(TEXTS.rc.green, reason ~= '' and reason or '-')
         ac.log('race-control: green flag by Racing Control command (red flag down, CODE-80 over)')
       end
       local lights = body:upper():match('^%s*RC%s+LIGHTS%s+(%a+)%s+ALL')
       if (lights == 'RED' or lights == 'GREEN' or lights == 'AUTO') and (state.lights or 'AUTO') ~= lights then
         state.lights = lights ~= 'AUTO' and lights or nil
         TrackList.changed()
-        rcLog('Track lights', lights)
+        rcLog(TEXTS.rc.lights, lights)
         ac.log('race-control: track lights ' .. lights .. ' by Racing Control command')
       end
       local rs, rsT = body:upper():match('^%s*RC%s+RESTART%s+(%a+)%s*@?(%d*)')
@@ -6022,13 +6042,13 @@ do
         state.redFlag = nil
         state.postRed = nil
         TrackList.changed()
-        rcLog('Standing restart', reason ~= '' and reason or '-')
+        rcLog(TEXTS.rc.standingRestart, reason ~= '' and reason or '-')
         ac.log('race-control: standing restart command, time ' .. math.floor(state.restart.t0))
       elseif rs == 'OFF' and state.restart then
         state.restart = nil
         state.redFlag = { reason = reason ~= '' and reason or nil }
         TrackList.changed()
-        rcLog('Standing restart cancelled', reason ~= '' and reason or '-')
+        rcLog(TEXTS.rc.standingRestartOff, reason ~= '' and reason or '-')
       end
       local stT = body:upper():match('^%s*RC%s+START%s+ALL%s*@?(%d*)')
       if stT and state.formationStart and state.formationStart(tonumber(stT)) then
@@ -6045,7 +6065,7 @@ do
           ok = true
         else ok = penalty(action, value, reason) end
         ac.log('race-control: command ' .. line .. (ok and '' or ' (not understood)'))
-        if not ok then rcLog('Racing Control command not understood', line) end
+        if not ok then rcLog(TEXTS.rc.commandUnread, line) end
       end
     end
   end
@@ -6091,7 +6111,7 @@ local function onSlowdownUnpaid(cat, endOfLap, inPit)
     return
   end
   if unpaid.penalty ~= 'DT' then return end
-  rcLog('Drive-through', TEXTS.reason[cat] .. ' - slowdown not served')
+  rcLog(TEXTS.rc.dt, TEXTS.reason[cat] .. ' - slowdown not served')
   if endOfLap or inPit then
     Rules.slowdownEndOfLap(cat)
   else
@@ -6193,7 +6213,7 @@ do
     local clock = state.ui.clock
     if kind ~= Flags.sentKind or (kind ~= INC.none and clock - Flags.sentT >= INC_RESEND) then
       if kind ~= Flags.sentKind then
-        rcLog('Incident', kind == INC.none and 'cleared' or incNames[kind])
+        rcLog(TEXTS.rc.incident, kind == INC.none and 'cleared' or incNames[kind])
       end
       Flags.sentKind, Flags.sentT = kind, clock
       OnlineQueue.push(sendIncident, { incKind = kind,
@@ -6250,7 +6270,7 @@ do
       Flags.restartUntil = math.huge
       if state.redFlag and DriverTable.swapMs and DriverTable.swapMs >= TrackList.since and not Flags.mySwapMs then
         Flags.mySwapMs = DriverTable.swapMs
-        rcLog('Red flag', 'driver swap: restart at the back of the field')
+        rcLog(TEXTS.rc.red, 'driver swap: restart at the back of the field')
       end
     elseif Flags.restartUntil then
       if Flags.restartUntil == math.huge then Flags.restartUntil = clock + RESTART_WAIT end
@@ -6408,10 +6428,10 @@ do
     elseif Flags.exitWait ~= nil then
       if Flags.exitWait then
         ac.log('race-control: race restart: left the pits before car ' .. Flags.exitWait .. ' passed')
-        rcLog('Race restart', string.format(TEXTS.exitEarlyLog, carTag(Flags.exitWait)))
+        rcLog(TEXTS.rc.raceRestart, string.format(TEXTS.exitEarlyLog, carTag(Flags.exitWait)))
         if listAdd('PX', config.restart.jumpLaps) then
           Rules.finalize()
-          rcLog('Drive-through', TEXTS.reason.PX)
+          rcLog(TEXTS.rc.dt, TEXTS.reason.PX)
           showNotice(TEXTS.rcTitle, TEXTS.reason.PX)
         end
       end
@@ -6475,7 +6495,7 @@ do
       state.redCommitted = nil
       Flags.redReceived = true
       ac.log('race-control: drive-through concluded at the line in the pit lane; red flag received at this line')
-      rcLog('Red flag', 'received at the line in the pit lane, drive-through concluded')
+      rcLog(TEXTS.rc.red, 'received at the line in the pit lane, drive-through concluded')
     elseif lineFrame and car.isInPitlane then
       ac.log('race-control: DSQ, line crossed in the pit lane with the red flag (leaving the pits)')
       carDsq(1, TEXTS.redFlagLineDsq)
@@ -6483,7 +6503,7 @@ do
     elseif lineFrame and not Flags.redReceived then
       Flags.redReceived = true
       ac.log('race-control: red flag received at the line on track')
-      rcLog('Red flag', 'received at the line on track')
+      rcLog(TEXTS.rc.red, 'received at the line on track')
     elseif lineFrame then
       ac.log('race-control: DSQ, line crossed again on track with the red flag (did not go to the pits)')
       carDsq(1, TEXTS.redFlagLineAgainDsq)
@@ -6525,7 +6545,7 @@ do
           ac.log(string.format('race-control: overtake with the red flag in the grace time (car %d): warning only', i))
         elseif passed then
           ac.log(string.format('race-control: DSQ, overtake with the red flag (car %d)', i))
-          rcLog('Disqualified', string.format(TEXTS.redFlagPassDsq, carTag(i)))
+          rcLog(TEXTS.rc.dsq, string.format(TEXTS.redFlagPassDsq, carTag(i)))
           carDsq(1, string.format(TEXTS.redFlagPassDsq, carTag(i)))
           return
         end
@@ -6551,7 +6571,7 @@ do
     if lastSector <= 0 or bestLap <= 0 or left <= 0 then return end
     if left > lastSector and left < lastSector + bestLap then
       Flags.lastLap, Flags.lastLapSession = car.lapCount + 1, sim.currentSessionIndex
-      rcLog('Last lap', string.format('lap %d - %.0f s left, best last sector %.1f s', car.lapCount + 2, left / 1000,
+      rcLog(TEXTS.rc.lastLap, string.format('lap %d - %.0f s left, best last sector %.1f s', car.lapCount + 2, left / 1000,
         lastSector / 1000))
     end
   end
@@ -6606,7 +6626,7 @@ do
     end
     if now ~= was then
       Flags.ending = now
-      if now then rcLog('Session end', now) end
+      if now then rcLog(TEXTS.rc.sessionEnd, now) end
     end
   end
   local START_LIGHTS_FROM = 22
@@ -6657,7 +6677,7 @@ do
     elseif Flags.redLocked and not up then
       Flags.redLocked = false
       if not ownLock and not state.restart then physics.lockUserControlsFor(0) end
-      rcLog('Red flag', 'controls released at the pit place')
+      rcLog(TEXTS.rc.red, 'controls released at the pit place')
     end
     if state.redTow and not up then
       local rt = state.redTow
@@ -6734,14 +6754,14 @@ do
     local pos = m and m.position
     if not pos then
       ac.log('race-control: standing restart: ' .. string.format(TEXTS.srNoNode, k - 1))
-      rcLog('Standing restart', string.format(TEXTS.srNoNode, k - 1))
+      rcLog(TEXTS.rc.standingRestart, string.format(TEXTS.srNoNode, k - 1))
       return
     end
     physics.setCarPosition(0, pos, nil)
     Flags.sr.gridPos, Flags.sr.k = { x = pos.x, y = pos.y, z = pos.z }, k
     Flags.onGrid = true
     ac.log(string.format('race-control: standing restart: grid place P%d (AC_START_%d)', k, k - 1))
-    rcLog('Standing restart', string.format('grid place P%d', k))
+    rcLog(TEXTS.rc.standingRestart, string.format('grid place P%d', k))
   end
   function Flags.placeOnGrid(k) place(k) end
   local function forward(pos, from, look)
@@ -6757,7 +6777,7 @@ do
     if not r then
       if sr.t0 and not sr.go then
         ac.log('race-control: standing restart cancelled: red flag again, controls locked')
-        rcLog('Standing restart', 'cancelled')
+        rcLog(TEXTS.rc.standingRestart, 'cancelled')
         sr.t0 = nil
         send('off')
       end
@@ -6801,7 +6821,7 @@ do
     if not sr.placed and d >= gridAt then
       sr.placed = true
       if swap then
-        rcLog('Standing restart', 'driver swap: leaves the pit lane at the green')
+        rcLog(TEXTS.rc.standingRestart, 'driver swap: leaves the pit lane at the green')
       elseif not Rules.dsqOn() and ((car.isInPitlane and not r.start) or Flags.onGrid) then
         place(r.start and r.k or nil)
       end
@@ -6828,7 +6848,7 @@ do
       local cat = r.start and 'JSS' or 'JS'
       if listAdd(cat, c.jumpLaps) then
         Rules.finalize()
-        rcLog('Drive-through', TEXTS.reason[cat])
+        rcLog(TEXTS.rc.dt, TEXTS.reason[cat])
         showNotice(TEXTS.rcTitle, TEXTS.reason[cat])
       end
     end
@@ -6887,7 +6907,7 @@ do
       if not Flags.dtTaking then
         ac.log(string.format('race-control: drive-through of the game taken out (%s, session %s)', gameNow,
           sim.isSessionStarted and 'started' or 'not started'))
-        rcLog('Start', TEXTS.gameDtTaken)
+        rcLog(TEXTS.rc.start, TEXTS.gameDtTaken)
       end
     end
     Flags.dtTaking = dtGame
@@ -6935,7 +6955,7 @@ do
       ac.log(string.format('race-control: race start: jump start (%.2f m forward before the start)', moved))
       if listAdd('JSS', c.jumpLaps) then
         Rules.finalize()
-        rcLog('Drive-through', TEXTS.reason.JSS)
+        rcLog(TEXTS.rc.dt, TEXTS.reason.JSS)
         showNotice(TEXTS.rcTitle, TEXTS.reason.JSS)
       end
     end
@@ -6972,19 +6992,19 @@ do
       P.fuelStop = true
       if sim.raceSessionType == ac.SessionType.Race then
         ac.log(string.format('race-control: car stopped on track out of fuel: %d s added to the final time', rule.fuelRaceSeconds))
-        rcLog(TEXTS.rcTimePenalty, string.format(TEXTS.parkedTimeLog, rule.fuelRaceSeconds))
+        rcLog(TEXTS.rc.timePenalty, string.format(TEXTS.parkedTimeLog, rule.fuelRaceSeconds))
         showNotice(TEXTS.rcTitle, string.format(TEXTS.parkedFuelRace, rule.fuelRaceSeconds))
       else
         P.fuelInvalid = true
         ac.log('race-control: car stopped on track out of fuel: laps invalid from now on')
-        rcLog(TEXTS.parkedTitle, TEXTS.parkedFuelLapsLog)
+        rcLog(TEXTS.rc.parked, TEXTS.parkedFuelLapsLog)
         showNotice(TEXTS.rcTitle, TEXTS.parkedFuelLaps)
       end
       return
     end
     P.count = P.count + 1
     ac.log(string.format('race-control: car stopped on track on purpose: stop %d of %d tolerated', P.count, rule.grace))
-    rcLog(TEXTS.parkedTitle, string.format(TEXTS.parkedLog, P.count, rule.grace))
+    rcLog(TEXTS.rc.parked, string.format(TEXTS.parkedLog, P.count, rule.grace))
     if P.count > rule.grace then
       ac.log('race-control: DSQ, car stopped on track over the stops tolerated')
       carDsq(1, TEXTS.parkedDsq, nil, string.format(TEXTS.parkedDsqDetail, rule.grace, rule.seconds))
@@ -7100,7 +7120,7 @@ do
     ac.log('race-control: formation lap: ' .. text)
     if listAdd(cat, laps) then
       Rules.finalize()
-      rcLog('Drive-through', TEXTS.reason[cat])
+      rcLog(TEXTS.rc.dt, TEXTS.reason[cat])
       showNotice(TEXTS.rcTitle, TEXTS.reason[cat])
     end
   end
@@ -7191,7 +7211,7 @@ do
       if pos and car.position and dist(car.position, pos) <= r.alignMeters and CarRead.num(car.speedKmh) <= r.alignKmh then
         Flags.placeOnGrid(Formation.k)
         Formation.aligned = true
-        rcLog('Standing start', string.format('aligned on grid place P%d', Formation.k))
+        rcLog(TEXTS.rc.standingStart, string.format('aligned on grid place P%d', Formation.k))
       end
     end
     if Formation.aligned and not state.restart and not (state.pitService or Rules.dsqOn()) then
@@ -7230,7 +7250,7 @@ do
     if Formation.phase ~= 'end' or Formation.t0 or state.restart then return false end
     Formation.t0 = t0 or serverTimeMs()
     ac.log('race-control: standing start: lights by the race direction at session time ' .. math.floor(Formation.t0))
-    rcLog('Standing start', 'start given by the race direction')
+    rcLog(TEXTS.rc.standingStart, 'start given by the race direction')
     return true
   end
   local function trackTell()
@@ -7268,7 +7288,7 @@ do
       Formation.leader = firstConnected()
       Formation.prog, Formation.lastSp = 0, nil
       ac.log(string.format('race-control: formation lap (%s): order locked, place P%s', r.procedure, tostring(Formation.k)))
-      rcLog('Formation lap', string.format('%s - place P%s', r.procedure, tostring(Formation.k)))
+      rcLog(TEXTS.rc.formation, string.format('%s - place P%s', r.procedure, tostring(Formation.k)))
     end
     if Formation.phase == 'lap' then
       lapRules(car)
@@ -7291,7 +7311,7 @@ do
         Formation.goT = state.ui.clock
         Flags.srGoUntil = state.ui.clock + config.flags.greenSeconds
         ac.log(string.format('race-control: rolling start: the leader at %.2f of the lap, green flag', sp))
-        rcLog('Rolling start', 'green flag')
+        rcLog(TEXTS.rc.rollingStart, 'green flag')
       elseif r.procedure == 'STANDING' and lc and Formation.prog >= 0.5 then
         local lp = slotPos(Formation.locked[Formation.leader])
         local left = lp and ((CarRead.num(ac.worldCoordinateToTrackProgress(lp)) - sp) % 1) * lapLen() or 0
@@ -7301,7 +7321,7 @@ do
           Formation.giveBack, Formation.side = {}, {}
           Formation.pitStart = car.isInPitlane
           ac.log('race-control: standing start: formation lap over, to the grid' .. (Formation.pitStart and ' (start from the pit lane)' or ''))
-          rcLog('Standing start', Formation.pitStart and 'start from the pit lane' or 'to the grid')
+          rcLog(TEXTS.rc.standingStart, Formation.pitStart and 'start from the pit lane' or 'to the grid')
         end
       end
     end
@@ -7926,7 +7946,7 @@ local function checkCutZone(zoneIndex, zone, lapCount)
           ref = withRef, given = not withRef, margin = 0, spun = false }
       end
     elseif r.penalty == 'DT' then
-      rcLog('Drive-through', TEXTS.reason[zone.category])
+      rcLog(TEXTS.rc.dt, TEXTS.reason[zone.category])
       if car.isInPitlane then Rules.slowdownEndOfLap(zone.category) else Rules.slowdownMidLap(zone.category) end
       queueChat(TEXTS.cut.DT)
     elseif r.penalty == 'DSQ' then
@@ -14697,7 +14717,7 @@ function script.update(dt)
         parts[#parts + 1] = it.cat .. ' DT' .. it.laps
       end
       ac.log('race-control: swap: penalties of the previous driver taken over: ' .. table.concat(parts, ', '))
-      rcLog('Driver swap', 'Pending penalties taken over: ' .. table.concat(parts, ', '))
+      rcLog(TEXTS.rc.swap, 'Pending penalties taken over: ' .. table.concat(parts, ', '))
       state.ui.lastSeq = state.list.seq
       Rules.finalize()
     end
@@ -14766,7 +14786,7 @@ function script.update(dt)
       Rules.zero()
       l.invalidLap = nil
       ac.log('race-control: tow in practice: penalties cleared')
-      rcLog('Tow', 'Practice - pending penalties cleared')
+      rcLog(TEXTS.rc.tow, 'Practice - pending penalties cleared')
       showNotice(TEXTS.rcTitle, TEXTS.practiceTowCleared)
     end
     if sim.raceSessionType == ac.SessionType.Practice and CarRead.parked(car) then DamageClass.reset() end
@@ -14782,7 +14802,7 @@ function script.update(dt)
           body = d.body } }
         PitRecord.save()
         ac.log('race-control: tow under the red flag: tow and repair time at the restart')
-        rcLog('Tow', TEXTS.redTowDeferred)
+        rcLog(TEXTS.rc.tow, TEXTS.redTowDeferred)
         showNotice(TEXTS.rcTitle, TEXTS.redTowDeferred)
       elseif tw.jumpPending and inPit then
         applyTowHold(towRule.towSeconds, tw.damage, TEXTS.towReason)
