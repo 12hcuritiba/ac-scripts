@@ -5798,12 +5798,17 @@ do
     if n then return tonumber(n) end
     return nil
   end
-  local ratingSeen = nil
+  local ratingDone = nil
+  function KmrDT.sessionReset() ratingDone = nil end
   local function ratingCheck()
     local r = config.kmrRating
-    if not r.on or Audit.rating == nil or Audit.ratingSeq == ratingSeen then return end
-    ratingSeen = Audit.ratingSeq
-    if Audit.rating > r.dsqAt or state.dtDsqActive or state.pitDsqActive then return end
+    if not r.on or Audit.rating == nil then return end
+    if Audit.rating > r.dsqAt then
+      ratingDone = nil
+      return
+    end
+    if ratingDone == Audit.rating or state.dtDsqActive or state.pitDsqActive then return end
+    ratingDone = Audit.rating
     ac.log(string.format('race-control: DSQ, KMR safety rating %s (limit %s)', Audit.num(Audit.rating), Audit.num(r.dsqAt)))
     carDsq(1, string.format(TEXTS.kmrRatingDsq, Audit.num(Audit.rating), Audit.num(r.dsqAt)))
   end
@@ -14598,6 +14603,7 @@ function script.update(dt)
     PitStops.line = 0
     PitStops.endChecked = false
     Rules.endTimeDone = false
+    KmrDT.sessionReset()
     PassMirror.load()
     if transition then PitStops.settleUntil = state.ui.clock + PitStops.SETTLE_SECONDS end
     DriverTable.reset()
