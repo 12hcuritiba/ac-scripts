@@ -3781,7 +3781,7 @@ local function reasonLog(cat)
 end
 local function listAdd(cat, laps)
   local l = state.list
-  if state.dtDsqActive or state.pitDsqActive then
+  if Rules.dsqOn() then
     ac.log(string.format('race-control: %s after the DSQ: logged, not applied', cat))
     return nil
   end
@@ -3871,9 +3871,12 @@ local function dsqGameFlag(why, rcReason, inGame)
   ac.log('race-control: DSQ black flag in the game, controls locked (' .. why .. ')')
   if rcReason then rcLog('Disqualified', rcReason) end
 end
+function Rules.dsqOn()
+  return state.dtDsqActive or state.pitDsqActive
+end
 function Rules.raceEndTime(car)
   if Rules.endTimeDone or sim.raceSessionType ~= ac.SessionType.Race or not car.isRaceFinished then return end
-  if state.dtDsqActive or state.pitDsqActive then
+  if Rules.dsqOn() then
     Rules.endTimeDone = true
     return
   end
@@ -3898,7 +3901,7 @@ end
 function Rules.practiceClear(car)
   if sim.raceSessionType ~= ac.SessionType.Practice or not CarRead.parked(car) then return nil end
   local l = state.list
-  local dsqActive = state.dtDsqActive or state.pitDsqActive
+  local dsqActive = Rules.dsqOn()
   if dsqActive then
     if (config.tow[ac.SessionType.Practice].clearDsq or 0) ~= 1 then return nil end
     carDsqClear('practice, car at its pit place')
@@ -3977,7 +3980,7 @@ function Rules.sgForm(extra, why)
 end
 function Rules.sgAddSeconds(seconds, why)
   local l = state.list
-  if state.dtDsqActive or state.pitDsqActive then
+  if Rules.dsqOn() then
     ac.log('race-control: ' .. why .. ' after the DSQ: logged, not applied')
     return
   end
@@ -4098,7 +4101,7 @@ RecordSync.restorers.penalties = function(body, seq)
 end
 function Rules.keepDsq(source)
   local l = state.list
-  if l.dsq == 0 or state.dtDsqActive or state.pitDsqActive then return end
+  if l.dsq == 0 or Rules.dsqOn() then return end
   if l.dsq == 2 then state.pitDsqActive = true else state.dtDsqActive = true end
   if l.dsqStage == 1 then dsqGameFlag('kept from the car record') end
   ac.log('race-control: DSQ kept from the car record (' .. source .. ')')
@@ -4603,7 +4606,7 @@ do
   end
   function DamageClass.update(car, lineFrame)
     local r = state.repair
-    if state.dtDsqActive or state.pitDsqActive then
+    if Rules.dsqOn() then
       r.class = 'normal'
       return
     end
@@ -4804,7 +4807,7 @@ do
     end
     if not why then return end
     ac.log('race-control: DSQ at the end of the race: ' .. why)
-    if not (state.dtDsqActive or state.pitDsqActive) then carDsq(1, why) end
+    if not Rules.dsqOn() then carDsq(1, why) end
   end
   function PitStops.update(car)
     for i = 1, sim.carsCount - 1 do
@@ -4893,7 +4896,7 @@ do
     Record.save('window', 2, 'missed')
     ac.log('race-control: mandatory pit window missed (no valid driver swap): DSQ')
     rcLog('Pit window', TEXTS.pitMissedLog)
-    if not (state.dtDsqActive or state.pitDsqActive) then carDsq(1, TEXTS.pitWindowDsq) end
+    if not Rules.dsqOn() then carDsq(1, TEXTS.pitWindowDsq) end
   end
 end
 RecordSync.restorers.window = function(body)
@@ -5364,7 +5367,7 @@ do
     PitBox.ROWS = ROWS
     if PitBox.row > #ROWS then PitBox.row = #ROWS end
     local wasOpen = PitBox.open
-    PitBox.open = CarRead.parked(car) and not state.hold and not state.dtDsqActive and not state.pitDsqActive
+    PitBox.open = CarRead.parked(car) and not state.hold and not Rules.dsqOn()
       and not CarState.restoring
     local padOn = not PitBox.padFor or PitBox.padFor('pitbox')
     local function hit(name)
@@ -5475,7 +5478,7 @@ function PitSpeed.update(car, inPit, lapCount)
   local speed = PitSpeed.maxKmh
   PitSpeed.over = false
   PitSpeed.maxKmh = 0
-  if state.dtDsqActive or state.pitDsqActive then
+  if Rules.dsqOn() then
     ac.log('race-control: pit lane speeding after the DSQ: not applied')
     return
   end
@@ -5730,7 +5733,7 @@ do
         .. ')')
     end
     local rule = config.wrongWay
-    if rule.penalty ~= 'DSQ' or car.isInPitlane or state.dtDsqActive or state.pitDsqActive then
+    if rule.penalty ~= 'DSQ' or car.isInPitlane or Rules.dsqOn() then
       WrongWay.reset()
       return
     end
@@ -5807,7 +5810,7 @@ do
       ratingDone = nil
       return
     end
-    if ratingDone == Audit.rating or state.dtDsqActive or state.pitDsqActive then return end
+    if ratingDone == Audit.rating or Rules.dsqOn() then return end
     ratingDone = Audit.rating
     ac.log(string.format('race-control: DSQ, KMR safety rating %s (limit %s)', Audit.num(Audit.rating), Audit.num(r.dsqAt)))
     carDsq(1, string.format(TEXTS.kmrRatingDsq, Audit.num(Audit.rating), Audit.num(r.dsqAt)))
@@ -5863,7 +5866,7 @@ do
         if cat ~= 'K1' and (laps == 'next race' or sim.raceSessionType ~= ac.SessionType.Race) then
           ac.log('race-control: KMR drive-through relaxed (' .. cat .. '): ' .. text)
           rcLog('Drive-through relaxed', base .. ' - issued by KMR for the next race, not carried over by Racing Control' .. via)
-        elseif not (state.dtDsqActive or state.pitDsqActive) then
+        elseif not Rules.dsqOn() then
           ac.log(string.format('race-control: KMR drive-through DT%d (%s): %s', laps, cat, text))
           rcLog('Drive-through DT' .. laps, base .. ' - issued by KMR, recorded by Racing Control' .. via)
           listAdd(cat, laps)
@@ -5889,7 +5892,7 @@ do
   local function holdOff()
     state.hold = nil
     local car = ac.getCar(0)
-    if car and car.currentPenaltyType ~= BLACK_FLAG and not (state.dtDsqActive or state.pitDsqActive) then
+    if car and car.currentPenaltyType ~= BLACK_FLAG and not Rules.dsqOn() then
       physics.setCarPenalty(NONE, 0)
       ac.log('race-control: hold of the game taken off (penalty of the game set to none)')
     end
@@ -6384,7 +6387,7 @@ do
   end
   local function exitQueue(car)
     if not state.postRed or not car.isInPitlane or sim.raceSessionType ~= ac.SessionType.Race
-        or state.dtDsqActive or state.pitDsqActive then
+        or Rules.dsqOn() then
       Flags.exitLine, Flags.exitWait = nil, nil
       return
     end
@@ -6417,7 +6420,7 @@ do
   end
   local yellowSide = {}
   local function yellowRules(car)
-    if state.redFlag or state.dtDsqActive or state.pitDsqActive then
+    if state.redFlag or Rules.dsqOn() then
       yellowSide, Flags.giveBack = {}, {}
       return
     end
@@ -6463,7 +6466,7 @@ do
   end
   local redSide = {}
   local function redRules(car, lineFrame)
-    if not state.redFlag or state.dtDsqActive or state.pitDsqActive then
+    if not state.redFlag or Rules.dsqOn() then
       redSide = {}
       Flags.redOver, Flags.redOverSince, Flags.redPrevLane = false, nil, nil
       return
@@ -6619,7 +6622,7 @@ do
   local function redPit(car)
     local up = state.redFlag ~= nil
     if Flags.redWasUp and not up and not car.isInPitlane and not Flags.onGrid
-        and not (state.dtDsqActive or state.pitDsqActive) then
+        and not Rules.dsqOn() then
       ac.log('race-control: DSQ, not in the pits at the restart after the red flag')
       carDsq(1, TEXTS.redFlagNoPitDsq)
     end
@@ -6645,7 +6648,7 @@ do
       Flags.lightsSent, Flags.lightsSentT = lt, state.ui.clock
       ac.broadcastSharedEvent('race-control.lights', lt)
     end
-    local ownLock = state.pitService or state.dtDsqActive or state.pitDsqActive
+    local ownLock = state.pitService or Rules.dsqOn()
     if up and CarRead.parked(car) and not ownLock then
       if not Flags.redLocked or state.ui.clock >= Flags.redLockT then
         physics.lockUserControlsFor(3)
@@ -6722,7 +6725,7 @@ do
       ac.broadcastSharedEvent(TRACK_EVENT, ev)
     end
   end
-  local function ownLock() return state.pitService or state.dtDsqActive or state.pitDsqActive end
+  local function ownLock() return state.pitService or Rules.dsqOn() end
   local function place(k)
     k = k or Flags.restartPlace()
     if not k then return end
@@ -6799,7 +6802,7 @@ do
       sr.placed = true
       if swap then
         rcLog('Standing restart', 'driver swap: leaves the pit lane at the green')
-      elseif not (state.dtDsqActive or state.pitDsqActive) and ((car.isInPitlane and not r.start) or Flags.onGrid) then
+      elseif not Rules.dsqOn() and ((car.isInPitlane and not r.start) or Flags.onGrid) then
         place(r.start and r.k or nil)
       end
     end
@@ -6956,7 +6959,7 @@ do
   local function watched(car)
     return P.armed and sim.isSessionStarted and not car.isInPitlane and not car.isInPit and not CarRead.parked(car) and not state.hold
       and not state.redFlag and not state.restart
-      and not Flags.onGrid and Flags.ending ~= 'finished' and not (state.dtDsqActive or state.pitDsqActive)
+      and not Flags.onGrid and Flags.ending ~= 'finished' and not Rules.dsqOn()
   end
   local function detection(car)
     local rule = config.parkedCar
@@ -7030,7 +7033,7 @@ do
       detection(car)
       return
     end
-    if state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1 and not (state.dtDsqActive or state.pitDsqActive) then
+    if state.repair.class ~= 'beyond' and CarRead.num(car.fuel) > 0.1 and not Rules.dsqOn() then
       Flags.parkedLine = { string.format(TEXTS.parkedMove, math.max(math.ceil(rule.moveSeconds - P.elapsed), 0)),
         rule.grace > 0 and string.format(TEXTS.parkedLeft, math.max(rule.grace - P.count, 0), rule.grace) or TEXTS.parkedNoGrace }
     end
@@ -7115,7 +7118,7 @@ do
   local function lapRules(car)
     local r = rule()
     local clock = state.ui.clock
-    if car.isInPitlane or state.dtDsqActive or state.pitDsqActive then
+    if car.isInPitlane or Rules.dsqOn() then
       Formation.overSince, Formation.slowSince, Formation.giveBack, Formation.side = nil, nil, {}, {}
       return
     end
@@ -7191,7 +7194,7 @@ do
         rcLog('Standing start', string.format('aligned on grid place P%d', Formation.k))
       end
     end
-    if Formation.aligned and not state.restart and not (state.pitService or state.dtDsqActive or state.pitDsqActive) then
+    if Formation.aligned and not state.restart and not (state.pitService or Rules.dsqOn()) then
       if clock >= Formation.lockT then
         physics.lockUserControlsFor(3)
         Formation.lockT = clock + 2
@@ -7315,7 +7318,7 @@ do
       end
       if state.restart and state.restart.start and serverTimeMs() >= state.restart.t0 and not Formation.missed then
         Formation.missed = true
-        if not Formation.aligned and not car.isInPitlane and not (state.dtDsqActive or state.pitDsqActive) then
+        if not Formation.aligned and not car.isInPitlane and not Rules.dsqOn() then
           ac.log('race-control: DSQ, not on the grid place when the start lights began')
           carDsq(1, TEXTS.fmMissedStart)
         end
@@ -7904,7 +7907,7 @@ local function checkCutZone(zoneIndex, zone, lapCount)
   if not state.cutPassPenalized[zoneIndex] and car.wheelsOutside > zone.maxWheelsOut then
     state.cutPassPenalized[zoneIndex] = true
     state.lapCut = true
-    if state.dtDsqActive or state.pitDsqActive then
+    if Rules.dsqOn() then
       ac.log(string.format('race-control: cut %s after the DSQ: logged, not applied', zone.category))
       return
     end
@@ -7994,7 +7997,7 @@ function Panel.cellTrack()
   return nil
 end
 function Panel.cellPenalties()
-  if state.dtDsqActive or state.pitDsqActive then return { value = TEXTS.penDsq, color = 'red' } end
+  if Rules.dsqOn() then return { value = TEXTS.penDsq, color = 'red' } end
   if state.hold then return { value = TEXTS.penHold, color = 'red' } end
   local items = state.list.items
   if #items == 0 then return nil end
@@ -8023,7 +8026,7 @@ function Panel.message()
   return nil
 end
 function Panel.frameColor()
-  if state.hold or state.dtDsqActive or state.pitDsqActive or (config.sg and sgItem()) then return BORDER_RED end
+  if state.hold or Rules.dsqOn() or (config.sg and sgItem()) then return BORDER_RED end
   local notice = state.ui.notice
   local nflag = notice and notice.flag
   if state.code80 or DICT.code80Kinds[nflag] then return BORDER_YELLOW end
@@ -8144,7 +8147,7 @@ do
     short = ac.storage[introServerKey()] == '1' }
   local function introHasInfo()
     return #state.list.items > 0 or next(state.slowdowns) ~= nil or state.code80 ~= nil or state.hold ~= nil
-      or state.dtDsqActive or state.pitDsqActive
+      or Rules.dsqOn()
   end
   local INTRO_CYCLE, INTRO_MESSAGES
   local function introTexts()
@@ -14480,11 +14483,11 @@ function script.drawUI(exclusive)
     local total = config.swapMinSeconds
     local title, line1, line2
     local wrongLeft = WrongDriver.remaining()
-    if state.swapInvalid and not (state.dtDsqActive or state.pitDsqActive) then
+    if state.swapInvalid and not Rules.dsqOn() then
       title, line1 = TEXTS.swapInvalidTitle, TEXTS.swapInvalidLeave
       local left = WrongDriver.invalidLeft()
       if left then line2 = string.format(TEXTS.wrongDriverTime, mmss(left)) end
-    elseif wrongLeft and not (state.dtDsqActive or state.pitDsqActive) then
+    elseif wrongLeft and not Rules.dsqOn() then
       title, line1 = TEXTS.wrongDriverTitle, TEXTS.wrongDriverLeave
       line2 = string.format(TEXTS.wrongDriverTime, mmss(wrongLeft))
     elseif sw.clearUntil and clock < sw.clearUntil then
@@ -14661,7 +14664,7 @@ function script.update(dt)
   local sw = state.swap
   local parked = car.isInPit
   if sw.prevInPit and not parked and sw.remaining and sw.remaining - (state.ui.clock - sw.remainingT) > 0
-      and not (state.dtDsqActive or state.pitDsqActive) then
+      and not Rules.dsqOn() then
     ac.log(string.format('race-control: DSQ, left the pits %.1f s before the driver swap time',
       sw.remaining - (state.ui.clock - sw.remainingT)))
     sw.remaining = nil
@@ -14670,7 +14673,7 @@ function script.update(dt)
   if sw.prevInPit == false and parked then sw.stopT = state.ui.clock end
   if not parked then sw.stopT = nil end
   local swapAllowed = sw.stopT and #state.list.items == 0 and not state.pitPassServiced
-    and not (state.dtDsqActive or state.pitDsqActive)
+    and not Rules.dsqOn()
   if not swapAllowed then sw.allowT = nil elseif not sw.allowT then sw.allowT = state.ui.clock end
   if not inPit then sw.remaining = nil end
   sw.prevInPit = parked
@@ -14736,7 +14739,7 @@ function script.update(dt)
         l.seq = l.seq + 1
         l.dsqReason = TEXTS.dsqBlackFlag
       end
-      if not (state.dtDsqActive or state.pitDsqActive) then state.dtDsqActive = true end
+      if not Rules.dsqOn() then state.dtDsqActive = true end
       if l.dsqStage ~= 1 then dsqGameFlag('black flag from outside the script', nil, true) end
       Rules.zero()
     end
@@ -14750,7 +14753,7 @@ function script.update(dt)
         physics.setCarPenalty(BLACK_FLAG)
       end
     end
-    local dsqActive = state.dtDsqActive or state.pitDsqActive
+    local dsqActive = Rules.dsqOn()
     if state.code80Ended then
       state.code80Ended = false
       if not dsqActive then Rules.finalize() end
@@ -14821,7 +14824,7 @@ function script.update(dt)
     Ban.update()
     PitSpeed.update(car, inPit, lapCount)
     Rules.invalidLaps(car)
-    if not (state.dtDsqActive or state.pitDsqActive) then
+    if not Rules.dsqOn() then
       WrongDriver.update()
       WrongDriver.invalidSwap(car)
       WrongWay.update(car)
