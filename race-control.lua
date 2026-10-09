@@ -2558,7 +2558,7 @@ do
     if cb then cb(tostring(data)) end
   end)
 end
-local PitRecord = { stops = 0, last = '-', HOLD_MAX = 86400 }
+local PitRecord = { stops = 0, last = '-', HOLD_MAX = 86400, HOLD_GRACE = 2000 }
 PitRecord.onService = nil
 local startHold
 function PitRecord.save()
@@ -2568,17 +2568,20 @@ function PitRecord.save()
   local sv = state.pitService
   local rt = state.redTow
   local inv = state.swapInvalid
-  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s', PitRecord.stops, PitRecord.last,
+  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s|%s', PitRecord.stops, PitRecord.last,
     h and math.floor(h.untilMs) or 0, text,
     sv and string.format('%d/%d/%s', math.floor(sv.startMs), math.floor(sv.untilMs), sv.plan) or '-',
     state.pitPassServiced and 1 or 0, rt and string.format('%d/%.4f/%.4f/%.2f', rt.tow, rt.damage.powertrain,
     rt.damage.suspension, rt.damage.body) or '', state.pitPassSgPaid or 0,
-    inv and string.format('%d/%d', inv.driver, math.floor(inv.since)) or ''))
+    inv and string.format('%d/%d', inv.driver, math.floor(inv.since)) or '',
+    h and tostring(h.cause or ''):gsub('[|]', '/') or ''))
 end
 function PitRecord.apply(body, seq, newConnection)
-  local stops, last, untilMs, text, service, serviced, redTow, sgPaid, invalid =
-    tostring(body):match('^(%d+)|([^|]*)|(%d+)|([^|]*)|([^|]*)|?(%d?)|?([^|]*)|?(%d*)|?([^|]*)$')
-  if not stops then return end
+  local f = {}
+  for v in (tostring(body) .. '|'):gmatch('([^|]*)|') do f[#f + 1] = v end
+  local stops, last, untilMs, text, service, serviced, redTow, sgPaid, invalid, cause =
+    f[1], f[2] or '', f[3], f[4] or '', f[5] or '', f[6] or '', f[7] or '', f[8] or '', f[9] or '', f[10] or ''
+  if not (stops and tonumber(stops) and untilMs and tonumber(untilMs)) then return end
   if tonumber(sgPaid or '') and tonumber(sgPaid) ~= 0 then state.pitPassSgPaid = tonumber(sgPaid) end
   local invDriver, invSince = tostring(invalid or ''):match('^(%d+)/(%d+)$')
   if invDriver and not state.swapInvalid then
@@ -2604,10 +2607,10 @@ function PitRecord.apply(body, seq, newConnection)
     return
   end
   if newConnection then
-    startHold(left, text)
+    startHold(left, text, cause)
     ac.log(string.format('race-control: hold goes on after the new connection, %.0f s left', left))
   else
-    state.hold = { untilMs = tonumber(untilMs), text = text }
+    state.hold = { untilMs = tonumber(untilMs), text = text, cause = cause ~= '' and cause or nil }
   end
 end
 function PitRecord.load(fresh)
@@ -2621,14 +2624,31 @@ function PitRecord.load(fresh)
   local body, seq, source = Record.load('pit')
   if body then PitRecord.apply(body, seq, source ~= 'store') end
 end
-startHold = function(seconds, text)
+startHold = function(seconds, text, cause)
   state.tow.ownJumpUntil = state.ui.clock + 2
   physics.setCarPenalty(TELEPORT_TO_PITS, seconds)
-  state.hold = { untilMs = serverTimeMs() + seconds * 1000, text = text }
+  state.hold = { untilMs = serverTimeMs() + seconds * 1000, text = text, cause = cause }
   PitRecord.save()
+end
+function PitRecord.holdText()
+  local h = state.hold
+  if not h then return '' end
+  local c = tostring(h.cause or '')
+  if c == 'dt2' then return TEXTS.holdTwoDT end
+  if c == 'dt2long' then return TEXTS.holdTwoDTLong end
+  local tow, repair = c:match('^tow/(%d+)/(%d+)$')
+  if tow then return string.format(TEXTS.holdTowRepair, mmss(tonumber(tow)), mmss(tonumber(repair))) end
+  local only = c:match('^repair/(%d+)$')
+  if only then return string.format(TEXTS.holdRepair, mmss(tonumber(only))) end
+  local why = c:match('^quali/(.*)$')
+  if why then return string.format(TEXTS.qualiEndHold, why) end
+  return tostring(h.text or '')
 end
 function PitRecord.holdLeft()
   return state.hold and math.max((state.hold.untilMs - serverTimeMs()) / 1000, 0) or 0
+end
+function PitRecord.holdOver()
+  return PitRecord.holdEnded ~= nil and serverTimeMs() <= PitRecord.holdEnded + PitRecord.HOLD_GRACE
 end
 RecordSync.restorers.pit = function(body, seq)
   if seq < (PitRecord.seq or 0) then return end
@@ -3967,7 +3987,7 @@ local function applyHold(long)
   local reason = long and TEXTS.holdTwoDTLong or TEXTS.holdTwoDT
   local held = {}
   for _, it in ipairs(state.list.items) do held[#held + 1] = reasonLog(it.cat) end
-  startHold(seconds, reason)
+  startHold(seconds, reason, long and 'dt2long' or 'dt2')
   Rules.zero()
   ac.log(string.format('race-control: hold %d s', seconds))
   rcLog(string.format(TEXTS.rc.hold, seconds),
@@ -4192,7 +4212,7 @@ function PitRecord.endQualifying(reason)
   local left = CarRead.num(sim.sessionTimeLeft) / 1000
   state.tow.repairDone = true
   state.tow.damage = nil
-  startHold(left > 0 and math.ceil(left) + 5 or 86400, string.format(TEXTS.qualiEndHold, reason))
+  startHold(left > 0 and math.ceil(left) + 5 or 86400, string.format(TEXTS.qualiEndHold, reason), 'quali/' .. reason)
   ac.log('race-control: qualifying ended - ' .. reason)
   rcLog(TEXTS.rc.qualiEnd, reason)
   showNotice(TEXTS.rcTitle, string.format(TEXTS.qualiEndNotice, reason))
@@ -4205,7 +4225,7 @@ local function applyTowHold(tow, damage, reason)
   if seconds <= 0 then return end
   local text = tow > 0 and string.format(TEXTS.holdTowRepair, mmss(tow), mmss(repair))
     or string.format(TEXTS.holdRepair, mmss(repair))
-  startHold(seconds, text)
+  startHold(seconds, text, tow > 0 and string.format('tow/%d/%d', tow, repair) or string.format('repair/%d', repair))
   local d = damage or { powertrain = 0, suspension = 0, body = 0 }
   ac.log(string.format('race-control: tow hold %d s (tow %d, repair %d; collision damage: powertrain %.3f'
     .. ' suspension %.3f body %.1f km/h)', seconds, tow, repair, d.powertrain, d.suspension, d.body))
@@ -5920,6 +5940,7 @@ do
     return tonumber(id) == ac.getCar(0).sessionID
   end
   local function holdOff()
+    if state.hold then PitRecord.holdEnded = math.min(state.hold.untilMs, serverTimeMs()) end
     state.hold = nil
     local car = ac.getCar(0)
     if car and car.currentPenaltyType ~= BLACK_FLAG and not Rules.dsqOn() then
@@ -6906,12 +6927,7 @@ do
       lastGame = gameNow
     end
     local gp = tonumber(g.p) or 0
-    if state.hold then
-      Flags.holdTail = g.t == GAME_DT and gp > 0 and gp or Flags.holdTail
-    elseif Flags.holdTail and not (g.t == GAME_DT and gp > 0 and gp <= Flags.holdTail) then
-      Flags.holdTail = nil
-    end
-    local dtGame = g.t == GAME_DT and gp > 0 and not state.hold and not Flags.holdTail
+    local dtGame = g.t == GAME_DT and gp > 0 and not state.hold and not PitRecord.holdOver()
     if dtGame then
       physics.setCarPenalty(MANDATORY_PITS, 0)
       if not Flags.dtTaking then
@@ -8045,7 +8061,7 @@ function Panel.message()
   local notice = state.ui.notice
   if notice then return notice.text, (notice.item and notice.item.kind:sub(1, 2) == 'SG') and 'red' or 'yellow' end
   if state.hold then
-    return string.format(TEXTS.hold, mmss(PitRecord.holdLeft()), state.hold.text), 'red'
+    return string.format(TEXTS.hold, mmss(PitRecord.holdLeft()), PitRecord.holdText()), 'red'
   end
   local items = state.list.items
   if sg then return itemText(sg), 'red' end
@@ -14629,6 +14645,7 @@ function script.update(dt)
     TrackList.load()
     CarState.load(transition and jumpedNow)
     state.hold = nil
+    PitRecord.holdEnded = nil
     PitRecord.load(transition)
     PitStops.wasInPitlane = nil
     PitStops.passInWindow = false
@@ -14688,6 +14705,7 @@ function script.update(dt)
   RecordSync.base.setupTabUpdate()
   RecordSync.base.setupPushUpdate()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
+    PitRecord.holdEnded = state.hold.untilMs
     state.hold = nil
     PitRecord.save()
   end
