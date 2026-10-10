@@ -400,7 +400,8 @@ local TEXTS = {
   scrKmrNone = 'none yet',
   sessionName = { [ac.SessionType.Practice] = 'PRACTICE', [ac.SessionType.Qualify] = 'QUALIFY', [ac.SessionType.Race] = 'RACE' },
   edTitle = 'SCREENS', edPitDesk = 'Pit desktop', edDeskOf = 'Desktop %s of %d', edHint = 'drag a screen to its place - title line moves this window',
-  edAll = 'all', edScreens = 'Screens', edReset = 'Reset desktop', edCopy = 'Copy from 1', edDelete = 'Delete desktop',
+  edAll = 'all', edScreens = 'Screens', edReset = 'Reset desktop', edDefault = 'Default desktop',
+  edCopy = 'Copy from 1', edDelete = 'Delete desktop',
   edPitOn = 'PIT desktop on', edPitOff = 'PIT desktop off',
   edPitWarning = 'PIT desktop off: nothing more is shown in the pit lane - at your own risk',
   edButtons = 'Next screen %s - Previous screen %s - Next desktop %s - Previous desktop %s (CSP controls)',
@@ -8396,15 +8397,21 @@ do
     ac.storage[TITLE_KEY] = table.concat(list, ',')
   end
   Desktop.NAV = NAV
+  local function trackDefault()
+    return { standings = { x = -697, y = -450, mode = 'visible' }, laps = { x = 0, y = 250, mode = 'visible' },
+      relative = { x = -1174, y = 290, mode = 'visible' }, telemetry = { x = 350, y = -78, mode = 'visible' },
+      delta = { x = 466, y = -237, mode = 'visible' }, pitbox = { x = 0, y = 0, mode = 'visible' },
+      race = { x = 1524, y = 0, mode = 'visible' } }
+  end
+  local function pitDefault()
+    return { pitbox = { x = 0, y = 0, mode = 'auto' }, status = { x = 0, y = 0, mode = 'auto' },
+      setup = { x = 0, y = 0, mode = 'auto' }, standings = { x = 0, y = 0, mode = 'auto' },
+      share = { x = 26, y = 689, mode = 'visible' } }
+  end
+  Desktop.trackDefault, Desktop.pitDefault = trackDefault, pitDefault
   local function defaults()
     Desktop.current, Desktop.count, Desktop.pitOn = 1, 1, true
-    Desktop.place = {
-      [1] = { relative = { x = 0, y = 0, mode = 'auto' }, laptime = { x = 0, y = 0, mode = 'auto' },
-        race = { x = 0, y = 0, mode = 'auto' } },
-      all = {},
-      pit = { pitbox = { x = 0, y = 0, mode = 'auto' }, status = { x = 0, y = 0, mode = 'auto' },
-        setup = { x = 0, y = 0, mode = 'auto' }, standings = { x = 0, y = 0, mode = 'auto' } },
-    }
+    Desktop.place = { [1] = trackDefault(), all = {}, pit = pitDefault() }
     for _, g in ipairs({ 'pitbox', 'setup', 'status' }) do
       local e = Desktop.place.pit[g]
       e.x, e.y = tonumber(ac.storage['screen_' .. g .. 'X']) or 0, tonumber(ac.storage['screen_' .. g .. 'Y']) or 0
@@ -8586,8 +8593,8 @@ do
   local function valueStep(g, dir)
     if g == 'weather' then
       if Desktop.filter.weather == 'map' then
-        if not Desktop.radarZoom(dir) and dir < 0 then Desktop.filter.weather = 'forecast' end
-      elseif not Desktop.weatherStep(dir) then Desktop.filter.weather = 'map' end
+        if not Desktop.radarZoom(dir) and dir < 0 then Desktop.weatherMode('forecast') end
+      elseif not Desktop.weatherStep(dir) then Desktop.weatherMode('map') end
     elseif g == 'laps' then
       Desktop.lapsStep(dir)
     elseif g == 'relative' or g == 'standings' or g == 'map' then
@@ -8610,7 +8617,13 @@ do
       Desktop.calcStep(dir)
     end
   end
-  Desktop.filter = { relative = 'ALL', standings = 'ALL', map = 'ALL', weather = 'forecast' }
+  local WX_KEY = 'rc.weatherMode'
+  Desktop.filter = { relative = 'ALL', standings = 'ALL', map = 'ALL',
+    weather = tostring(ac.storage[WX_KEY] or '') == 'forecast' and 'forecast' or 'map' }
+  function Desktop.weatherMode(mode)
+    Desktop.filter.weather = mode
+    ac.storage[WX_KEY] = mode
+  end
   Desktop.lapsStep = function() end
   Desktop.weatherStep = function() end
   Desktop.radarZoom = function() end
@@ -11159,7 +11172,7 @@ float4 main(PS_IN pin) {
       local a, b = vec2(x - tw - 6 * s, p1.y + 5 * s), vec2(x, p1.y + 18 * s)
       if mode == m then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
       drawText(t, FONT_MONO, 9 * s, TMP.a:set(a.x + 3 * s, a.y + 1 * s), mode == m and TMP.dark or COLOR_DIM)
-      Drag.clickable(a, b, function() filter.weather = m end)
+      Drag.clickable(a, b, function() Desktop.weatherMode(m) end)
       x = a.x - 4 * s
     end
     local okC, cs = pcall(ac.getConditionsSet)
@@ -11636,7 +11649,7 @@ float4 main(PS_IN pin) {
     Tele.n = math.min(Tele.n + 1, TELE_MAX)
   end
   Desktop.teleSample = teleSample
-  local teleSmall = tostring(ac.storage['rc.telemetrySmall'] or '') == '1'
+  local teleSmall = tostring(ac.storage['rc.telemetrySmall'] or '1') ~= '0'
   local function telemetryScreen(car, w, h, s)
     local small = teleSmall
     local GH = small and 40 or 92
@@ -12710,6 +12723,10 @@ local drawDesktopUI = (function()
     local bx = c1.x
     bx = chip(TEXTS.edReset, vec2(bx, by), s, false, nil, function()
       for _, e in pairs(Desktop.place[desk] or {}) do e.x, e.y = 0, 0 end
+      Desktop.save()
+    end)
+    bx = chip(TEXTS.edDefault, vec2(bx, by), s, false, nil, function()
+      Desktop.place[desk] = desk == 'pit' and Desktop.pitDefault() or Desktop.trackDefault()
       Desktop.save()
     end)
     bx = chip(TEXTS.edCopy, vec2(bx, by), s, false, nil, function() Desktop.copyFrom(1, desk) end)
