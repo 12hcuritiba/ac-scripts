@@ -67,6 +67,8 @@ local cfg = ac.configValues({
   driverStint = '',
   pitStopOrder = 'F<TR>',
   pitStopMode = 'AUTO',
+  swapWindowStartMinutes = 0,
+  swapWindowEndMinutes = 0,
   pitWindowStartMinutes = 0,
   pitWindowEndMinutes = 0,
   pitStopsEnabled = 0,
@@ -123,7 +125,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V165 - 2026.10.10'
+local RC_VERSION = 'V166 - 2026.10.10'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -133,7 +135,7 @@ local TEXTS = {
     dtRelaxed = 'Drive-through relaxed', dtServed = 'Drive-through served',
     dtServedSg = 'Drive-through served in stop & go', swap = 'Driver swap', formation = 'Formation lap',
     green = 'Green flag', incident = 'Incident', kmrUnread = 'KMR message not read', lastLap = 'Last lap', pit = 'Pit',
-    pitPlan = 'Pit stop plan', pitWindow = 'Pit window', qualiEnd = 'Qualifying ended', raceRestart = 'Race restart',
+    pitPlan = 'Pit stop plan', pitWindow = 'Pit window', stopWindow = 'Pit stop window', qualiEnd = 'Qualifying ended', raceRestart = 'Race restart',
     command = 'Racing Control command', commandUnread = 'Racing Control command not understood', red = 'Red flag',
     redOff = 'Red flag off', regIncomplete = 'Registration incomplete', repairDone = 'Repair done',
     repairReq = 'Repair required', rollingStart = 'Rolling start', sessionEnd = 'Session end',
@@ -193,6 +195,7 @@ local TEXTS = {
   sgStopped = 'Stop & go %s - stay stopped, no service',
   sgInterrupted = 'Stop & go interrupted - %s left - only the same driver may continue',
   pitMissedLog = 'MISSED - no valid driver swap inside the pit window',
+  stopWindowMissedLog = 'MISSED - no pit stop inside the window of the mandatory pit stop',
   pitBoxTitle = 'PIT STOP',
   pitBoxTotal = 'Total %s',
   pitBoxConfirm = 'Enter to confirm',
@@ -367,7 +370,7 @@ local TEXTS = {
   dtNextLap = 'Serve it this lap or the next',
   dtWithinLaps = 'Serve it within %d laps',
   dtOverdue = 'OVERDUE - serve it at the next pit pass',
-  pitWindowDsq = 'Mandatory pit stop missed',
+  pitWindowDsq = 'Driver swap window missed', stopWindowDsq = 'Mandatory pit stop missed',
   swapEarlyDsq = 'Left the pits before the driver swap time',
   swapsMissingDsq = 'Driver swaps missing (%d of %d)',
   stopsMissingDsq = 'Pit stops missing (%d of %d)',
@@ -736,6 +739,7 @@ local config = (function()
     raceDriverSwap = { 'driverSwap', 'race', nil, 0 }, driverSwapMinSeconds = { 'driverSwap', 'minSeconds', nil, 120 },
     driverSwapRequired = { 'driverSwap', 'required', nil, '' },
     wrongDriverSeconds = { 'driverSwap', 'wrongDriverSeconds', nil, '120' },
+    swapWindowStartMinutes = { 'driverSwap', 'windowStartMinutes', nil, 0 }, swapWindowEndMinutes = { 'driverSwap', 'windowEndMinutes', nil, 0 },
     pitStopsEnabled = { 'pitStops', 'enabled', nil, 0 }, pitStopsRequired = { 'pitStops', 'required', nil, 0 },
     pitStopOrder = { 'pitStops', 'order', nil, 'F<TR>' }, pitStopMode = { 'pitStops', 'mode', nil, 'AUTO' },
     pitWindowStartMinutes = { 'pitWindow', 'startMinutes', nil, 0 }, pitWindowEndMinutes = { 'pitWindow', 'endMinutes', nil, 0 },
@@ -897,6 +901,8 @@ local config = (function()
     cutSpinAngle = tonumber(K('cutSpinAngle')) or 90,
     pitSpeedLimit = tonumber(K('pitSpeedLimit')) or 60,
     pitSpeedTolerance = tonumber(K('pitSpeedTolerance')) or 2,
+    swapWindowStart = tonumber(K('swapWindowStartMinutes')) or 0,
+    swapWindowEnd = tonumber(K('swapWindowEndMinutes')) or 0,
     pitWindowStart = tonumber(K('pitWindowStartMinutes')) or 0,
     pitStopsEnabled = tonumber(K('pitStopsEnabled')) == 1,
     pitStopsRequired = math.floor(tonumber(K('pitStopsRequired')) or 0),
@@ -1853,7 +1859,7 @@ do
   local SYNC_PART = 120
   local SYNC_ANSWER_WINDOW = 30
   local SYNC_REQUEST = 255
-  local SYNC_LISTS = { 'penalties', 'window', 'swap', 'track', 'car', 'gain', 'pit', 'stint', 'pass', 'kmr' }
+  local SYNC_LISTS = { 'penalties', 'window', 'swap', 'track', 'car', 'gain', 'pit', 'stint', 'pass', 'kmr', 'stopwindow' }
   local SYNC_CODES = { penalties = 1, window = 2, swap = 3, track = 4, car = 5, gain = 6, pit = 7, stint = 8, pass = 9, kmr = 10 }
   local sendRecordEvent = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.rec'),
@@ -2146,10 +2152,20 @@ do
     WebQueue.request('GET', config.baseUrl .. '/v1/server', nil, nil, function(err, res)
       V.busy = false
       if err or not res or tonumber(res.status) ~= 200 then return end
-      local url = tostring(res.body or ''):match('^OK|.-kmrStatsUrl=([^|%s]*)')
+      local body = tostring(res.body or '')
+      if not body:match('^OK|') then return end
+      local url = body:match('kmrStatsUrl=([^|%s]*)')
       if url and url ~= '' and url ~= config.kmrStatsUrl then
         ac.log('race-control: KMR web stats from the base: ' .. url .. ' (before: ' .. (config.kmrStatsUrl ~= '' and config.kmrStatsUrl or 'none') .. ')')
         config.kmrStatsUrl = url
+      end
+      for name, field in pairs({ pitStopsRequired = 'pitStopsRequired', pitWindowStart = 'pitWindowStart', pitWindowEnd = 'pitWindowEnd',
+          swapWindowStart = 'swapWindowStart', swapWindowEnd = 'swapWindowEnd' }) do
+        local v = tonumber(body:match(name .. '=(%-?%d+)'))
+        if v and v ~= config[field] then
+          ac.log(string.format('race-control: %s from the tool of the organization: %d (key of the server: %s)', name, v, tostring(config[field])))
+          config[field] = v
+        end
       end
     end)
   end
@@ -4762,6 +4778,7 @@ do
 end
 PitStops = {
   passInWindow = false,
+  passInStopWindow = false,
   wasInPitlane = nil,
   pass = nil,
   line = 0,
@@ -4784,12 +4801,14 @@ do
     if f == ac.FlagType.FasterCar then return 'blue' end
     return 'none'
   end
-  function PitStops.window()
+  local function windowOf(startMin, endMin)
     if sim.raceSessionType ~= ac.SessionType.Race then return nil end
-    local s, e = config.pitWindowStart * 60000, config.pitWindowEnd * 60000
+    local s, e = (startMin or 0) * 60000, (endMin or 0) * 60000
     if s <= 0 or e <= s then return nil end
     return s, e
   end
+  function PitStops.window() return windowOf(config.swapWindowStart, config.swapWindowEnd) end
+  function PitStops.stopWindow() return windowOf(config.pitWindowStart, config.pitWindowEnd) end
   function PitStops.windowTime()
     return sessionElapsedMs() - TrackList.frozenNowMs()
   end
@@ -4800,6 +4819,12 @@ do
     return t >= s and t <= e
   end
   local function swapValidNow() return PitStops.window() == nil or PitStops.windowOpen() end
+  function PitStops.stopWindowOpen()
+    local s, e = PitStops.stopWindow()
+    if not s or not sim.isSessionStarted then return false end
+    local t = PitStops.windowTime()
+    return t >= s and t <= e
+  end
   local function openPass(jumped, entryMs)
     PitStops.line = PitStops.line + 1
     PitStops.pass = { id = PitStops.line, entryMs = entryMs, jumped = jumped, service = nil, paid = {}, stop = nil,
@@ -4818,6 +4843,18 @@ do
   function PitStops.countStop()
     local p = PitStops.pass
     if not config.pitStopsEnabled or not p or p.stop then return end
+    if PitStops.stopWindow() and not PitStops.passInStopWindow then
+      if not p.outside then
+        p.outside = true
+        ac.log('race-control: pit stop outside the window of the mandatory pit stop: not counted')
+      end
+      return
+    end
+    if PitStops.stopWindow() and not state.pit.stopDone then
+      state.pit.stopDone = true
+      Record.save('stopwindow', math.floor(serverTimeMs() / 1000), 'done')
+      ac.log('race-control: mandatory pit stop window: stop counted')
+    end
     PitRecord.stops = PitRecord.stops + 1
     p.stop = PitRecord.stops
     PitRecord.save()
@@ -4940,12 +4977,14 @@ do
     end
     if inPit and not PitStops.wasInPitlane then
       PitStops.passInWindow = PitStops.windowOpen()
+      PitStops.passInStopWindow = PitStops.stopWindowOpen()
       openPass(state.list.jumped, sessionElapsedMs())
     end
     if not inPit and PitStops.wasInPitlane then
       sgBack('left the pit lane')
       closePass()
       PitStops.passInWindow = false
+      PitStops.passInStopWindow = false
       local sw = state.swap
       sw.passSwap, sw.passSwapValid, sw.passVoided = false, false, false
       if state.pitPassServiced then
@@ -4987,6 +5026,15 @@ do
       end
     end
     raceEnd(car)
+    local ss, se = PitStops.stopWindow()
+    if ss and config.pitStopsEnabled and sim.isSessionStarted and not state.pit.stopDone and not state.pit.stopMissed
+        and PitStops.windowTime() > se and not (inPit and PitStops.passInStopWindow) then
+      state.pit.stopMissed = true
+      Record.save('stopwindow', 2, 'missed')
+      ac.log('race-control: mandatory pit stop window missed (no stop counted in it): DSQ')
+      rcLog(TEXTS.rc.stopWindow, TEXTS.stopWindowMissedLog)
+      if not Rules.dsqOn() then carDsq(1, TEXTS.stopWindowDsq) end
+    end
     local s, e = PitStops.window()
     if not s or not config.swapOn() or not sim.isSessionStarted or state.pit.done or state.pit.missed
       or PitStops.windowTime() <= e then
@@ -4999,6 +5047,9 @@ do
     rcLog(TEXTS.rc.pitWindow, TEXTS.pitMissedLog)
     if not Rules.dsqOn() then carDsq(1, TEXTS.pitWindowDsq) end
   end
+end
+RecordSync.restorers.stopwindow = function(body)
+  if body == 'done' then state.pit.stopDone = true elseif body == 'missed' then state.pit.stopMissed = true end
 end
 RecordSync.restorers.window = function(body)
   if body == 'done' and not state.pit.done then
@@ -14872,6 +14923,9 @@ function script.update(dt)
     local window = Record.load('window')
     state.pit.done = window == 'done'
     state.pit.missed = window == 'missed'
+    local stopWindow = Record.load('stopwindow')
+    state.pit.stopDone = stopWindow == 'done'
+    state.pit.stopMissed = stopWindow == 'missed'
     SwapRecord.apply(Record.load('swap'))
     RecordSync.askOwn()
     RecordSync.base.askOwn()
