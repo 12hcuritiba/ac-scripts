@@ -123,7 +123,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V162 - 2026.10.10'
+local RC_VERSION = 'V163 - 2026.10.10'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -11890,7 +11890,7 @@ float4 main(PS_IN pin) {
     Drag.icons('share', p1, p2, s)
   end
   local COCKPIT_SECTIONS = {
-    { key = 'pos', rows = { { key = 'y', step = 0.005 }, { key = 'x', step = 0.005 }, { key = 'z', step = 0.005 }, { key = 'pitch', step = 0.5 } } },
+    { key = 'pos', rows = { { key = 'y', step = 0.005 }, { key = 'x', step = 0.005 }, { key = 'z', step = 0.005 }, { key = 'pitch', step = 1 } } },
     { key = 'ctl', rows = { { key = 'ffb', step = 0.01 } } },
     { key = 'view', rows = { { key = 'fov', step = 1 }, { key = 'hide.wheel', toggle = true }, { key = 'hide.arms', toggle = true } } },
     { key = 'snd', rows = { { key = 'vol.main', step = 0.05 } } } }
