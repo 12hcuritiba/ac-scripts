@@ -71,12 +71,12 @@ local cfg = ac.configValues({
   pitWindowEndMinutes = 0,
   pitStopsEnabled = 0,
   pitStopsRequired = 0,
-  practiceClosedSeconds = 0,
+  practiceClosedSeconds = 60,
   qualifyClosedSeconds = 120,
-  raceClosedSeconds = 0,
-  practicePenalty = 'NONE',
+  raceClosedSeconds = 60,
+  practicePenalty = 'REPRIMAND',
   qualifyPenalty = 'DSQ',
-  racePenalty = 'NONE',
+  racePenalty = 'SG:10',
   practicePenaltyParam = -1,
   qualifyPenaltyParam = -1,
   racePenaltyParam = -1,
@@ -143,10 +143,11 @@ local TEXTS = {
     wrongDriver = 'Wrong driver', wrongWay = 'Wrong way', wrongWayOff = 'Wrong way cleared',
     hold = 'Hold %d s', sgServed = 'Stop & go served', sgServiced = 'Service at the pit - stop & go not served in this pit pass',
     parked = 'Car stopped on track', swapBox = 'DRIVER SWAP', swapInvalid = 'INVALID DRIVER SWAP', conn = 'Connection',
-    driver = 'Driver', timePenalty = 'Time penalty', sgSeconds = 'Stop & go %d s',
+    driver = 'Driver', timePenalty = 'Time penalty', sgSeconds = 'Stop & go %d s', reprimand = 'Reprimand',
   },
   pit = {
     DSQ = 'Pit lane left with the pit closed - disqualified',
+    REPRIMAND = 'Pit lane left with the pit closed - reprimand',
   },
   cut = {
     SLOWDOWN = 'Exclusion zone cut - slow down',
@@ -323,7 +324,6 @@ local TEXTS = {
   parkedFlagTitle = 'CAR STOPPED ON TRACK', parkedMove = 'Move on - %d s', parkedLeft = 'Stops tolerated left: %d of %d - over: disqualified', parkedNoGrace = 'Not moving on: disqualified',
   parkedTitle = 'Car stopped on track', parkedLog = 'stop %d of %d tolerated', parkedDsq = 'Car stopped on track',
   parkedDsqDetail = 'over %d stops of %d s', parkedTimeLog = '%d s - out of fuel on track',
-  rcTimePenalty = 'Time penalty', rcStopAndGo = 'Stop & go %d s',
   parkedFuelRace = 'Out of fuel on track - %d s added to your race time', parkedFuelLaps = 'Out of fuel on track - your laps are invalid from now on',
   parkedFuelLapsLog = 'out of fuel - laps invalid from now on',
   timeNotServedLog = '%d s - %s not served at the end of the race', timeNotServedTitle = 'PENALTY NOT SERVED',
@@ -735,10 +735,10 @@ local config = (function()
     pitStopsEnabled = { 'pitStops', 'enabled', nil, 0 }, pitStopsRequired = { 'pitStops', 'required', nil, 0 },
     pitStopOrder = { 'pitStops', 'order', nil, 'F<TR>' }, pitStopMode = { 'pitStops', 'mode', nil, 'AUTO' },
     pitWindowStartMinutes = { 'pitWindow', 'startMinutes', nil, 0 }, pitWindowEndMinutes = { 'pitWindow', 'endMinutes', nil, 0 },
-    practiceClosedSeconds = { 'pitExit', 'practiceSeconds', nil, 0 }, qualifyClosedSeconds = { 'pitExit', 'qualifySeconds', nil, 120 },
-    raceClosedSeconds = { 'pitExit', 'raceSeconds', nil, 0 },
-    practicePenalty = { 'pitExit', 'practice', nil, 'NONE' }, qualifyPenalty = { 'pitExit', 'qualify', nil, 'DSQ' },
-    racePenalty = { 'pitExit', 'race', nil, 'NONE' },
+    practiceClosedSeconds = { 'pitExit', 'practiceSeconds', nil, 60 }, qualifyClosedSeconds = { 'pitExit', 'qualifySeconds', nil, 120 },
+    raceClosedSeconds = { 'pitExit', 'raceSeconds', nil, 60 },
+    practicePenalty = { 'pitExit', 'practice', nil, 'REPRIMAND' }, qualifyPenalty = { 'pitExit', 'qualify', nil, 'DSQ' },
+    racePenalty = { 'pitExit', 'race', nil, 'SG:10' },
     pitSpeedLimit = { 'pitSpeed', 'limit', nil, 60 }, pitSpeedTolerance = { 'pitSpeed', 'tolerance', nil, 2 },
     pitSpeedDeadlineLaps = { 'pitSpeed', 'deadlineLaps', nil, 1 },
     holdShortSeconds = { 'stopAndGo', 'holdShort', nil, 45 }, holdLongSeconds = { 'stopAndGo', 'holdLong', nil, 90 },
@@ -803,9 +803,16 @@ local config = (function()
     return cfg[old]
   end
   local function rule(penalty, param)
+    local p = string.upper(tostring(penalty))
+    local n = tonumber(param)
+    local base, arg = p:match('^(.-):(%d+)$')
+    if base then
+      p = base
+      if not n or n < 0 then n = tonumber(arg) end
+    end
     return {
-      penalty = string.upper(tostring(penalty)),
-      param = math.floor(tonumber(param) or -1),
+      penalty = p,
+      param = math.floor(n or -1),
     }
   end
   local function bySession(practice, qualify, race)
@@ -3540,7 +3547,7 @@ do
       end
     end
     if Start.phase == 'go' and state.ui.clock >= Start.goUntil then Start.phase = nil end
-    local ev = (Start.phase == 'rules' or Start.phase == 'formation' or Start.phase == 'release') and 'hold'
+    local ev = (Start.phase == 'rules' or Start.phase == 'formation' or Start.phase == 'release') and 'hold:rolling'
       or (Start.phase == 'go' and 'go' or 'off')
     if ev ~= Start.sent or (ev ~= 'off' and state.ui.clock - Start.sentT >= 2) then
       Start.sent, Start.sentT = ev, state.ui.clock
@@ -3744,16 +3751,19 @@ end
 local PitStops
 local Rules = {}
 function Rules.itemEncode(it)
-  return string.format('%s,%s,%d,%d,%d,%d,%d', it.cat, it.kind, it.laps, it.givenLap, it.expireLap, it.seq,
-    it.dt0OnTrack and 1 or 0)
+  return string.format('%s,%s,%d,%d,%d,%d,%d,%d', it.cat, it.kind, it.laps, it.givenLap, it.expireLap, it.seq,
+    it.dt0OnTrack and 1 or 0, it.id or it.seq)
 end
 function Rules.itemDecode(text, shift)
-  local cat, kind, laps, givenLap, expireLap, seq, onTrack =
-    tostring(text or ''):match('^(%w+),(%w+),(%-?%d+),(%-?%d+),(%-?%d+),(%d+),(%d)$')
-  if not cat then return nil end
+  local f = {}
+  for v in tostring(text or ''):gmatch('[^,]+') do f[#f + 1] = v end
+  if #f < 7 or not (f[1]:match('^%w+$') and tonumber(f[3]) and tonumber(f[4]) and tonumber(f[5]) and tonumber(f[6])) then
+    return nil
+  end
   shift = shift or 0
-  return { cat = cat, kind = kind, laps = tonumber(laps), givenLap = tonumber(givenLap) + shift,
-    expireLap = tonumber(expireLap) + shift, seq = tonumber(seq), dt0OnTrack = onTrack == '1' }
+  return { cat = f[1], kind = f[2], laps = tonumber(f[3]), givenLap = tonumber(f[4]) + shift,
+    expireLap = tonumber(f[5]) + shift, seq = tonumber(f[6]), dt0OnTrack = f[7] == '1',
+    id = tonumber(f[8]) or tonumber(f[6]) }
 end
 function Rules.lapShift(lap)
   local lapNow = ac.getCar(0).lapCount
@@ -3842,7 +3852,7 @@ local function listAdd(cat, laps)
   l.seq = l.seq + 1
   if #l.items == 0 or not l.owner then l.owner = nameCode(ac.getDriverName(0)) end
   local item = { cat = cat, kind = 'DT', laps = laps, givenLap = l.curLap, expireLap = l.curLap + laps, seq = l.seq,
-    dt0OnTrack = false }
+    dt0OnTrack = false, id = l.seq }
   l.items[#l.items + 1] = item
   return item
 end
@@ -3933,7 +3943,7 @@ function Rules.raceEndTime(car)
   for _, it in ipairs(l.items) do
     local sgItemHere = it.kind:sub(1, 2) == 'SG'
     local seconds = config.sgUnservedDT + (sgItemHere and sgSeconds(it) or 0)
-    local why = sgItemHere and string.format(TEXTS.rcStopAndGo, sgSeconds(it)) or reasonLog(it.cat)
+    local why = sgItemHere and string.format(TEXTS.rc.sgSeconds, sgSeconds(it)) or reasonLog(it.cat)
     total = total + seconds
     what[#what + 1] = why
     rcLog(TEXTS.rc.timePenalty, string.format(TEXTS.timeNotServedLog, seconds, why))
@@ -4023,7 +4033,7 @@ function Rules.sgForm(extra, why)
   l.seq = l.seq + 1
   local laps = config.sgDeadlineLaps
   l.items = { { cat = 'SG' .. n, kind = 'SG' .. (extra > 0 and ('e' .. extra) or '') .. kmr, laps = laps,
-    givenLap = l.curLap, expireLap = l.curLap + laps, seq = l.seq, dt0OnTrack = false } }
+    givenLap = l.curLap, expireLap = l.curLap + laps, seq = l.seq, dt0OnTrack = false, id = l.seq } }
   local seconds = n * config.sgSecondsPerDT + extra
   ac.log(string.format('race-control: stop & go %d s (%d DT)', seconds, n))
   rcLog(string.format(TEXTS.rc.sgSeconds, seconds), 'includes ' .. table.concat(reasons, ', '))
@@ -4173,6 +4183,26 @@ function Rules.sessionSync(g)
   Rules.keepDsq('this computer')
   if l.dsq > 0 then return end
   Rules.finalize()
+end
+do
+  Rules.catalog = {}
+  for cat in pairs(TEXTS.reason) do
+    if not TEXTS.kmrReasons[cat] then Rules.catalog[cat] = { kind = 'DT', rc = 'dt' } end
+  end
+  function Rules.penalty(cat, laps, detail)
+    local entry = Rules.catalog[cat]
+    if not entry then
+      ac.log('race-control: penalty of a category out of the catalogue: ' .. tostring(cat))
+      return nil
+    end
+    local item = listAdd(cat, laps)
+    if not item then return nil end
+    Rules.finalize()
+    local reason = TEXTS.reason[cat]
+    rcLog(TEXTS.rc[entry.rc], detail and (reason .. ' - ' .. detail) or reason)
+    showNotice(TEXTS.rcTitle, reason)
+    return item
+  end
 end
 local COLLISION_DAMAGE_WINDOW = 1.5
 ac.onCarCollision(0, function()
@@ -6460,11 +6490,7 @@ do
       if Flags.exitWait then
         ac.log('race-control: race restart: left the pits before car ' .. Flags.exitWait .. ' passed')
         rcLog(TEXTS.rc.raceRestart, string.format(TEXTS.exitEarlyLog, carTag(Flags.exitWait)))
-        if listAdd('PX', config.restart.jumpLaps) then
-          Rules.finalize()
-          rcLog(TEXTS.rc.dt, TEXTS.reason.PX)
-          showNotice(TEXTS.rcTitle, TEXTS.reason.PX)
-        end
+        Rules.penalty('PX', config.restart.jumpLaps)
       end
       Flags.exitLine, Flags.exitWait = nil, nil
     end
@@ -6821,6 +6847,7 @@ do
         Flags.onGrid = false
       end
       if sr.go and sr.sent == 'go' and clock - sr.goT > 3 then send('off') end
+      if not sr.go and Flags.formation and Flags.formation.phase == 'end' and Flags.formation.on() then send('grid') end
       return
     end
     if sr.t0 ~= r.t0 then
@@ -6876,12 +6903,7 @@ do
     if Flags.onGrid and sr.relPos and not sr.jumped and moved > c.jumpMeters then
       sr.jumped = true
       ac.log(string.format('race-control: standing restart: jump start (%.2f m forward before the lights went out)', moved))
-      local cat = r.start and 'JSS' or 'JS'
-      if listAdd(cat, c.jumpLaps) then
-        Rules.finalize()
-        rcLog(TEXTS.rc.dt, TEXTS.reason[cat])
-        showNotice(TEXTS.rcTitle, TEXTS.reason[cat])
-      end
+      Rules.penalty(r.start and 'JSS' or 'JS', c.jumpLaps)
     end
     local n = lit(d, lightsAt, step)
     send(n == 0 and 'grid' or ('lights:' .. n))
@@ -6979,11 +7001,7 @@ do
     if os_.relPos and not os_.jumped and moved > c.jumpMeters then
       os_.jumped = true
       ac.log(string.format('race-control: race start: jump start (%.2f m forward before the start)', moved))
-      if listAdd('JSS', c.jumpLaps) then
-        Rules.finalize()
-        rcLog(TEXTS.rc.dt, TEXTS.reason.JSS)
-        showNotice(TEXTS.rcTitle, TEXTS.reason.JSS)
-      end
+      Rules.penalty('JSS', c.jumpLaps)
     end
   end
   function Flags.officialStartLine()
@@ -7093,6 +7111,7 @@ end
 local Formation = { phase = nil, session = nil, locked = {}, leader = nil, prog = 0, lastSp = nil, endT = nil,
   overSince = nil, slowSince = nil, overDone = false, slowDone = false, giveBack = {}, side = {}, k = nil,
   aligned = false, t0 = nil, t0Sent = -1e9, firstAligned = nil, pitStart = false, missed = false, lockT = 0,
+  armed = false,
   trackSent = 'off', trackT = -1e9, goT = nil }
 do
   local ALIGNED_METERS, ALIGNED_KMH = 3, 1
@@ -7122,6 +7141,7 @@ do
     Formation.giveBack, Formation.side, Formation.k, Formation.aligned = {}, {}, nil, false
     Formation.t0, Formation.t0Sent, Formation.firstAligned = nil, -1e9, nil
     Formation.pitStart, Formation.missed, Formation.lockT, Formation.goT = false, false, 0, nil
+    Formation.armed = false
   end
   local function tag(i) return string.format('#%s', tostring(ac.getDriverNumber(i) or i)) end
   local function lapLen() return tonumber(sim.trackLengthM) or 0 end
@@ -7144,11 +7164,7 @@ do
   end
   local function penalty(cat, laps, text)
     ac.log('race-control: formation lap: ' .. text)
-    if listAdd(cat, laps) then
-      Rules.finalize()
-      rcLog(TEXTS.rc.dt, TEXTS.reason[cat])
-      showNotice(TEXTS.rcTitle, TEXTS.reason[cat])
-    end
+    Rules.penalty(cat, laps)
   end
   local function passAllowed(i, p, at)
     local r = rule()
@@ -7281,7 +7297,7 @@ do
   end
   local function trackTell()
     local ev = 'off'
-    if rule().procedure == 'ROLLING' and (Formation.phase == 'pre' or Formation.phase == 'lap') then ev = 'hold' end
+    if rule().procedure == 'ROLLING' and (Formation.phase == 'pre' or Formation.phase == 'lap') then ev = 'hold:rolling' end
     if Formation.goT and state.ui.clock - Formation.goT < config.flags.greenSeconds then ev = 'go' end
     if ev ~= Formation.trackSent or (ev ~= 'off' and state.ui.clock - Formation.trackT >= 2) then
       Formation.trackSent, Formation.trackT = ev, state.ui.clock
@@ -7357,7 +7373,8 @@ do
         Formation.t0Sent = state.ui.clock
         OnlineQueue.push(sendT0, { startMs = math.floor(Formation.t0) }, nil)
       end
-      if Formation.t0 and not state.restart then
+      if Formation.t0 and not state.restart and not Formation.armed then
+        Formation.armed = true
         state.restart = { t0 = Formation.t0, start = true, k = Formation.k }
         TrackList.changed()
         ac.log('race-control: standing start: lights')
@@ -7369,7 +7386,7 @@ do
           carDsq(1, TEXTS.fmMissedStart)
         end
       end
-      if Formation.missed and not state.restart then Formation.phase = 'done' end
+      if Formation.armed and not state.restart then Formation.phase = 'done' end
     end
   end
   function Flags.formationFlag(car)
@@ -7772,17 +7789,33 @@ end
 local function applyKMR(car, r)
   if r.penalty == 'DSQ' then
     queueCommand(string.format('/kmr player_kick %d', car.sessionID))
+  else
+    ac.log(string.format('race-control: pit car.index=%d sessionID=%d %s: KMR mode, the client of the car applies it',
+      car.index, car.sessionID, r.penalty))
   end
 end
 local function onPitViolation(car, r)
-  if r.penalty ~= 'DSQ' then return end
+  if r.penalty == 'NONE' then return end
   if config.mode == 'CSP' then
-    carDsq(2, TEXTS.dsqWhy.pitClosed)
-    queueChat(TEXTS.pit.DSQ)
+    if r.penalty == 'DSQ' then
+      carDsq(2, TEXTS.dsqWhy.pitClosed)
+      queueChat(TEXTS.pit.DSQ)
+    elseif r.penalty == 'REPRIMAND' then
+      rcLog(TEXTS.rc.reprimand, TEXTS.dsqWhy.pitClosed)
+      showNotice(TEXTS.rcTitle, TEXTS.pit.REPRIMAND)
+    elseif r.penalty == 'SG' and r.param > 0 then
+      Rules.sgAddSeconds(r.param, TEXTS.dsqWhy.pitClosed)
+    else
+      ac.log(string.format('race-control: pit: punishment of the key pitExit not applied: %s (parameter %d)',
+        tostring(r.penalty), r.param))
+      return
+    end
   elseif config.isRaceControl then
     applyKMR(car, r)
+  else
+    return
   end
-  ac.log(string.format('race-control: pit car.index=%d sessionID=%d DSQ', car.index, car.sessionID))
+  ac.log(string.format('race-control: pit car.index=%d sessionID=%d %s', car.index, car.sessionID, r.penalty))
 end
 local function checkPitExit(i, closed, r)
   local car = ac.getCar(i)

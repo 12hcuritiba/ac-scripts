@@ -32,6 +32,7 @@
 local LANG_PT = {
   pit = {
     DSQ = 'Saiu do pit lane com o pit fechado - desclassificado',
+    REPRIMAND = 'Saiu do pit lane com o pit fechado - reprimenda',
   },
   cut = {
     SLOWDOWN = 'Corte da zona de exclusão - slowdown',
