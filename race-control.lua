@@ -1395,8 +1395,8 @@ local function rcLog(what, reason)
 end
 local NOTICE_SECONDS = config.screens.noticeSeconds
 local SERVER_NOTICE_SECONDS = config.screens.serverNoticeSeconds
-local function showNotice(title, text, item, seconds, flag)
-  state.ui.notice = { title = title, text = text, item = item, flag = flag,
+local function showNotice(title, text, item, seconds, flag, weak)
+  state.ui.notice = { title = title, text = text, item = item, flag = flag, weak = weak,
     untilT = state.ui.clock + (seconds or NOTICE_SECONDS) }
 end
 local Record = {}
@@ -7802,7 +7802,7 @@ local function onPitViolation(car, r)
       queueChat(TEXTS.pit.DSQ)
     elseif r.penalty == 'REPRIMAND' then
       rcLog(TEXTS.rc.reprimand, TEXTS.dsqWhy.pitClosed)
-      showNotice(TEXTS.rcTitle, TEXTS.pit.REPRIMAND)
+      showNotice(TEXTS.rcTitle, TEXTS.pit.REPRIMAND, nil, nil, nil, true)
     elseif r.penalty == 'SG' and r.param > 0 then
       Rules.sgAddSeconds(r.param, TEXTS.dsqWhy.pitClosed)
     else
@@ -8092,11 +8092,12 @@ function Panel.message()
   local sg = config.sg and sgItem()
   if sg and StopAndGo.stopping then return itemText(sg), 'red' end
   local notice = state.ui.notice
+  local items = state.list.items
+  if notice and notice.weak and (items[1] or sg) then notice = nil end
   if notice then return notice.text, (notice.item and notice.item.kind:sub(1, 2) == 'SG') and 'red' or 'yellow' end
   if state.hold then
     return string.format(TEXTS.hold, mmss(PitRecord.holdLeft()), PitRecord.holdText()), 'red'
   end
-  local items = state.list.items
   if sg then return itemText(sg), 'red' end
   if items[1] then return itemText(items[1]), 'yellow' end
   if state.code80 then return TEXTS.code80, 'yellow' end
