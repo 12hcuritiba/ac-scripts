@@ -354,7 +354,7 @@ local LANG_PT = {
   calcFields = { wear = 'desgaste %/volta', limit = 'pneu até %', fuel = 'comb. L/volta', stops = 'paradas' },
   calcAuto = 'AUTO', calcNo = 'NÃO', calcBest = 'Melhor cenário: %s', calcNone = 'Nenhum cenário cabe no tanque e no pneu',
   scrCockpit = 'COCKPIT', cockpitCar = 'Ajustes deste carro: %s', cockpitSave = 'SALVAR', cockpitSaved = 'SALVO', cockpitNoApp = 'app não está rodando', cockpitMore = '+ TODOS', cockpitAudio = 'VOLUME - CADA CANAL',
-  cockpitRows = { ffb = 'Force feedback', y = 'Banco cima / baixo', x = 'Banco esq. / dir.', pitch = 'Inclin. cima / baixo',
+  cockpitRows = { ffb = 'Force feedback', y = 'Banco cima / baixo', x = 'Banco esq. / dir.', z = 'Banco frente / trás', pitch = 'Inclin. cima / baixo',
     fov = 'Campo de visão', ['vol.main'] = 'Volume (geral)' },
   cockpitChannels = { engine = 'Motor', transmission = 'Transmissão', tyres = 'Pneus', surfaces = 'Superfícies', dirt = 'Terra',
     wind = 'Vento', opponents = 'Adversários', carComponents = 'Peças do carro', track = 'Pista', weather = 'Clima',
@@ -800,7 +800,7 @@ local function cockpitState()
   out[#out + 1] = string.format('ffb=%.3f', car and car.ffbMultiplier or 1)
   out[#out + 1] = string.format('fov=%.1f', ac.getSim().firstPersonCameraFOV or 56)
   local ok, p = pcall(ac.getOnboardCameraParams, 0)
-  if ok and p then out[#out + 1] = string.format('x=%.4f;y=%.4f;pitch=%.2f', p.position.x, p.position.y, p.pitch) end
+  if ok and p then out[#out + 1] = string.format('x=%.4f;y=%.4f;z=%.4f;pitch=%.2f', p.position.x, p.position.y, p.position.z, p.pitch) end
   for _, ch in ipairs(CHANNELS) do
     local v = ac.getAudioVolume(ch, nil, -1)
     if v and v >= 0 then out[#out + 1] = string.format('vol.%s=%.3f', ch, v) end
@@ -819,7 +819,7 @@ local function cockpitApply(text)
       n = n + 1
       if item == 'ffb' then ac.setFFBMultiplier(clamp(v, 0, 2))
       elseif item == 'fov' then ac.setFirstPersonCameraFOV(clamp(v, 10, 120))
-      elseif item == 'x' or item == 'y' or item == 'pitch' then
+      elseif item == 'x' or item == 'y' or item == 'z' or item == 'pitch' then
         if not seat then local ok, p = pcall(ac.getOnboardCameraParams, 0); seat = ok and p or false end
         if seat then
           if item == 'pitch' then seat.pitch = clamp(v, -30, 30) else seat.position[item] = v end
@@ -863,7 +863,7 @@ ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
       ac.setFFBMultiplier(clamp((car and car.ffbMultiplier or 1) + d, 0, 2))
     elseif item == 'fov' then
       ac.setFirstPersonCameraFOV(clamp((ac.getSim().firstPersonCameraFOV or 56) + d, 10, 120))
-    elseif item == 'x' or item == 'y' or item == 'pitch' then
+    elseif item == 'x' or item == 'y' or item == 'z' or item == 'pitch' then
       if not seat then local ok, p = pcall(ac.getOnboardCameraParams, 0); seat = ok and p or false end
       if seat then
         if item == 'pitch' then seat.pitch = clamp(seat.pitch + d, -30, 30)

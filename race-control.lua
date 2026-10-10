@@ -471,7 +471,7 @@ local TEXTS = {
   calcFields = { wear = 'wear %/lap', limit = 'tyre down to %', fuel = 'fuel L/lap', stops = 'stops' },
   calcAuto = 'AUTO', calcNo = 'NO', calcBest = 'Best scenario: %s', calcNone = 'No scenario fits in the tank and the tyre',
   scrCockpit = 'COCKPIT', cockpitCar = 'Settings of this car: %s', cockpitSave = 'SAVE', cockpitSaved = 'SAVED', cockpitNoApp = 'app not running', cockpitMore = '+ ALL', cockpitAudio = 'VOLUME - EVERY CHANNEL',
-  cockpitRows = { ffb = 'Force feedback', y = 'Seat up / down', x = 'Seat left / right', pitch = 'Pitch up / down',
+  cockpitRows = { ffb = 'Force feedback', y = 'Seat up / down', x = 'Seat left / right', z = 'Seat forward / back', pitch = 'Pitch up / down',
     fov = 'Field of view', ['vol.main'] = 'Volume (master)' },
   cockpitChannels = { engine = 'Engine', transmission = 'Transmission', tyres = 'Tyres', surfaces = 'Surfaces', dirt = 'Dirt',
     wind = 'Wind', opponents = 'Opponents', carComponents = 'Car components', track = 'Track', weather = 'Weather',
@@ -1395,8 +1395,8 @@ local function rcLog(what, reason)
 end
 local NOTICE_SECONDS = config.screens.noticeSeconds
 local SERVER_NOTICE_SECONDS = config.screens.serverNoticeSeconds
-local function showNotice(title, text, item, seconds, flag, weak)
-  state.ui.notice = { title = title, text = text, item = item, flag = flag, weak = weak,
+local function showNotice(title, text, item, seconds, flag)
+  state.ui.notice = { title = title, text = text, item = item, flag = flag,
     untilT = state.ui.clock + (seconds or NOTICE_SECONDS) }
 end
 local Record = {}
@@ -7802,7 +7802,7 @@ local function onPitViolation(car, r)
       queueChat(TEXTS.pit.DSQ)
     elseif r.penalty == 'REPRIMAND' then
       rcLog(TEXTS.rc.reprimand, TEXTS.dsqWhy.pitClosed)
-      showNotice(TEXTS.rcTitle, TEXTS.pit.REPRIMAND, nil, nil, nil, true)
+      showNotice(TEXTS.rcTitle, TEXTS.pit.REPRIMAND)
     elseif r.penalty == 'SG' and r.param > 0 then
       Rules.sgAddSeconds(r.param, TEXTS.dsqWhy.pitClosed)
     else
@@ -8092,12 +8092,11 @@ function Panel.message()
   local sg = config.sg and sgItem()
   if sg and StopAndGo.stopping then return itemText(sg), 'red' end
   local notice = state.ui.notice
-  local items = state.list.items
-  if notice and notice.weak and (items[1] or sg) then notice = nil end
   if notice then return notice.text, (notice.item and notice.item.kind:sub(1, 2) == 'SG') and 'red' or 'yellow' end
   if state.hold then
     return string.format(TEXTS.hold, mmss(PitRecord.holdLeft()), PitRecord.holdText()), 'red'
   end
+  local items = state.list.items
   if sg then return itemText(sg), 'red' end
   if items[1] then return itemText(items[1]), 'yellow' end
   if state.code80 then return TEXTS.code80, 'yellow' end
@@ -11814,7 +11813,7 @@ float4 main(PS_IN pin) {
     end
     Drag.icons('share', p1, p2, s)
   end
-  local COCKPIT_ROWS = { { key = 'ffb', step = 0.01 }, { key = 'y', step = 0.005 }, { key = 'x', step = 0.005 },
+  local COCKPIT_ROWS = { { key = 'ffb', step = 0.01 }, { key = 'y', step = 0.005 }, { key = 'x', step = 0.005 }, { key = 'z', step = 0.005 },
     { key = 'pitch', step = 0.5 }, { key = 'fov', step = 1 }, { key = 'vol.main', step = 0.05 } }
   local CHANNELS = { 'engine', 'transmission', 'tyres', 'surfaces', 'dirt', 'wind', 'opponents', 'carComponents', 'track',
     'weather', 'rain', 'wipers' }
@@ -11825,7 +11824,7 @@ float4 main(PS_IN pin) {
   local function cockpitValue(key, v)
     if v == nil then return '-' end
     if key == 'ffb' or key:match('^vol%.') then return string.format('%.0f %%', v * 100) end
-    if key == 'x' or key == 'y' then return string.format('%.1f cm', v * 100) end
+    if key == 'x' or key == 'y' or key == 'z' then return string.format('%.1f cm', v * 100) end
     if key == 'pitch' then return string.format('%.1f deg', v) end
     return string.format('%.0f deg', v)
   end
