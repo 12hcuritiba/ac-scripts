@@ -123,7 +123,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V161 - 2026.10.10'
+local RC_VERSION = 'V162 - 2026.10.10'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -10294,13 +10294,13 @@ local drawRaceScreens = (function()
     local m = Drag.mode(g)
     return m == 'visible' or (m == 'auto' and auto)
   end
-  local function frame(g, w, h, s, rows, title, right, width)
+  local function frame(g, w, h, s, rows, title, right, width, dx)
     local pl = PLACE[g]
     local k = h / 1080
     local bw = (width or pl[3]) * s
     local bh = (26 + rows * ROW + 2) * s
     local o = Drag.offset(g, h)
-    local p1 = vec2(math.floor(pl[1] * k + o.x), math.floor(pl[2] * k + o.y))
+    local p1 = vec2(math.floor(pl[1] * k + o.x - (dx or 0)), math.floor(pl[2] * k + o.y))
     local baseW = pl[3] * s
     if bw ~= baseW then
       if p1.x + baseW / 2 > w / 2 then p1.x = p1.x + baseW - bw end
@@ -12030,8 +12030,8 @@ float4 main(PS_IN pin) {
       y = y + ROW * s
     end
     if cockpit.audio and not cockpit.closed.snd then
-      local a1 = vec2(p1.x, p2.y + 6 * s)
-      local a2 = vec2(p2.x, a1.y + (26 + #CHANNELS * ROW + 2) * s)
+      local a1 = vec2(p2.x + 6 * s, p1.y)
+      local a2 = vec2(a1.x + (p2.x - p1.x), a1.y + (26 + #CHANNELS * ROW + 2) * s)
       drawPanel(a1, a2, BORDER_BASE, s)
       drawText(TEXTS.cockpitAudio, FONT_TITLE, 12 * s, TMP.a:set(a1.x + 14 * s, a1.y + 4 * s), COLOR_TITLE)
       drawSeparator(a1, a2, a1.y + 21 * s, s)
@@ -12048,8 +12048,15 @@ float4 main(PS_IN pin) {
     end
   end
   Desktop.cockpitBody = cockpitBody
+  Desktop.cockpitWide = function() return cockpit.audio and not cockpit.closed.snd end
   local function cockpitScreen(car, w, h, s)
-    local p1, p2, y = frame('cockpit', w, h, s, 1 + #cockpitLines(), TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp)
+    local dx = 0
+    if Desktop.cockpitWide() then
+      local o = Drag.offset('cockpit', h)
+      local right = PLACE.cockpit[1] * h / 1080 + o.x + (2 * PLACE.cockpit[3] + 6) * s
+      dx = math.max(right - w, 0)
+    end
+    local p1, p2, y = frame('cockpit', w, h, s, 1 + #cockpitLines(), TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp, nil, dx)
     cockpitBody(car, p1, p2, y, s, Desktop.focus == 'cockpit')
     Drag.icons('cockpit', p1, p2, s)
   end
@@ -12865,7 +12872,9 @@ local drawDesktopUI = (function()
     end
   end
   local function cockpitWindow(w, h, s)
-    local p1, p2 = windowAt('cockpit', 260, Desktop.cockpitHeight(), w, h, s)
+    local wide = Desktop.cockpitWide()
+    local p1, p2 = windowAt('cockpit', wide and 526 or 260, Desktop.cockpitHeight(), w, h, s)
+    if wide then p2 = vec2(p1.x + 260 * s, p2.y) end
     Drag.group = nil
     Drag.modal = { p1, p2 }
     local m = ui.mousePos()

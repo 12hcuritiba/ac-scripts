@@ -798,51 +798,63 @@ local COCKPIT_REQUEST = 'amxracing.race-control.cockpit'
 local COCKPIT_ANSWER = 'amxracing.race-control.cockpit.state'
 local CHANNELS = { 'main', 'engine', 'transmission', 'tyres', 'surfaces', 'dirt', 'wind', 'opponents', 'carComponents',
   'track', 'weather', 'rain', 'wipers' }
-local HIDE_FIND = { wheel = function(root) return root:findNodes('{ STEER_HR, STEER_LR }'):findMeshes('?') end,
-  arms = function(root) return root:findSkinnedMeshes('{ ?ARM?, ?Arm?, ?arm?, ?HAND?, ?Hand?, ?hand? }') end }
-local hide = { on = {}, refs = {}, before = {} }
-local function hideRef(what)
-  if hide.refs[what] == nil then
-    local ok, ref = pcall(function() return HIDE_FIND[what](ac.findNodes('carRoot:0')) end)
-    hide.refs[what] = ok and ref or false
-    local names = {}
-    for i = 1, ok and ref and math.min(ref:size(), 20) or 0 do names[#names + 1] = tostring(ref:name(i)) end
-    ac.log(string.format('race-control app: cockpit, %s: %s meshes found%s', what, ok and ref and ref:size() or ('none (' .. tostring(ref) .. ')'),
-      #names > 0 and (': ' .. table.concat(names, ', ')) or ''))
-    if what == 'arms' then
-      local okS, all = pcall(function() return ac.findNodes('carRoot:0'):findSkinnedMeshes('?') end)
-      local list = {}
-      for i = 1, okS and all and math.min(all:size(), 40) or 0 do list[#list + 1] = tostring(all:name(i)) end
-      ac.log('race-control app: cockpit, every skinned mesh of the car: ' .. (#list > 0 and table.concat(list, ', ') or 'none'))
-    end
+local hide = { on = {}, nodes = {}, parents = {} }
+local function hideHolder()
+  if hide.holder == nil then
+    local ok, h = pcall(function() return ac.findNodes('carRoot:0'):createNode('rcHiddenParts', false) end)
+    hide.holder = ok and h or false
+    if hide.holder then hide.holder:setVisible(false) end
   end
-  return hide.refs[what] or nil
+  return hide.holder or nil
 end
-local function hideSet(what, on)
-  local ref = hideRef(what)
-  if not ref then hide.on[what] = on; return end
-  if on and not hide.on[what] then
-    hide.before[what] = {}
-    for i = 1, ref:size() do hide.before[what][i] = ref:isVisible(i) end
-  elseif not on and hide.on[what] then
-    for i = 1, ref:size() do
-      if hide.before[what] == nil or hide.before[what][i] ~= false then
-        local one = ref:at(i)
-        if one then one:setVisible(true, false) end
+local function hideNodes(what)
+  if hide.nodes[what] then return hide.nodes[what] end
+  local out, names = {}, {}
+  local ok, err = pcall(function()
+    local root = ac.findNodes('carRoot:0')
+    if what == 'wheel' then
+      local ref = root:findNodes('{ STEER_HR, STEER_LR }')
+      for i = 1, ref:size() do out[#out + 1] = ref:at(i); names[#names + 1] = tostring(ref:name(i)) end
+    else
+      local all = root:findSkinnedMeshes('?')
+      local seen = {}
+      for i = 1, all:size() do
+        if tostring(all:name(i)):find('^DRIVER:') then
+          local node = all:at(i):getParent()
+          while node and node:size() > 0 do
+            local up = node:getParent()
+            if not (up and up:size() > 0 and tostring(up:name(1)):find('^DRIVER:')) then break end
+            node = up
+          end
+          local key = node and node:size() > 0 and tostring(node:name(1))
+          if key and key:find('^DRIVER:') and not seen[key] then seen[key] = true; out[#out + 1] = node; names[#names + 1] = key end
+        end
       end
     end
-  end
-  hide.on[what] = on
-  if on then ref:setVisible(false, false) end
+  end)
+  ac.log(string.format('race-control app: cockpit, %s: %d nodes found%s%s', what, #out, #names > 0 and (': ' .. table.concat(names, ', ')) or '',
+    ok and '' or (' (' .. tostring(err) .. ')')))
+  hide.nodes[what] = out
+  return out
 end
-onOurServer(function()
-  setInterval(function()
-    for what, on in pairs(hide.on) do
-      local ref = on and hide.refs[what]
-      if ref then ref:setVisible(false, false) end
+local function hideSet(what, on)
+  local nodes = hideNodes(what)
+  local holder = on and hideHolder()
+  if on and not hide.on[what] and holder then
+    hide.parents[what] = {}
+    for i, n in ipairs(nodes) do
+      local okP, parent = pcall(function() return n:getParent() end)
+      hide.parents[what][i] = okP and parent or nil
+      if hide.parents[what][i] then pcall(function() n:setParent(holder) end) end
     end
-  end, 0)
-end)
+  elseif not on and hide.on[what] then
+    for i, n in ipairs(nodes) do
+      local parent = hide.parents[what] and hide.parents[what][i]
+      if parent then pcall(function() n:setParent(parent) end) end
+    end
+  end
+  hide.on[what] = on and holder ~= nil and #nodes > 0 or false
+end
 local function cockpitState()
   local out = {}
   local car = ac.getCar(0)
@@ -928,7 +940,12 @@ ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
       hideSet(item:sub(6), d >= 0.5)
     end
   end
+  local pitchBefore = seat and seat.pitch
   if seat then pcall(ac.setOnboardCameraParams, 0, seat, true) end
+  if seat and tostring(data or ''):find('pitch=', 1, true) then
+    local okB, back = pcall(ac.getOnboardCameraParams, 0)
+    ac.log(string.format('race-control app: cockpit pitch written %.2f, read back %s', pitchBefore or 0, okB and back and string.format('%.2f', back.pitch) or '-'))
+  end
   if tostring(data or '') ~= 'state' then ac.log('race-control app: cockpit ' .. tostring(data)) end
   local now = cockpitState()
   ac.store(COCKPIT_STORE, now)
