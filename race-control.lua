@@ -123,7 +123,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V163 - 2026.10.10'
+local RC_VERSION = 'V164 - 2026.10.10'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2534,7 +2534,10 @@ do
   end
   AppLink.cockpitSavedT = nil
   local cockpitAsk = { t = nil, answered = false, warned = false }
+  local CAMERA_HOLD_MAX = 2
+  AppLink.cameraHold = nil
   function AppLink.cockpit(text)
+    if tostring(text or ''):find('pitch=', 1, true) then AppLink.cameraHold = state.ui.clock + CAMERA_HOLD_MAX end
     ac.broadcastSharedEvent(COCKPIT_REQUEST, text)
     if text == 'state' and not cockpitAsk.t then cockpitAsk.t = state.ui.clock end
     if cockpitAsk.t and not cockpitAsk.answered and not cockpitAsk.warned and state.ui.clock - cockpitAsk.t >= 5 then
@@ -2543,6 +2546,7 @@ do
     end
   end
   ac.onSharedEvent(COCKPIT_ANSWER, function(data, senderName, senderType)
+    AppLink.cameraHold = nil
     local st, n = {}, 0
     for item, value in tostring(data or ''):gmatch('([%w%.]+)=(%-?[%d%.]+)') do st[item] = tonumber(value); n = n + 1 end
     if not cockpitAsk.answered then
@@ -11890,7 +11894,7 @@ float4 main(PS_IN pin) {
     Drag.icons('share', p1, p2, s)
   end
   local COCKPIT_SECTIONS = {
-    { key = 'pos', rows = { { key = 'y', step = 0.005 }, { key = 'x', step = 0.005 }, { key = 'z', step = 0.005 }, { key = 'pitch', step = 1 } } },
+    { key = 'pos', rows = { { key = 'y', step = 0.005 }, { key = 'x', step = 0.005 }, { key = 'z', step = 0.005 }, { key = 'pitch', step = 0.5 } } },
     { key = 'ctl', rows = { { key = 'ffb', step = 0.01 } } },
     { key = 'view', rows = { { key = 'fov', step = 1 }, { key = 'hide.wheel', toggle = true }, { key = 'hide.arms', toggle = true } } },
     { key = 'snd', rows = { { key = 'vol.main', step = 0.05 } } } }
@@ -14783,6 +14787,7 @@ function CarControls.update(dt)
   CarControls.timer = CarControls.timer + dt
   if CarControls.timer < CarControls.interval then return end
   CarControls.timer = 0
+  if AppLink.cameraHold and state.ui.clock < AppLink.cameraHold then return end
   ac.setCurrentCamera(CarControls.mode)
 end
 function script.update(dt)
