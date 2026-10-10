@@ -123,7 +123,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = '2026.09.26'
+local RC_VERSION = 'V161 - 2026.10.10'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -166,7 +166,7 @@ local TEXTS = {
   liftLimit = '+%g%% ref',
   rcPrefix = '[RC] ',
   rcTitle = 'RACING CONTROL',
-  introText = 'RACING CONTROL  v' .. RC_VERSION,
+  introText = 'RACING CONTROL  ' .. RC_VERSION,
   introStatus = 'STATUS OK',
   cellPit = 'PIT WINDOW',
   cellSwap = 'SWAP',
@@ -473,7 +473,9 @@ local TEXTS = {
   calcAuto = 'AUTO', calcNo = 'NO', calcBest = 'Best scenario: %s', calcNone = 'No scenario fits in the tank and the tyre',
   scrCockpit = 'COCKPIT', cockpitCar = 'Settings of this car: %s', cockpitSave = 'SAVE', cockpitSaved = 'SAVED', cockpitNoApp = 'app not running', cockpitMore = '+ ALL', cockpitAudio = 'VOLUME - EVERY CHANNEL',
   cockpitRows = { ffb = 'Force feedback', y = 'Seat up / down', x = 'Seat left / right', z = 'Seat forward / back', pitch = 'Pitch up / down',
-    fov = 'Field of view', ['vol.main'] = 'Volume (master)' },
+    fov = 'Field of view', ['vol.main'] = 'Volume (master)', ['hide.wheel'] = 'Steering wheel', ['hide.arms'] = 'Arms' },
+  cockpitSections = { pos = 'DRIVING POSITION', ctl = 'CONTROL', view = 'DISPLAY', snd = 'SOUND' },
+  cockpitShown = 'SHOWN', cockpitHidden = 'HIDDEN', menuCockpit = 'Cockpit',
   cockpitChannels = { engine = 'Engine', transmission = 'Transmission', tyres = 'Tyres', surfaces = 'Surfaces', dirt = 'Dirt',
     wind = 'Wind', opponents = 'Opponents', carComponents = 'Car components', track = 'Track', weather = 'Weather',
     rain = 'Rain', wipers = 'Wipers' },
@@ -616,7 +618,7 @@ local TEXTS = {
   wxWindFmt = '%.0f km/h %03.0f deg', wxRainFmt = '%.0f%% - wet %.0f%%', wxGripFmt = 'grip %.0f%%',
   evStintFmt = 'min %d - max %d min', evRatingFmt = 'DSQ at %s', posClassFmt = ' - class P%d %s',
   tyreLapsFmt = '%d laps%s', trackGripFmt = '%s - grip %d%%', trackWet = 'WET', trackDry = 'DRY',
-  edPitTag = 'PIT',
+  edPitTag = 'PIT', edTrackTag = 'TRACK', edTrackDesk = 'Track desktop',
   ctlGroup = { elec = 'ELECTRONICS', engine = 'ENGINE - BRAKES', hybrid = 'HYBRID' },
   ctlBox = { aero = 'AERO', drs = 'DRS', open = 'OPEN', closed = 'CLOSED', pit = 'PIT', limiter = 'LIMITER', on = 'ON', off = 'OFF',
     recov = 'RECOV.', batt = 'BATT', motor = 'MOTOR' },
@@ -2134,6 +2136,22 @@ do
         for v in s:gmatch("%d+") do sec[#sec + 1] = tonumber(v) end
         W.value = { ms = tonumber(ms), s = sec }
       end)
+  end
+  local SERVER_GAP = 300
+  B.server = { nextT = 0, busy = false }
+  function B.serverUpdate()
+    local V = B.server
+    if not on() or V.busy or state.ui.clock < V.nextT then return end
+    V.busy, V.nextT = true, state.ui.clock + SERVER_GAP
+    WebQueue.request('GET', config.baseUrl .. '/v1/server', nil, nil, function(err, res)
+      V.busy = false
+      if err or not res or tonumber(res.status) ~= 200 then return end
+      local url = tostring(res.body or ''):match('^OK|.-kmrStatsUrl=([^|%s]*)')
+      if url and url ~= '' and url ~= config.kmrStatsUrl then
+        ac.log('race-control: KMR web stats from the base: ' .. url .. ' (before: ' .. (config.kmrStatsUrl ~= '' and config.kmrStatsUrl or 'none') .. ')')
+        config.kmrStatsUrl = url
+      end
+    end)
   end
   local FORECAST_GAP = 60
   B.forecast = { list = nil, race = nil, session = nil, nextT = 0, busy = false, index = nil }
@@ -8398,7 +8416,7 @@ do
   end
   Desktop.NAV = NAV
   local function trackDefault()
-    return { standings = { x = -697, y = -450, mode = 'visible' }, laps = { x = 0, y = 250, mode = 'visible' },
+    return { standings = { x = -697, y = -450, mode = 'visible' }, laptime = { x = -1564, y = 30, mode = 'visible' },
       relative = { x = -1174, y = 290, mode = 'visible' }, telemetry = { x = 350, y = -78, mode = 'visible' },
       delta = { x = 466, y = -237, mode = 'visible' }, pitbox = { x = 0, y = 0, mode = 'visible' },
       race = { x = 1524, y = 0, mode = 'visible' } }
@@ -8411,7 +8429,7 @@ do
   Desktop.trackDefault, Desktop.pitDefault = trackDefault, pitDefault
   local function defaults()
     Desktop.current, Desktop.count, Desktop.pitOn = 1, 1, true
-    Desktop.place = { [1] = trackDefault(), all = {}, pit = pitDefault() }
+    Desktop.place = { [1] = {}, all = {}, pit = pitDefault(), track = trackDefault() }
     for _, g in ipairs({ 'pitbox', 'setup', 'status' }) do
       local e = Desktop.place.pit[g]
       e.x, e.y = tonumber(ac.storage['screen_' .. g .. 'X']) or 0, tonumber(ac.storage['screen_' .. g .. 'Y']) or 0
@@ -8426,12 +8444,12 @@ do
         parts[#parts + 1] = string.format('%s:%s:%d:%d:%s', tostring(d), g, math.floor(e.x), math.floor(e.y), e.mode)
       end
     end
-    ac.storage[STORAGE_KEY] = string.format('1|%d|%d|%d|%s', Desktop.current, Desktop.count, Desktop.pitOn and 1 or 0,
+    ac.storage[STORAGE_KEY] = string.format('2|%d|%d|%d|%s', Desktop.current, Desktop.count, Desktop.pitOn and 1 or 0,
       table.concat(parts, ';'))
   end
   local function load()
     local text = ac.storage[STORAGE_KEY]
-    local cur, count, pit, body = tostring(text or ''):match('^1|(%d+)|(%d+)|(%d)|(.*)$')
+    local ver, cur, count, pit, body = tostring(text or ''):match('^([12])|(%d+)|(%d+)|(%d)|(.*)$')
     if not cur then
       defaults()
       return
@@ -8439,7 +8457,7 @@ do
     Desktop.count = math.max(1, tonumber(count))
     Desktop.current = math.min(math.max(1, tonumber(cur)), Desktop.count)
     Desktop.pitOn = pit == '1'
-    Desktop.place = { all = {}, pit = {} }
+    Desktop.place = { all = {}, pit = {}, track = {} }
     for i = 1, Desktop.count do Desktop.place[i] = {} end
     for d, g, x, y, mode in body:gmatch('([%w]+):(%a+):(%-?%d+):(%-?%d+):(%a+)') do
       local key = tonumber(d) or d
@@ -8447,6 +8465,7 @@ do
         Desktop.place[key][g] = { x = tonumber(x), y = tonumber(y), mode = mode }
       end
     end
+    if ver == '1' then Desktop.place.track = trackDefault() end
   end
   load()
   function Desktop.has(g)
@@ -8454,12 +8473,18 @@ do
     return false
   end
   local function pitNow() return Desktop.pitOn and ac.getCar(0).isInPitlane end
+  function Desktop.activeKey()
+    local cur = Desktop.place[Desktop.current]
+    if (not cur or next(cur) == nil) and Desktop.place.track and next(Desktop.place.track) ~= nil then return 'track' end
+    return Desktop.current
+  end
   function Desktop.entry(g)
     local p = Desktop.place
     if p.all[g] then return p.all[g] end
     if Desktop.editor then return p[Desktop.editDesk] and p[Desktop.editDesk][g] or nil end
     if pitNow() then return p.pit[g] end
-    local cur = p[Desktop.current] and p[Desktop.current][g]
+    local key = Desktop.activeKey()
+    local cur = p[key] and p[key][g]
     if cur then return cur end
     if g == 'pitbox' and p.pit[g] then return p.pit[g], true end
     return nil
@@ -8489,7 +8514,7 @@ do
     local e, away = Desktop.entry(g)
     if not e or away then
       e = { x = 0, y = 0, mode = mode }
-      Desktop.place[Desktop.current][g] = e
+      Desktop.place[Desktop.activeKey()][g] = e
     end
     e.mode = mode
     Desktop.save()
@@ -9175,7 +9200,7 @@ do
     local size, gap = ICON_SIZE * s, ICON_GAP * s
     local row = {}
     if group == 'panel' then
-      row[#row + 1] = { ui.Icons.Settings, (Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen)
+      row[#row + 1] = { ui.Icons.Settings, (Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen or Desktop.cockpitOpen)
         and ICON_ON or ICON_COLOR,
         function() Desktop.menu = not Desktop.menu end }
       row[#row + 1] = { ui.Icons.Monitor, ICON_COLOR, function() Desktop.go(1) end }
@@ -11864,14 +11889,40 @@ float4 main(PS_IN pin) {
     end
     Drag.icons('share', p1, p2, s)
   end
-  local COCKPIT_ROWS = { { key = 'ffb', step = 0.01 }, { key = 'y', step = 0.005 }, { key = 'x', step = 0.005 }, { key = 'z', step = 0.005 },
-    { key = 'pitch', step = 0.5 }, { key = 'fov', step = 1 }, { key = 'vol.main', step = 0.05 } }
+  local COCKPIT_SECTIONS = {
+    { key = 'pos', rows = { { key = 'y', step = 0.005 }, { key = 'x', step = 0.005 }, { key = 'z', step = 0.005 }, { key = 'pitch', step = 0.5 } } },
+    { key = 'ctl', rows = { { key = 'ffb', step = 0.01 } } },
+    { key = 'view', rows = { { key = 'fov', step = 1 }, { key = 'hide.wheel', toggle = true }, { key = 'hide.arms', toggle = true } } },
+    { key = 'snd', rows = { { key = 'vol.main', step = 0.05 } } } }
   local CHANNELS = { 'engine', 'transmission', 'tyres', 'surfaces', 'dirt', 'wind', 'opponents', 'carComponents', 'track',
     'weather', 'rain', 'wipers' }
-  local cockpit = { row = 1, askT = -1e9, audio = false }
+  local COCKPIT_CLOSED_KEY = 'rc.cockpitClosed'
+  local cockpit = { row = 1, askT = -1e9, audio = false, closed = {} }
+  for k in tostring(ac.storage[COCKPIT_CLOSED_KEY] or ''):gmatch('[^,]+') do cockpit.closed[k] = true end
+  local function cockpitSection(key, open)
+    cockpit.closed[key] = not open or nil
+    local list = {}
+    for _, sec in ipairs(COCKPIT_SECTIONS) do if cockpit.closed[sec.key] then list[#list + 1] = sec.key end end
+    ac.storage[COCKPIT_CLOSED_KEY] = table.concat(list, ',')
+  end
+  local function cockpitLines()
+    local out = {}
+    for _, sec in ipairs(COCKPIT_SECTIONS) do
+      out[#out + 1] = { title = sec.key }
+      if not cockpit.closed[sec.key] then for _, r in ipairs(sec.rows) do out[#out + 1] = r end end
+    end
+    return out
+  end
   local function cockpitSend(key, dir, step) AppLink.cockpit(string.format('%s=%g', key, dir * step)) end
-  Desktop.cockpitMove = function(dir) cockpit.row = (cockpit.row - 1 + dir) % #COCKPIT_ROWS + 1 end
-  Desktop.cockpitStep = function(dir) local r = COCKPIT_ROWS[cockpit.row]; cockpitSend(r.key, dir, r.step) end
+  local function cockpitHide(key, on) AppLink.cockpit(string.format('%s=%d', key, on and 1 or 0)) end
+  Desktop.cockpitMove = function(dir) cockpit.row = (cockpit.row - 1 + dir) % #cockpitLines() + 1 end
+  Desktop.cockpitStep = function(dir)
+    local lines = cockpitLines()
+    local r = lines[math.min(cockpit.row, #lines)]
+    if r.title then cockpitSection(r.title, dir > 0)
+    elseif r.toggle then cockpitHide(r.key, dir > 0)
+    else cockpitSend(r.key, dir, r.step) end
+  end
   local function cockpitValue(key, v)
     if v == nil then return '-' end
     if key == 'ffb' or key:match('^vol%.') then return string.format('%.0f %%', v * 100) end
@@ -11918,11 +11969,10 @@ float4 main(PS_IN pin) {
     Drag.clickable(a, b, fn)
   end
   local COCKPIT_RIGHT = 50
-  local function cockpitScreen(car, w, h, s)
+  Desktop.cockpitHeight = function() return 26 + (1 + #cockpitLines()) * ROW + 2 end
+  local function cockpitBody(car, p1, p2, y, s, focus)
     if state.ui.clock - cockpit.askT >= 2 then cockpit.askT = state.ui.clock; AppLink.cockpit('state') end
     local st = AppLink.cockpitRead(car)
-    local focus = Desktop.focus == 'cockpit'
-    local p1, p2, y = frame('cockpit', w, h, s, #COCKPIT_ROWS + 1, TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp)
     do
       local a = vec2(p2.x - 14 * s - COCKPIT_RIGHT * s, y)
       local b = vec2(p2.x - 14 * s, y + 12 * s)
@@ -11941,23 +11991,45 @@ float4 main(PS_IN pin) {
       end)
       y = y + ROW * s
     end
-    for i, r in ipairs(COCKPIT_ROWS) do
+    for i, r in ipairs(cockpitLines()) do
       local on = focus and cockpit.row == i
-      drawText(TEXTS.cockpitRows[r.key], FONT_TEXT, FS * s, TMP.a:set(p1.x + 14 * s, y), on and YELLOW or COLOR_DIM)
       local vx = p2.x - 14 * s - 70 * s
-      stepBox('-', vec2(vx - 70 * s, y), s, function() cockpit.row = i; cockpitSend(r.key, -1, r.step) end)
-      slider(r.key, st[r.key], vec2(vx - 54 * s, y), vec2(vx - 2 * s, y + 12 * s), s, on)
-      stepBox('+', vec2(vx, y), s, function() cockpit.row = i; cockpitSend(r.key, 1, r.step) end)
-      if r.key == 'vol.main' then
-        local a = vec2(p2.x - 14 * s - COCKPIT_RIGHT * s, y)
-        local b = vec2(p2.x - 14 * s, a.y + 12 * s)
-        if cockpit.audio then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge35, 2 * s) end
-        drawText(TEXTS.cockpitMore, FONT_MONO, 9 * s, TMP.a:set(a.x + 4 * s, a.y + 0.5 * s), cockpit.audio and TMP.dark or COLOR_TITLE)
-        Drag.clickable(a, b, function() cockpit.audio = not cockpit.audio end)
+      if r.title then
+        local open = not cockpit.closed[r.title]
+        local col = on and YELLOW or COLOR_TITLE
+        local cx, cy = p1.x + 18 * s, y + 6 * s
+        if open then ui.drawTriangleFilled(vec2(cx - 4 * s, cy - 2 * s), vec2(cx + 4 * s, cy - 2 * s), vec2(cx, cy + 3 * s), col)
+        else ui.drawTriangleFilled(vec2(cx - 2 * s, cy - 4 * s), vec2(cx + 3 * s, cy), vec2(cx - 2 * s, cy + 4 * s), col) end
+        drawText(TEXTS.cockpitSections[r.title], FONT_TITLE, 9 * s, TMP.a:set(p1.x + 28 * s, y + 1 * s), col)
+        local key = r.title
+        Drag.clickable(vec2(p1.x + 10 * s, y), vec2(p2.x - 10 * s, y + 12 * s), function() cockpit.row = i; cockpitSection(key, not open) end)
+      elseif r.toggle then
+        drawText(TEXTS.cockpitRows[r.key], FONT_TEXT, FS * s, TMP.a:set(p1.x + 14 * s, y), on and YELLOW or COLOR_DIM)
+        local a, b = vec2(vx - 70 * s, y), vec2(vx + 14 * s, y + 12 * s)
+        local v = st[r.key]
+        local hidden = v ~= nil and v >= 0.5
+        if hidden then ui.drawRectFilled(a, b, on and YELLOW or rgbm(0.36, 0.38, 0.98, 0.9), 2 * s) else ui.drawRect(a, b, TMP.edge35, 2 * s) end
+        local t = v == nil and '-' or (hidden and TEXTS.cockpitHidden or TEXTS.cockpitShown)
+        local tw = textWidth(t, FONT_MONO, FS * s)
+        drawText(t, FONT_MONO, FS * s, TMP.a:set((a.x + b.x) / 2 - tw / 2, a.y), hidden and TMP.dark or COLOR_TITLE)
+        local key = r.key
+        Drag.clickable(a, b, function() cockpit.row = i; cockpitHide(key, not hidden) end)
+      else
+        drawText(TEXTS.cockpitRows[r.key], FONT_TEXT, FS * s, TMP.a:set(p1.x + 14 * s, y), on and YELLOW or COLOR_DIM)
+        stepBox('-', vec2(vx - 70 * s, y), s, function() cockpit.row = i; cockpitSend(r.key, -1, r.step) end)
+        slider(r.key, st[r.key], vec2(vx - 54 * s, y), vec2(vx - 2 * s, y + 12 * s), s, on)
+        stepBox('+', vec2(vx, y), s, function() cockpit.row = i; cockpitSend(r.key, 1, r.step) end)
+        if r.key == 'vol.main' then
+          local a = vec2(p2.x - 14 * s - COCKPIT_RIGHT * s, y)
+          local b = vec2(p2.x - 14 * s, a.y + 12 * s)
+          if cockpit.audio then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge35, 2 * s) end
+          drawText(TEXTS.cockpitMore, FONT_MONO, 9 * s, TMP.a:set(a.x + 4 * s, a.y + 0.5 * s), cockpit.audio and TMP.dark or COLOR_TITLE)
+          Drag.clickable(a, b, function() cockpit.audio = not cockpit.audio end)
+        end
       end
       y = y + ROW * s
     end
-    if cockpit.audio then
+    if cockpit.audio and not cockpit.closed.snd then
       local a1 = vec2(p1.x, p2.y + 6 * s)
       local a2 = vec2(p2.x, a1.y + (26 + #CHANNELS * ROW + 2) * s)
       drawPanel(a1, a2, BORDER_BASE, s)
@@ -11974,6 +12046,11 @@ float4 main(PS_IN pin) {
         ay = ay + ROW * s
       end
     end
+  end
+  Desktop.cockpitBody = cockpitBody
+  local function cockpitScreen(car, w, h, s)
+    local p1, p2, y = frame('cockpit', w, h, s, 1 + #cockpitLines(), TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp)
+    cockpitBody(car, p1, p2, y, s, Desktop.focus == 'cockpit')
     Drag.icons('cockpit', p1, p2, s)
   end
   local calcScreen = (function()
@@ -12586,6 +12663,7 @@ local drawDesktopUI = (function()
     local p, out = Desktop.place, {}
     if p.all[g] then return TEXTS.edAll end
     for d = 1, Desktop.count do if p[d] and p[d][g] then out[#out + 1] = tostring(d) end end
+    if p.track and p.track[g] then out[#out + 1] = TEXTS.edTrackTag end
     if p.pit[g] then out[#out + 1] = TEXTS.edPitTag end
     return #out > 0 and table.concat(out, ' ') or '-'
   end
@@ -12602,7 +12680,7 @@ local drawDesktopUI = (function()
     drawPanel(p1, p2, BORDER_BASE, s)
     local desk = Desktop.editDesk
     drawText(TEXTS.edTitle, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
-    local right = desk == 'pit' and TEXTS.edPitDesk or string.format(TEXTS.edDeskOf, desk, Desktop.count)
+    local right = desk == 'pit' and TEXTS.edPitDesk or desk == 'track' and TEXTS.edTrackDesk or string.format(TEXTS.edDeskOf, desk, Desktop.count)
     drawTextRight(right, FONT_MONO, 11 * s, p2.x - 34 * s, p1.y + 5 * s, COLOR_TITLE)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.editor = false end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
@@ -12612,6 +12690,7 @@ local drawDesktopUI = (function()
       x = chip(tostring(d), vec2(x, ty), s, desk == d, nil, function() Desktop.editDesk = d end)
     end
     x = chip('+', vec2(x, ty), s, false, nil, Desktop.addDesktop)
+    x = chip(TEXTS.edTrackTag, vec2(x, ty), s, desk == 'track', PANEL_COLORS.green, function() Desktop.editDesk = 'track' end)
     x = chip(TEXTS.edPitTag, vec2(x, ty), s, desk == 'pit', PANEL_COLORS.green, function() Desktop.editDesk = 'pit' end)
     drawText(TEXTS.edHint, FONT_MONO, 8.5 * s, TMP.a:set(x + 6 * s, ty + 2 * s), COLOR_DIM)
     local c1 = vec2(p1.x + 14 * s, p1.y + 47 * s)
@@ -12744,7 +12823,7 @@ local drawDesktopUI = (function()
   end
   local function indicator(w, h, s)
     local names = {}
-    for g in pairs(Desktop.place[Desktop.current] or {}) do names[#names + 1] = TEXTS.screenNames[g] or g end
+    for g in pairs(Desktop.place[Desktop.activeKey()] or {}) do names[#names + 1] = TEXTS.screenNames[g] or g end
     table.sort(names)
     local text = string.format(TEXTS.edIndicator, Desktop.current, Desktop.count, table.concat(names, ' - '))
     local tw = textWidth(text, FONT_MONO, 11 * s)
@@ -12759,6 +12838,7 @@ local drawDesktopUI = (function()
   end
   local function closeWindows()
     Desktop.editor, Audit.open, Desktop.buttons, Desktop.settingsOpen, Desktop.redOpen = false, false, false, false, false
+    Desktop.cockpitOpen = false
   end
   local function menu(w, h, s)
     local pr = Drag.lastRects.panel
@@ -12766,7 +12846,8 @@ local drawDesktopUI = (function()
     local items = { { TEXTS.menuDesktops, function() closeWindows(); Desktop.editor = true end },
       { TEXTS.menuAudit, function() closeWindows(); Audit.open = true end },
       { TEXTS.menuButtons, function() closeWindows(); Desktop.buttons = true end },
-      { TEXTS.menuSettings, function() closeWindows(); Desktop.settingsOpen = true end } }
+      { TEXTS.menuSettings, function() closeWindows(); Desktop.settingsOpen = true end },
+      { TEXTS.menuCockpit, function() closeWindows(); Desktop.cockpitOpen = true end } }
     if config.role then
       items[#items + 1] = { TEXTS.menuRedFlag, function() closeWindows(); Desktop.redOpen = true end }
     end
@@ -12782,6 +12863,19 @@ local drawDesktopUI = (function()
       drawText(it[1], FONT_TEXT, 10 * s, TMP.a:set(a.x + 6 * s, a.y + 2 * s), COLOR_TITLE)
       Drag.clickable(a, b, function() it[2](); Desktop.menu = false end)
     end
+  end
+  local function cockpitWindow(w, h, s)
+    local p1, p2 = windowAt('cockpit', 260, Desktop.cockpitHeight(), w, h, s)
+    Drag.group = nil
+    Drag.modal = { p1, p2 }
+    local m = ui.mousePos()
+    if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
+    drawPanel(p1, p2, BORDER_BASE, s)
+    drawText(TEXTS.scrCockpit, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    if not AppLink.alive then drawTextRight(TEXTS.cockpitNoApp, FONT_MONO, 11 * s, p2.x - 34 * s, p1.y + 5 * s, COLOR_TITLE) end
+    chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.cockpitOpen = false end)
+    drawSeparator(p1, p2, p1.y + 21 * s, s)
+    Desktop.cockpitBody(ac.getCar(0), p1, p2, p1.y + 26 * s, s, false)
   end
   local AUDIT_ROWS = 16
   local SRC_COLOR = { KMR = PANEL_COLORS.yellow, ACSM = PANEL_COLORS.blue }
@@ -14255,6 +14349,7 @@ local drawDesktopUI = (function()
     if Desktop.buttons then buttonsScreen(w, h, s) end
     if Desktop.settingsOpen then settingsWindow(w, h, s) else Settings.shown = false end
     if Desktop.redOpen and config.role then redWindow(w, h, s) else Direction.openSeen = false end
+    if Desktop.cockpitOpen then cockpitWindow(w, h, s) end
     if sim.isInMainMenu then lobby(w, h, s) end
     if Desktop.menu then menu(w, h, s) end
     if state.ui.clock < Desktop.indicatorUntil then indicator(w, h, s) end
@@ -14309,6 +14404,7 @@ function script.drawUI(exclusive)
   Drag.zone('panel', panelPlace[1], panelPlace[2])
   local forced = Drag.hovered('panel') or ac.getCar(0).isInPit or state.ui.clock < Desktop.panelUntil
     or Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen
+    or Desktop.cockpitOpen
   local stackOn = pm ~= 'hidden' or forced
   if intro or (Intro.done and (pm == 'visible' or (pm == 'auto' and (anyOn or text)) or forced)) then
     local p1 = vec2(x, yMsg)
@@ -14783,6 +14879,7 @@ function script.update(dt)
   RecordSync.update()
   RecordSync.base.update()
   RecordSync.base.bestUpdate()
+  RecordSync.base.serverUpdate()
   RecordSync.base.forecastUpdate()
   RecordSync.base.rrUpdate()
   RecordSync.base.stratUpdate()

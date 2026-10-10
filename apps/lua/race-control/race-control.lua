@@ -356,7 +356,9 @@ local LANG_PT = {
   calcAuto = 'AUTO', calcNo = 'NÃO', calcBest = 'Melhor cenário: %s', calcNone = 'Nenhum cenário cabe no tanque e no pneu',
   scrCockpit = 'COCKPIT', cockpitCar = 'Ajustes deste carro: %s', cockpitSave = 'SALVAR', cockpitSaved = 'SALVO', cockpitNoApp = 'app não está rodando', cockpitMore = '+ TODOS', cockpitAudio = 'VOLUME - CADA CANAL',
   cockpitRows = { ffb = 'Force feedback', y = 'Banco cima / baixo', x = 'Banco esq. / dir.', z = 'Banco frente / trás', pitch = 'Inclin. cima / baixo',
-    fov = 'Campo de visão', ['vol.main'] = 'Volume (geral)' },
+    fov = 'Campo de visão', ['vol.main'] = 'Volume (geral)', ['hide.wheel'] = 'Volante', ['hide.arms'] = 'Braços' },
+  cockpitSections = { pos = 'POSIÇÃO DE DIREÇÃO', ctl = 'CONTROLE', view = 'EXIBIÇÃO', snd = 'SOM' },
+  cockpitShown = 'VISÍVEL', cockpitHidden = 'OCULTO', menuCockpit = 'Cockpit',
   cockpitChannels = { engine = 'Motor', transmission = 'Transmissão', tyres = 'Pneus', surfaces = 'Superfícies', dirt = 'Terra',
     wind = 'Vento', opponents = 'Adversários', carComponents = 'Peças do carro', track = 'Pista', weather = 'Clima',
     rain = 'Chuva', wipers = 'Limpadores' },
@@ -499,7 +501,7 @@ local LANG_PT = {
   wxWindFmt = '%.0f km/h %03.0f°', wxRainFmt = '%.0f%% - molhada %.0f%%', wxGripFmt = 'aderência %.0f%%',
   evStintFmt = 'mín %d - máx %d min', evRatingFmt = 'DSQ em %s', posClassFmt = ' - classe P%d %s',
   tyreLapsFmt = '%d voltas%s', trackGripFmt = '%s - aderência %d%%', trackWet = 'MOLHADA', trackDry = 'SECA',
-  edPitTag = 'BOX',
+  edPitTag = 'BOX', edTrackTag = 'PISTA', edTrackDesk = 'Área de pista',
   ctlGroup = { elec = 'ELETRÔNICA', engine = 'MOTOR - FREIOS', hybrid = 'HÍBRIDO' },
   ctlBox = { aero = 'AERO', drs = 'DRS', open = 'ABERTO', closed = 'FECHADO', pit = 'BOX', limiter = 'LIMITADOR', on = 'LIG', off = 'DESL',
     recov = 'RECUP.', batt = 'BATERIA', motor = 'MOTOR' },
@@ -796,6 +798,51 @@ local COCKPIT_REQUEST = 'amxracing.race-control.cockpit'
 local COCKPIT_ANSWER = 'amxracing.race-control.cockpit.state'
 local CHANNELS = { 'main', 'engine', 'transmission', 'tyres', 'surfaces', 'dirt', 'wind', 'opponents', 'carComponents',
   'track', 'weather', 'rain', 'wipers' }
+local HIDE_FIND = { wheel = function(root) return root:findNodes('{ STEER_HR, STEER_LR }'):findMeshes('?') end,
+  arms = function(root) return root:findSkinnedMeshes('{ ?ARM?, ?Arm?, ?arm?, ?HAND?, ?Hand?, ?hand? }') end }
+local hide = { on = {}, refs = {}, before = {} }
+local function hideRef(what)
+  if hide.refs[what] == nil then
+    local ok, ref = pcall(function() return HIDE_FIND[what](ac.findNodes('carRoot:0')) end)
+    hide.refs[what] = ok and ref or false
+    local names = {}
+    for i = 1, ok and ref and math.min(ref:size(), 20) or 0 do names[#names + 1] = tostring(ref:name(i)) end
+    ac.log(string.format('race-control app: cockpit, %s: %s meshes found%s', what, ok and ref and ref:size() or ('none (' .. tostring(ref) .. ')'),
+      #names > 0 and (': ' .. table.concat(names, ', ')) or ''))
+    if what == 'arms' then
+      local okS, all = pcall(function() return ac.findNodes('carRoot:0'):findSkinnedMeshes('?') end)
+      local list = {}
+      for i = 1, okS and all and math.min(all:size(), 40) or 0 do list[#list + 1] = tostring(all:name(i)) end
+      ac.log('race-control app: cockpit, every skinned mesh of the car: ' .. (#list > 0 and table.concat(list, ', ') or 'none'))
+    end
+  end
+  return hide.refs[what] or nil
+end
+local function hideSet(what, on)
+  local ref = hideRef(what)
+  if not ref then hide.on[what] = on; return end
+  if on and not hide.on[what] then
+    hide.before[what] = {}
+    for i = 1, ref:size() do hide.before[what][i] = ref:isVisible(i) end
+  elseif not on and hide.on[what] then
+    for i = 1, ref:size() do
+      if hide.before[what] == nil or hide.before[what][i] ~= false then
+        local one = ref:at(i)
+        if one then one:setVisible(true, false) end
+      end
+    end
+  end
+  hide.on[what] = on
+  if on then ref:setVisible(false, false) end
+end
+onOurServer(function()
+  setInterval(function()
+    for what, on in pairs(hide.on) do
+      local ref = on and hide.refs[what]
+      if ref then ref:setVisible(false, false) end
+    end
+  end, 0)
+end)
 local function cockpitState()
   local out = {}
   local car = ac.getCar(0)
@@ -807,6 +854,7 @@ local function cockpitState()
     local v = ac.getAudioVolume(ch, nil, -1)
     if v and v >= 0 then out[#out + 1] = string.format('vol.%s=%.3f', ch, v) end
   end
+  out[#out + 1] = string.format('hide.wheel=%d;hide.arms=%d', hide.on.wheel and 1 or 0, hide.on.arms and 1 or 0)
   return table.concat(out, ';')
 end
 local function clamp(v, a, b) return math.min(math.max(v, a), b) end
@@ -827,6 +875,7 @@ local function cockpitApply(text)
           if item == 'pitch' then seat.pitch = clamp(v, -30, 30) else seat.position[item] = v end
         end
       elseif item:match('^vol%.') then ac.setAudioVolume(item:sub(5), clamp(v, 0, 1))
+      elseif item == 'hide.wheel' or item == 'hide.arms' then hideSet(item:sub(6), v >= 0.5)
       end
     end
   end
@@ -875,6 +924,8 @@ ac.onSharedEvent(COCKPIT_REQUEST, function(data, senderName, senderType)
       local ch = item:sub(5)
       local v = ac.getAudioVolume(ch, nil, -1)
       if v and v >= 0 then ac.setAudioVolume(ch, clamp(v + d, 0, 1)) end
+    elseif item == 'hide.wheel' or item == 'hide.arms' then
+      hideSet(item:sub(6), d >= 0.5)
     end
   end
   if seat then pcall(ac.setOnboardCameraParams, 0, seat, true) end
