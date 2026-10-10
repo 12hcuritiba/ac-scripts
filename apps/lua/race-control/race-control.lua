@@ -458,6 +458,7 @@ local LANG_PT = {
   flagRedLocked = 'Fique na sua vaga - controles travados até a relargada',
   ssTitle = 'LARGADA PARADA', dirStart = 'LARGAR', fmTitle = 'VOLTA DE APRESENTAÇÃO', fmEnd = 'Fim da volta de apresentação - pare no seu lugar do grid',
   fmToGrid = 'Grid P%d - pare no seu lugar', fmAligned = 'Grid P%d - no seu lugar, controles travados',
+  fmCountdown = 'Largada em %s', fmCountdownLine = 'A volta de formação abre na liberação do jogo',
   fmPitStart = 'Largada do pit lane, depois do pelotão', fmPlace = 'P%d - fique atrás de %s',
   fmGiveBack = 'Devolva a posição a %s - %d s', fmGivenBack = 'Posição devolvida a %s',
   fmMissedStart = 'Fora do lugar do grid quando as luzes da largada começaram',

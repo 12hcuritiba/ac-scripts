@@ -575,6 +575,7 @@ local TEXTS = {
   flagRedLocked = 'Stay at your pit place - controls locked until the restart',
   ssTitle = 'STANDING START', dirStart = 'START', fmTitle = 'FORMATION LAP', fmEnd = 'Formation lap over - stop on your grid place',
   fmToGrid = 'Grid P%d - stop on your place', fmAligned = 'Grid P%d - on your place, controls locked',
+  fmCountdown = 'Start in %s', fmCountdownLine = 'Formation lap opens at the release of the game',
   fmPitStart = 'Start from the pit lane, after the field', fmPlace = 'P%d - stay behind %s',
   fmGiveBack = 'Give the place back to %s - %d s', fmGivenBack = 'Place given back to %s',
   fmMissedStart = 'Not on the grid place when the start lights began',
@@ -909,7 +910,8 @@ local config = (function()
       greenSeconds = 5, redSpeedKmh = 65, redGraceSeconds = 10, passSlowKmh = 40, passFarM = 75, redSpeedSG = 30,
       redOverSeconds = 10, redNoLineSG = 120, yellowPassSG = 10, yellowGiveBackSeconds = 10 }),
     restart = structKey('restart', { gridDelay = 5, gridSeconds = 30, lights = 5, stepSeconds = 1, releaseLight = 3,
-      randomMin = 0.2, randomMax = 3, jumpMeters = 0.5, jumpLaps = 2, screenLightsFrom = 22 }),
+      randomMin = 0.2, randomMax = 3, jumpMeters = 0.5, jumpLaps = 2, screenLightsFrom = 22, prestartSeconds = 5,
+      abortSeconds = 8 }),
     formation = structKey('formation', { procedure = 'KMR', maxKmh = 150, overSeconds = 10, speedLaps = 1, minKmh = 30,
       slowSeconds = 15, slowLaps = 3, giveBackSeconds = 20, passLaps = 3, passFarM = 100, leaderSlowKmh = 30, slowFarKmh = 40,
       slowFarM = 75, alignMeters = 5, alignKmh = 20, alignSeconds = 60, approachM = 400 }),
@@ -6111,6 +6113,10 @@ do
         TrackList.changed()
         rcLog(TEXTS.rc.standingRestartOff, reason ~= '' and reason or '-')
       end
+      if body:upper():match('^%s*RC%s+START%s+ABORT%s+ALL%s*$') and state.formationAbort
+        and state.formationAbort(reason) then
+        TrackList.changed()
+      end
       local stT = body:upper():match('^%s*RC%s+START%s+ALL%s*@?(%d*)')
       if stT and state.formationStart and state.formationStart(tonumber(stT)) then
         TrackList.changed()
@@ -6847,6 +6853,14 @@ do
         Flags.onGrid = false
       end
       if sr.go and sr.sent == 'go' and clock - sr.goT > 3 then send('off') end
+      if Flags.abortUntil then
+        if clock < Flags.abortUntil then
+          send('abort')
+          return
+        end
+        Flags.abortUntil = nil
+        send('off')
+      end
       if not sr.go and Flags.formation and Flags.formation.phase == 'end' and Flags.formation.on() then send('grid') end
       return
     end
@@ -6906,7 +6920,13 @@ do
       Rules.penalty(r.start and 'JSS' or 'JS', c.jumpLaps)
     end
     local n = lit(d, lightsAt, step)
-    send(n == 0 and 'grid' or ('lights:' .. n))
+    if n > 0 then
+      send('lights:' .. n)
+    elseif lightsAt - d <= c.prestartSeconds * 1000 then
+      send('prestart')
+    else
+      send('grid')
+    end
   end
   function Flags.standingFlag(car)
     local r = state.restart
@@ -7295,6 +7315,18 @@ do
     rcLog(TEXTS.rc.standingStart, 'start given by the race direction')
     return true
   end
+  function Formation.abort(reason)
+    if not Formation.on() or (Formation.phase ~= 'lap' and Formation.phase ~= 'end') then return false end
+    Formation.t0, Formation.t0Sent, Formation.armed, Formation.goT = nil, -1e9, false, nil
+    Formation.endT, Formation.aligned, Formation.firstAligned = nil, false, nil
+    Formation.prog, Formation.lastSp = 0, nil
+    Formation.phase = 'lap'
+    state.restart = nil
+    Flags.abortUntil = state.ui.clock + config.restart.abortSeconds
+    ac.log('race-control: standing start aborted by the race direction: formation lap again')
+    rcLog(TEXTS.rc.standingStart, 'start aborted - formation lap again' .. (reason and reason ~= '' and (' - ' .. reason) or ''))
+    return true
+  end
   local function trackTell()
     local ev = 'off'
     if rule().procedure == 'ROLLING' and (Formation.phase == 'pre' or Formation.phase == 'lap') then ev = 'hold:rolling' end
@@ -7391,6 +7423,11 @@ do
   end
   function Flags.formationFlag(car)
     local p = Formation.phase
+    if p == 'pre' then
+      local left = math.max(math.floor((sim.timeToSessionStart or 0) / 1000), 0)
+      if left <= 0 then return nil end
+      return { 2, 'start', TEXTS.fmTitle, string.format(TEXTS.fmCountdown, mmss(left)), TEXTS.fmCountdownLine }
+    end
     if p ~= 'lap' and p ~= 'end' then return nil end
     local r = rule()
     if p == 'end' then
@@ -7412,6 +7449,7 @@ do
   end
   Flags.formation = Formation
   state.formationStart = Formation.startNow
+  state.formationAbort = Formation.abort
 end
 local PassMirror = { seq = 0, loaded = 0, last = nil, red = nil }
 do
