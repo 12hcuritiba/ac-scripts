@@ -125,7 +125,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V166 - 2026.10.10'
+local RC_VERSION = 'V167 - 2026.10.11'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -8312,12 +8312,13 @@ do
   local INTRO_BULB = 2.4
   local INTRO_CYCLE_STEP = 0.3
   local INTRO_FADE_IN = 0.6
-  local INTRO_HOLD = 0.8
+  local INTRO_HOLD = 2.0
   local INTRO_SCROLL_SPEED = 180
   local INTRO_DOT_PITCH = 3
   local INTRO_TEXT_AREA = PANEL_WIDTH - 32
   local INTRO_TEXT_W = DotMatrix.width(TEXTS.introText) * INTRO_DOT_PITCH
-  local INTRO_TEXT_X = (INTRO_TEXT_AREA - INTRO_TEXT_W) / 2
+  local INTRO_NAME_W = DotMatrix.width((TEXTS.introText:match('^(.-)%s%s') or TEXTS.introText)) * INTRO_DOT_PITCH
+  local INTRO_TEXT_X = math.max((INTRO_TEXT_AREA - INTRO_NAME_W) / 2, 0)
   local INTRO_SCROLL = (16 + INTRO_TEXT_X + INTRO_TEXT_W) / INTRO_SCROLL_SPEED
   local INTRO_STATUS = 1.5
   local INTRO_STATUS_X = (INTRO_TEXT_AREA - DotMatrix.width(TEXTS.introStatus) * INTRO_DOT_PITCH) / 2
