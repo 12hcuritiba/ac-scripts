@@ -4058,7 +4058,7 @@ local function applyHold(long)
 end
 local function applyExpiredDSQ(expired, viaPit)
   if sim.raceSessionType ~= ac.SessionType.Race then
-    ac.log('race-control: deadline over in practice or qualifying: laps invalid until paid')
+    ac.log('race-control: deadline over in practice or qualifying: the penalty stays pending')
     return false
   end
   local cats, kmr = {}, nil
