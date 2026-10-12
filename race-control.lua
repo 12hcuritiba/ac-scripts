@@ -83,6 +83,7 @@ local cfg = ac.configValues({
   qualifyPenaltyParam = -1,
   racePenaltyParam = -1,
   pitSpeedLimit = 60,
+  pitSpeedTolerance = 2,
   pitSpeedDeadlineLaps = 1,
   wrongWay = '',
   parkedCar = '',
@@ -124,7 +125,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V169 - 2026.10.12'
+local RC_VERSION = 'V170 - 2026.10.12'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -748,7 +749,7 @@ local config = (function()
     raceClosedSeconds = { 'pitExit', 'raceSeconds', nil, 60 },
     practicePenalty = { 'pitExit', 'practice', nil, 'REPRIMAND' }, qualifyPenalty = { 'pitExit', 'qualify', nil, 'DSQ' },
     racePenalty = { 'pitExit', 'race', nil, 'SG:10' },
-    pitSpeedLimit = { 'pitSpeed', 'limit', nil, 60 },
+    pitSpeedLimit = { 'pitSpeed', 'limit', nil, 60 }, pitSpeedTolerance = { 'pitSpeed', 'tolerance', nil, 2 },
     pitSpeedDeadlineLaps = { 'pitSpeed', 'deadlineLaps', nil, 1 },
     holdShortSeconds = { 'stopAndGo', 'holdShort', nil, 45 }, holdLongSeconds = { 'stopAndGo', 'holdLong', nil, 90 },
     dsqBlackFlagLaps = { 'dsq', 'blackFlagLaps', nil, 3 },
@@ -771,7 +772,7 @@ local config = (function()
   }
   local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, staffPits = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
     pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
-  local FIELDS = { kmr = { points = 1, ratingDsq = 1 }, base = { realName = 1, offline = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
+  local FIELDS = { kmr = { points = 1, ratingDsq = 1, pitSpeed = 1 }, base = { realName = 1, offline = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
     stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
   for _, m in pairs(OLD) do
     if THEMES[m[1]] then FIELDS[m[1]] = FIELDS[m[1]] or {}; FIELDS[m[1]][m[2]] = 1 end
@@ -901,6 +902,8 @@ local config = (function()
     swapRequired = tonumber(K('driverSwapRequired')) and math.floor(tonumber(K('driverSwapRequired'))) or nil,
     cutSpinAngle = tonumber(K('cutSpinAngle')) or 90,
     pitSpeedLimit = tonumber(K('pitSpeedLimit')) or 60,
+    pitSpeedTolerance = tonumber(K('pitSpeedTolerance')) or 2,
+    kmrPitSpeed = tonumber(kmrTheme and kmrTheme.pitSpeed) or 62,
     swapWindowStart = tonumber(K('swapWindowStartMinutes')) or 0,
     swapWindowEnd = tonumber(K('swapWindowEndMinutes')) or 0,
     pitWindowStart = tonumber(K('pitWindowStartMinutes')) or 0,
@@ -5618,19 +5621,28 @@ end
 local PitSpeed = {
   entryLap = nil,
   over = false,
+  annul = false,
   maxKmh = 0,
 }
 function PitSpeed.update(car, inPit, lapCount)
   if inPit then
     PitSpeed.entryLap = PitSpeed.entryLap or lapCount
     local limit = config.pitSpeedLimit
-    if limit > 0 and car.speedKmh > limit and not state.list.jumped then
+    if limit > 0 and car.speedKmh > limit + config.pitSpeedTolerance and not state.list.jumped then
       if not PitSpeed.over then
         PitSpeed.over = true
-        ac.log(string.format('race-control: pit lane speeding %.1f km/h (limit %d)', car.speedKmh, limit))
-        PitStops.sgAnnul('pit lane speeding')
+        ac.log(string.format('race-control: pit lane speeding %.1f km/h (limit %d + %d)', car.speedKmh, limit,
+          config.pitSpeedTolerance))
       end
       PitSpeed.maxKmh = math.max(PitSpeed.maxKmh, car.speedKmh)
+    end
+    local kmr = config.kmrPitSpeed
+    if kmr > 0 and car.speedKmh > kmr and not state.list.jumped and not PitSpeed.annul then
+      PitSpeed.annul = true
+      PitSpeed.maxKmh = math.max(PitSpeed.maxKmh, car.speedKmh)
+      ac.log(string.format('race-control: pit pass above the KMR limit %.1f km/h (limit %d): payment annulled', car.speedKmh,
+        kmr))
+      PitStops.sgAnnul('pit pass above the KMR limit')
     end
     return
   end
@@ -5638,21 +5650,26 @@ function PitSpeed.update(car, inPit, lapCount)
   PitSpeed.entryLap = nil
   local paid = state.pitPaid
   state.pitPaid = nil
-  if not PitSpeed.over then return end
+  local over, annul = PitSpeed.over, PitSpeed.annul
+  if not (over or annul) then return end
   local lost = math.max(lapCount - (entryLap or lapCount), 0)
   local speed = PitSpeed.maxKmh
-  PitSpeed.over = false
+  PitSpeed.over, PitSpeed.annul = false, false
   PitSpeed.maxKmh = 0
   if Rules.dsqOn() then
     ac.log('race-control: pit lane speeding after the DSQ: not applied')
     return
   end
   local before = listDump()
-  if paid then
+  if paid and annul then
     listAdd(paid.cat, math.max(paid.laps - lost, 0))
-    ac.log(string.format('race-control: pit lane speeding: %s DT paid in this pass does not count', paid.cat))
+    ac.log(string.format('race-control: pit pass above the KMR limit: %s DT paid in this pass does not count', paid.cat))
     rcLog(TEXTS.rc.dtNotServed, string.format('%s - pit lane speeding %.1f km/h', paid.cat, speed))
     showNotice(TEXTS.rcTitle, TEXTS.pitSpeedNotPaid)
+  end
+  if not over then
+    Rules.finalize()
+    return
   end
   listAdd('PSE', math.max(config.pitSpeedDeadlineLaps - lost, 0))
   ac.log(string.format('race-control: PSE pit exit %.1f km/h before=%s after=%s', speed, before, listDump()))
@@ -7559,7 +7576,7 @@ do
       flag(p and p.stopped), p and p.stop or 0, text(p and p.raceFlag), text(p and p.driverFlag), text(p and p.service),
       text(p and table.concat(p.paid, ';')), p and p.sgPaid and Rules.itemEncode(p.sgPaid) or '',
       flag(p and p.sgServiced), flag(p and p.sgParked), flag(sw.passSwap) .. flag(sw.passSwapValid) .. flag(sw.passVoided),
-      state.pitPaid and Rules.itemEncode(state.pitPaid) or '', flag(PitSpeed.over), math.floor(PitSpeed.maxKmh),
+      state.pitPaid and Rules.itemEncode(state.pitPaid) or '', flag(PitSpeed.over) .. flag(PitSpeed.annul), math.floor(PitSpeed.maxKmh),
       PitSpeed.entryLap and math.max(lapNow - PitSpeed.entryLap, 0) or -1, flag(state.list.jumped),
       flag(Flags.redReceived), flag(state.redCommitted), math.floor(TrackList.frozenSince or 0), lapNow }
   end
@@ -7603,7 +7620,7 @@ do
     local sw = state.swap
     sw.passSwap, sw.passSwapValid, sw.passVoided = f[14]:sub(1, 1) == '1', f[14]:sub(2, 2) == '1', f[14]:sub(3, 3) == '1'
     state.pitPaid = Rules.itemDecode(f[15], shift)
-    PitSpeed.over, PitSpeed.maxKmh = f[16] == '1', tonumber(f[17]) or 0
+    PitSpeed.over, PitSpeed.annul, PitSpeed.maxKmh = f[16]:sub(1, 1) == '1', f[16]:sub(2, 2) == '1', tonumber(f[17]) or 0
     local lines = tonumber(f[18]) or -1
     PitSpeed.entryLap = lines >= 0 and CarRead.num(ac.getCar(0).lapCount) - lines or nil
     PitStops.wasInPitlane = true
