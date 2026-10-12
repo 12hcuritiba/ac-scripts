@@ -125,7 +125,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V170 - 2026.10.12'
+local RC_VERSION = 'V171 - 2026.10.12'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1044,6 +1044,9 @@ local state = {
   zoneRef = {},
   cutChecks = {},
   lapCut = false,
+  lapOverdue = false,
+  lapFuel = false,
+  lapsZeroWait = nil,
   pitDsqActive = false,
   dtDsqActive = false,
   onJumped = {},
@@ -1155,7 +1158,6 @@ ac.onCarJumped(0, function()
     return
   end
   state.list.jumped = true
-  state.lapCut = false
   if not state.list.prevInPit then state.tow.jumpPending = true end
   ac.log('race-control: car jumped')
 end)
@@ -4222,12 +4224,19 @@ function Rules.keepDsq(source)
   if l.dsqStage == 1 then dsqGameFlag('kept from the car record') end
   ac.log('race-control: DSQ kept from the car record (' .. source .. ')')
 end
+function Rules.overdue()
+  for _, it in ipairs(state.list.items) do
+    if it.laps < 0 then return true end
+  end
+  return false
+end
 function Rules.invalidLaps(car)
   local l = state.list
-  if not state.lapCut or l.invalidLap == car.lapCount then return end
+  if Rules.overdue() then state.lapOverdue = true end
+  if not (state.lapCut or state.lapOverdue or state.lapFuel) or l.invalidLap == car.lapCount then return end
   l.invalidLap = car.lapCount
-  physics.setCarFuel(0, car.fuel)
-  ac.log('race-control: lap invalid (track limits cut)')
+  ac.log(state.lapCut and 'race-control: lap invalid (track limits cut)' or state.lapOverdue
+    and 'race-control: lap invalid (penalty overdue)' or 'race-control: lap invalid (out of fuel on track)')
 end
 function Rules.sessionSync(g)
   local l = state.list
@@ -5135,6 +5144,7 @@ local PitBox = { row = 1, fuel = 0, compound = nil, tyres = 1, repair = {}, open
 do
   local num = CarRead.num
   local WHEELS = { [0] = 'FL', 'FR', 'RL', 'RR' }
+  local PRESS_SECTION = { FL = 'PRESSURE_LF', FR = 'PRESSURE_RF', RL = 'PRESSURE_LR', RR = 'PRESSURE_RR' }
   local TYRE_CHOICES = {
     { '-', {} }, { 'FL', { 0 } }, { 'FR', { 1 } }, { 'RL', { 2 } }, { 'RR', { 3 } },
     { '2F', { 0, 1 } }, { '2B', { 2, 3 } }, { '2L', { 0, 2 } }, { '2R', { 1, 3 } }, { '2A', { 0, 1, 2, 3 } },
@@ -5168,10 +5178,20 @@ do
   local function presetSpinners()
     local out = {}
     local idx = PitBox.presetIndex()
-    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    local pressures, seen = 0, 0
+    for _, sp in ipairs(all) do
+      if sp.type == 'pressure' and not sp.readOnly then pressures = pressures + 1 end
+    end
+    for _, sp in ipairs(all) do
       if (sp.type == 'pressure' or sp.type == 'wing') and not sp.readOnly then
+        local wheel
+        if sp.type == 'pressure' then
+          seen = seen + 1
+          wheel = PitBox.spinnerWheel(sp.name) or (pressures == 4 and WHEELS[seen - 1]) or nil
+        end
         out[#out + 1] = { key = 'set:' .. (#out + 1), name = sp.name, type = sp.type, min = sp.min, max = sp.max,
-          value = presetValue(sp, idx), values = sp.values, readOnly = sp.readOnly }
+          value = presetValue(sp, idx), values = sp.values, readOnly = sp.readOnly, wheel = wheel }
       end
     end
     return out
@@ -5226,7 +5246,7 @@ do
     local out = {}
     for _, sp in ipairs(presetSpinners()) do
       local v = PitBox.preset[sp.key]
-      if v and v ~= sp.value then out[#out + 1] = { name = sp.name, value = v, type = sp.type } end
+      if v and v ~= sp.value then out[#out + 1] = { name = sp.name, value = v, type = sp.type, wheel = sp.wheel } end
     end
     return out
   end
@@ -5347,9 +5367,19 @@ do
     p.total = orderTotal({ F = p.times.fuel, T = p.times.tyres,
       R = p.times.suspension + p.times.powertrain + p.times.body })
     p.preset = {}
-    for _, c in ipairs(presetChanges()) do p.preset[#p.preset + 1] = c end
     p.setupPress = {}
     for k, v in pairs(PitBox.setupPress) do p.setupPress[k] = v end
+    p.pressRows = 0
+    for _, c in ipairs(presetChanges()) do
+      if c.type == 'pressure' then
+        if c.wheel and PRESS_SECTION[c.wheel] then
+          p.setupPress[PRESS_SECTION[c.wheel]] = math.floor(c.value)
+          p.pressRows = p.pressRows + 1
+        end
+      else
+        p.preset[#p.preset + 1] = c
+      end
+    end
     p.presetIdx = PitBox.presetIndex()
     p.switch = presetCount() > 1 and PitBox.presetIdx ~= nil and p.presetIdx ~= num(sim.currentQuickPitPreset)
     return p
@@ -5468,7 +5498,7 @@ do
   end
   local function chosen(p)
     return p.fuel > 0 or #TYRE_CHOICES[p.tyres][2] > 0 or p.repair.suspension or p.repair.powertrain or p.repair.body
-      or #p.preset > 0 or p.switch
+      or #p.preset > 0 or p.switch or p.pressRows > 0
   end
   local function choose(car, dir)
     local what = ROWS[PitBox.row]
@@ -7162,15 +7192,12 @@ do
     if CarRead.num(car.fuel) <= 0.1 then
       if P.fuelStop then return end
       P.fuelStop = true
+      state.lapFuel = true
+      ac.log('race-control: car stopped on track out of fuel: lap invalid')
       if sim.raceSessionType == ac.SessionType.Race then
         ac.log(string.format('race-control: car stopped on track out of fuel: %d s added to the final time', rule.fuelRaceSeconds))
         rcLog(TEXTS.rc.timePenalty, string.format(TEXTS.parkedTimeLog, rule.fuelRaceSeconds))
         showNotice(TEXTS.rcTitle, string.format(TEXTS.parkedFuelRace, rule.fuelRaceSeconds))
-      else
-        P.fuelInvalid = true
-        ac.log('race-control: car stopped on track out of fuel: laps invalid from now on')
-        rcLog(TEXTS.rc.parked, TEXTS.parkedFuelLapsLog)
-        showNotice(TEXTS.rcTitle, TEXTS.parkedFuelLaps)
       end
       return
     end
@@ -7184,16 +7211,6 @@ do
   end
   function Flags.parkedUpdate(car)
     local rule = config.parkedCar
-    if P.fuelInvalid then
-      if sim.raceSessionType == ac.SessionType.Practice and CarRead.parked(car) then
-        P.fuelInvalid = false
-        ac.log('race-control: practice, car at its pit place: laps valid again')
-      elseif P.invLap ~= car.lapCount then
-        P.invLap = car.lapCount
-        physics.setCarFuel(0, car.fuel)
-        ac.log('race-control: lap invalid (out of fuel on track)')
-      end
-    end
     Flags.parkedLine = nil
     if car.isInPitlane or car.isInPit or CarRead.parked(car) then P.armed = false
     elseif not P.armed and CarRead.num(car.speedKmh) > ARM_KMH then P.armed = true end
@@ -7904,7 +7921,8 @@ do
       end
       local laps = RaceTable.laps
       laps[#laps + 1] = { lap = leaderboardLaps() or car.lapCount, ms = math.floor(CarRead.num(car.previousLapTimeMs)),
-        valid = car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0 and not state.lapCut, pit = viaPit == true, s = s,
+        valid = car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0 and not state.lapCut
+          and not state.lapOverdue and not state.lapFuel, pit = viaPit == true, s = s,
         driver = tostring(ac.getDriverName(0) or ''):gsub('[,;|]', ' ') }
       laps[#laps].touched = touched
       touched = car.isInPitlane == true
@@ -7926,8 +7944,10 @@ do
         if #state.lapOut > 200 then table.remove(state.lapOut, 1) end
       end
       state.lapCut = false
+      state.lapOverdue = false
+      state.lapFuel = false
     end
-    if lineFrame then state.lapCut = false end
+    if lineFrame then state.lapCut, state.lapOverdue, state.lapFuel = false, false, false end
     passUpdate(car)
     stintUpdate(car)
     if state.ui.clock >= RaceTable.nextT then
@@ -8126,8 +8146,6 @@ local function updateCutChecks()
 end
 local function checkCutZone(zoneIndex, zone, lapCount)
   if not zone.enabled then return end
-  local r = zone.rules[sim.raceSessionType]
-  if not r or r.penalty == 'NONE' then return end
   local car = ac.getCar(0)
   if not car or car.isInPitlane or not isInZone(zone, car.splinePosition) then
     state.cutPassPenalized[zoneIndex] = false
@@ -8136,6 +8154,12 @@ local function checkCutZone(zoneIndex, zone, lapCount)
   if not state.cutPassPenalized[zoneIndex] and car.wheelsOutside > zone.maxWheelsOut then
     state.cutPassPenalized[zoneIndex] = true
     state.lapCut = true
+    local r = zone.rules[sim.raceSessionType]
+    if not r or r.penalty == 'NONE' then
+      ac.log(string.format('race-control: cut %s spline=%.4f wheelsOut=%d, no penalty in this session',
+        zone.category, car.splinePosition, car.wheelsOutside))
+      return
+    end
     if Rules.dsqOn() then
       ac.log(string.format('race-control: cut %s after the DSQ: logged, not applied', zone.category))
       return
@@ -14913,6 +14937,12 @@ function script.update(dt)
       state.restart = nil
       state.postRed = nil
       state.lights = nil
+      l.invalidLap = nil
+      local r = state.repair
+      r.class, r.lapsLeft, r.text, r.detail, r.beyondSince, r.waived = 'normal', nil, nil, nil, nil, nil
+      for i = 0, 3 do TyreUse.fitted(i) end
+      PitSpeed.entryLap, PitSpeed.over, PitSpeed.annul, PitSpeed.maxKmh = nil, false, false, 0
+      state.lapsZeroWait = lapCount > 0 and lapCount or nil
     end
     l.curLap = lapCount
     state.lastSessionIndex = sim.currentSessionIndex
@@ -14920,6 +14950,8 @@ function script.update(dt)
     state.prevInPitlane = {}
     state.cutPassPenalized = {}
     state.lapCut = false
+    state.lapOverdue = false
+    state.lapFuel = false
     state.zonePass = {}
     GainRef.load()
     state.cutChecks = {}
@@ -14980,6 +15012,13 @@ function script.update(dt)
       tostring(leaderboardLaps()), serverTimeMs()))
     state.ui.lastSeq = l.seq
     state.ui.notice = nil
+  end
+  if state.lapsZeroWait and lapCount < state.lapsZeroWait then
+    ac.log(string.format('race-control: turn of the session: lap count of the game back from %d to %d', state.lapsZeroWait,
+      lapCount))
+    state.lapsZeroWait = nil
+    l.lastLap, l.curLap = lapCount, lapCount
+    if l.dsqLap > lapCount then l.dsqLap = lapCount end
   end
   CarControls.update(dt)
   Diag.update(car)
