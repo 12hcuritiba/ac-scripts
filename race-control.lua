@@ -62,7 +62,9 @@ local cfg = ac.configValues({
   qualifyDriverSwap = 0,
   raceDriverSwap = 0,
   driverSwapMinSeconds = 120,
-  driverSwapRequired = '',
+  practiceDriverSwapRequired = '',
+  qualifyDriverSwapRequired = '',
+  raceDriverSwapRequired = '',
   wrongDriverSeconds = '120',
   driverStint = '',
   pitStopOrder = 'F<TR>',
@@ -72,7 +74,9 @@ local cfg = ac.configValues({
   pitWindowStartMinutes = 0,
   pitWindowEndMinutes = 0,
   pitStopsEnabled = 0,
-  pitStopsRequired = 0,
+  practicePitStopsRequired = 0,
+  qualifyPitStopsRequired = 0,
+  racePitStopsRequired = 0,
   practiceClosedSeconds = 60,
   qualifyClosedSeconds = 120,
   raceClosedSeconds = 60,
@@ -125,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V171 - 2026.10.12'
+local RC_VERSION = 'V172 - 2026.10.13'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -613,7 +617,7 @@ local TEXTS = {
   hdr = { pos = 'P', classPos = 'CL', driver = 'DRIVER', class = 'CLASS', laps = 'LAPS', gap = 'GAP', int = 'INT', best = 'BEST', pit = 'PIT',
     sr = 'SR', pts = 'PTS', time = 'TIME', sky = 'SKY', air = 'AIR', track = 'TRACK', avg = 'AVG', lap = 'LAP', delta = 'DELTA', precip = 'PRECIP.' },
   wxProb = '%d%%',
-  lapsShort = '%d L', lapTag = { cut = 'cut', pit = 'pit', best = 'best' },
+  lapsShort = '%d L', lapTag = { cut = 'invalid', pit = 'pit', best = 'best' },
   wxSky = { clear = 'Clear', few = 'Few clouds', scattered = 'Scattered clouds', broken = 'Broken clouds', overcast = 'Overcast', thunder = 'Thunderstorm' },
   wxPrecip = { lightDrizzle = 'light drizzle', drizzle = 'drizzle', lightRain = 'light rain', rain = 'rain', heavyRain = 'heavy rain', violentRain = 'violent rain' },
   compass = { 'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW' },
@@ -739,10 +743,13 @@ local config = (function()
     baseUrl = { 'base', 'url', nil, '' },
     practiceDriverSwap = { 'driverSwap', 'practice', nil, 0 }, qualifyDriverSwap = { 'driverSwap', 'qualify', nil, 0 },
     raceDriverSwap = { 'driverSwap', 'race', nil, 0 }, driverSwapMinSeconds = { 'driverSwap', 'minSeconds', nil, 120 },
-    driverSwapRequired = { 'driverSwap', 'required', nil, '' },
+    practiceDriverSwapRequired = { 'driverSwap', 'practiceRequired', nil, '' }, qualifyDriverSwapRequired = { 'driverSwap', 'qualifyRequired', nil, '' },
+    raceDriverSwapRequired = { 'driverSwap', 'raceRequired', nil, '' },
     wrongDriverSeconds = { 'driverSwap', 'wrongDriverSeconds', nil, '120' },
     swapWindowStartMinutes = { 'driverSwap', 'windowStartMinutes', nil, 0 }, swapWindowEndMinutes = { 'driverSwap', 'windowEndMinutes', nil, 0 },
-    pitStopsEnabled = { 'pitStops', 'enabled', nil, 0 }, pitStopsRequired = { 'pitStops', 'required', nil, 0 },
+    pitStopsEnabled = { 'pitStops', 'enabled', nil, 0 },
+    practicePitStopsRequired = { 'pitStops', 'practiceRequired', nil, 0 }, qualifyPitStopsRequired = { 'pitStops', 'qualifyRequired', nil, 0 },
+    racePitStopsRequired = { 'pitStops', 'raceRequired', nil, 0 },
     pitStopOrder = { 'pitStops', 'order', nil, 'F<TR>' }, pitStopMode = { 'pitStops', 'mode', nil, 'AUTO' },
     pitWindowStartMinutes = { 'pitWindow', 'startMinutes', nil, 0 }, pitWindowEndMinutes = { 'pitWindow', 'endMinutes', nil, 0 },
     practiceClosedSeconds = { 'pitExit', 'practiceSeconds', nil, 60 }, qualifyClosedSeconds = { 'pitExit', 'qualifySeconds', nil, 120 },
@@ -899,7 +906,9 @@ local config = (function()
     swap = bySession(tonumber(K('practiceDriverSwap')) == 1, tonumber(K('qualifyDriverSwap')) == 1,
       tonumber(K('raceDriverSwap')) == 1),
     swapMinSeconds = tonumber(K('driverSwapMinSeconds')) or 120,
-    swapRequired = tonumber(K('driverSwapRequired')) and math.floor(tonumber(K('driverSwapRequired'))) or nil,
+    swapRequiredBy = bySession(tonumber(K('practiceDriverSwapRequired')) and math.floor(tonumber(K('practiceDriverSwapRequired'))) or nil,
+      tonumber(K('qualifyDriverSwapRequired')) and math.floor(tonumber(K('qualifyDriverSwapRequired'))) or nil,
+      tonumber(K('raceDriverSwapRequired')) and math.floor(tonumber(K('raceDriverSwapRequired'))) or nil),
     cutSpinAngle = tonumber(K('cutSpinAngle')) or 90,
     pitSpeedLimit = tonumber(K('pitSpeedLimit')) or 60,
     pitSpeedTolerance = tonumber(K('pitSpeedTolerance')) or 2,
@@ -908,7 +917,9 @@ local config = (function()
     swapWindowEnd = tonumber(K('swapWindowEndMinutes')) or 0,
     pitWindowStart = tonumber(K('pitWindowStartMinutes')) or 0,
     pitStopsEnabled = tonumber(K('pitStopsEnabled')) == 1,
-    pitStopsRequired = math.floor(tonumber(K('pitStopsRequired')) or 0),
+    pitStopsRequiredBy = bySession(math.floor(tonumber(K('practicePitStopsRequired')) or 0),
+      math.floor(tonumber(K('qualifyPitStopsRequired')) or 0),
+      math.floor(tonumber(K('racePitStopsRequired')) or 0)),
     pitWindowEnd = tonumber(K('pitWindowEndMinutes')) or 0,
     pitSpeedDeadlineLaps = math.floor(tonumber(K('pitSpeedDeadlineLaps')) or 1),
     code80Freeze = tonumber(K('code80FreezeDeadlines')) == 1,
@@ -1020,6 +1031,8 @@ local config = (function()
   return c
 end)()
 function config.swapOn() return config.swap[ac.getSim().raceSessionType] == true end
+function config.stopsRequired() return config.pitStopsRequiredBy[ac.getSim().raceSessionType] or 0 end
+function config.swapRequiredNow() return config.swapRequiredBy[ac.getSim().raceSessionType] end
 config.isDirector = config.raceControlSteamID ~= '' and ac.getUserSteamID() == config.raceControlSteamID
 do
   local me = tostring(ac.getUserSteamID() or '')
@@ -2160,23 +2173,29 @@ do
         W.value = { ms = tonumber(ms), s = sec }
       end)
   end
-  local SERVER_GAP = 300
-  B.server = { nextT = 0, busy = false }
+  local SERVER_RETRY = 60
+  B.server = { nextT = 0, busy = false, done = false, ask = 0 }
+  function B.serverNew()
+    local V = B.server
+    V.nextT, V.done, V.ask = 0, false, V.ask + 1
+  end
   function B.serverUpdate()
     local V = B.server
-    if not on() or V.busy or state.ui.clock < V.nextT then return end
-    V.busy, V.nextT = true, state.ui.clock + SERVER_GAP
+    if not on() or V.done or V.busy or state.ui.clock < V.nextT then return end
+    V.busy, V.nextT = true, state.ui.clock + SERVER_RETRY
+    local ask = V.ask
     WebQueue.request('GET', config.baseUrl .. '/v1/server', nil, nil, function(err, res)
       V.busy = false
       if err or not res or tonumber(res.status) ~= 200 then return end
       local body = tostring(res.body or '')
       if not body:match('^OK|') then return end
+      if V.ask == ask then V.done = true end
       local url = body:match('kmrStatsUrl=([^|%s]*)')
       if url and url ~= '' and url ~= config.kmrStatsUrl then
         ac.log('race-control: KMR web stats from the base: ' .. url .. ' (before: ' .. (config.kmrStatsUrl ~= '' and config.kmrStatsUrl or 'none') .. ')')
         config.kmrStatsUrl = url
       end
-      for name, field in pairs({ pitStopsRequired = 'pitStopsRequired', pitWindowStart = 'pitWindowStart', pitWindowEnd = 'pitWindowEnd',
+      for name, field in pairs({ pitWindowStart = 'pitWindowStart', pitWindowEnd = 'pitWindowEnd',
           swapWindowStart = 'swapWindowStart', swapWindowEnd = 'swapWindowEnd' }) do
         local v = tonumber(body:match(name .. '=(%-?%d+)'))
         if v and v ~= config[field] then
@@ -2184,20 +2203,33 @@ do
           config[field] = v
         end
       end
+      local req = tonumber(body:match('pitStopsRequired=(%-?%d+)'))
+      local race = ac.SessionType.Race
+      if req and req ~= config.pitStopsRequiredBy[race] then
+        ac.log(string.format('race-control: pitStopsRequired of the race from the tool of the organization: %d (key of the server: %s)', req,
+          tostring(config.pitStopsRequiredBy[race])))
+        config.pitStopsRequiredBy[race] = req
+      end
     end)
   end
   local FORECAST_GAP = 60
-  B.forecast = { list = nil, race = nil, session = nil, nextT = 0, busy = false, index = nil }
+  B.forecast = { list = nil, race = nil, session = nil, nextT = 0, busy = false, index = nil, done = false, ask = 0 }
+  function B.forecastNew()
+    local F = B.forecast
+    F.list, F.nextT, F.done, F.ask = nil, 0, false, F.ask + 1
+  end
   function B.forecastUpdate()
     local F = B.forecast
     local index = sim.currentSessionIndex or 0
-    if F.index ~= index then F.index, F.list, F.nextT = index, nil, 0 end
-    if not on() or F.busy or state.ui.clock < F.nextT then return end
+    if F.index ~= index then F.index = index; B.forecastNew() end
+    if not on() or F.done or F.busy or state.ui.clock < F.nextT then return end
+    local ask = F.ask
     F.busy, F.nextT = true, state.ui.clock + FORECAST_GAP
     WebQueue.request('GET', config.baseUrl .. '/v1/forecast?session=' .. index .. '&all=1', nil, nil, function(err, res)
       F.busy = false
-      if err or not res or tonumber(res.status) ~= 200 or F.index ~= index then return end
+      if err or not res or tonumber(res.status) ~= 200 or F.index ~= index or F.ask ~= ask then return end
       local body = tostring(res.body or '')
+      F.done = true
       local race, session = body:match('^OK|([^|\n]*)|([^|\n]*)')
       if not race then F.list, F.race, F.session = nil, nil, nil return end
       local list = {}
@@ -2417,7 +2449,11 @@ do
       if box ~= '' and B.pitBox then
         local f = {}
         for k, v in box:gmatch('(%a+)=([^;]*)') do f[k] = v end
-        for _, c in ipairs(changes) do B.pitBox.preset[c.name] = c.value end
+        for _, c in ipairs(changes) do
+          for _, sp in ipairs(B.pitBox.presetSpinners()) do
+            if sp.name == c.name then B.pitBox.preset[sp.key] = math.max(sp.min, math.min(c.value, sp.max)) break end
+          end
+        end
         B.pitBox.remote({ fuel = tonumber(f.fuel), compound = tonumber(f.compound), tyres = tonumber(f.tyres), repair = f.repair,
           preset = tonumber(f.preset), auto = f.mode == 'auto' and true or f.mode == 'manual' and false or nil, start = f.start == '1', press = f.press })
         B.box.nextT, B.box.sig = state.ui.clock + 1, nil
@@ -2493,6 +2529,7 @@ do
     local text = table.concat(parts, ';')
     ac.broadcastSharedEvent(APP_REQUEST, text)
     ac.log('race-control: pit stop preset sent to the app: ' .. text)
+    if AppLink.sent then AppLink.sent(changes, preset) end
   end
   local pingT = -1e9
   function AppLink.ping()
@@ -2917,15 +2954,17 @@ local TrackList = {
   since = -1,
   frozenMs = 0,
   frozenSince = nil,
+  startMs = nil,
+  sawPre = false,
 }
 do
   local function trackBody()
     local red = state.redFlag
-    return string.format('%s|%d|%s|%s|%s|%d|%s|%d|%s', state.code80 or 'GREEN', math.floor(TrackList.since),
+    return string.format('%s|%d|%s|%s|%s|%d|%s|%d|%s|%s', state.code80 or 'GREEN', math.floor(TrackList.since),
       red and 'RED' or '-', red and red.reason and (red.reason:gsub('[|\r\n]', ' ')) or '',
       state.restart and math.floor(state.restart.t0) or '', math.floor(TrackList.frozenMs),
       TrackList.frozenSince and math.floor(TrackList.frozenSince) or '', state.postRed and 1 or 0,
-      state.lights or '')
+      state.lights or '', TrackList.startMs and math.floor(TrackList.startMs) or '')
   end
   local function trackSave()
     Record.save('track', math.floor(TrackList.since / 1000), trackBody())
@@ -2952,9 +2991,28 @@ do
     freezeUpdate(TrackList.since)
     trackSave()
   end
+  function TrackList.update()
+    if sim.raceSessionType ~= ac.SessionType.Race then return end
+    if not sim.isSessionStarted then
+      TrackList.sawPre = true
+      return
+    end
+    if not TrackList.startMs and TrackList.sawPre then
+      TrackList.startMs = serverTimeMs()
+      TrackList.frozenMs, TrackList.frozenSince = 0, nil
+      ac.log('race-control: pit window clock started with the clock of the race')
+      TrackList.changed()
+    elseif TrackList.startMs and windowStill() ~= (TrackList.frozenSince ~= nil) then
+      TrackList.changed()
+    end
+  end
+  function TrackList.clockMs()
+    if not TrackList.startMs then return nil end
+    return serverTimeMs() - TrackList.startMs - TrackList.frozenNowMs()
+  end
   local function trackApply(body, source)
-    local kind, since, red, reason, rt, frozen, frozenSince, postRed, lights =
-      tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)|?(%d*)|?(%d*)|?(%d?)|?(%a*)$')
+    local kind, since, red, reason, rt, frozen, frozenSince, postRed, lights, startMs =
+      tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)|?(%d*)|?(%d*)|?(%d?)|?(%a*)|?(%d*)$')
     since = tonumber(since)
     if not since or since <= TrackList.since then return false end
     local code80 = kind ~= 'GREEN' and kind or nil
@@ -2972,12 +3030,14 @@ do
     state.lights = (lights == 'RED' or lights == 'GREEN') and lights or nil
     TrackList.frozenMs = tonumber(frozen) or 0
     TrackList.frozenSince = (frozenSince or '') ~= '' and tonumber(frozenSince) or nil
+    if (startMs or '') ~= '' then TrackList.startMs = tonumber(startMs) end
     TrackList.since = since
     return true
   end
   function TrackList.load()
     TrackList.since = -1
     TrackList.frozenMs, TrackList.frozenSince = 0, nil
+    TrackList.startMs, TrackList.sawPre = nil, false
     local body, _, source = Record.load('track')
     if not body then return end
     if source == 'store' then
@@ -4838,7 +4898,7 @@ do
   function PitStops.window() return windowOf(config.swapWindowStart, config.swapWindowEnd) end
   function PitStops.stopWindow() return windowOf(config.pitWindowStart, config.pitWindowEnd) end
   function PitStops.windowTime()
-    return sessionElapsedMs() - TrackList.frozenNowMs()
+    return TrackList.clockMs() or (sessionElapsedMs() - TrackList.frozenNowMs())
   end
   function PitStops.windowOpen()
     local s, e = PitStops.window()
@@ -4970,12 +5030,13 @@ do
     if PitStops.endChecked or sim.raceSessionType ~= ac.SessionType.Race or not car.isRaceFinished then return end
     PitStops.endChecked = true
     local why
-    local req = config.swapRequired or 0
+    local req = config.swapRequiredNow() or 0
     if config.swapOn() and req > 0 and SwapRecord.validNow() < req then
       why = string.format(TEXTS.swapsMissingDsq, SwapRecord.validNow(), req)
     end
-    if config.pitStopsEnabled and config.pitStopsRequired > 0 and PitRecord.stops < config.pitStopsRequired then
-      local s = string.format(TEXTS.stopsMissingDsq, PitRecord.stops, config.pitStopsRequired)
+    local stopsReq = config.stopsRequired()
+    if config.pitStopsEnabled and stopsReq > 0 and PitRecord.stops < stopsReq then
+      local s = string.format(TEXTS.stopsMissingDsq, PitRecord.stops, stopsReq)
       why = why and (why .. ' - ' .. s) or s
     end
     if not why then return end
@@ -5062,7 +5123,7 @@ do
     end
     raceEnd(car)
     local ss, se = PitStops.stopWindow()
-    if ss and config.pitStopsEnabled and config.pitStopsRequired > 0 and sim.isSessionStarted
+    if ss and config.pitStopsEnabled and config.stopsRequired() > 0 and sim.isSessionStarted
         and not state.pit.stopDone and not state.pit.stopMissed
         and PitStops.windowTime() > se and not (inPit and PitStops.passInStopWindow) then
       state.pit.stopMissed = true
@@ -5144,7 +5205,6 @@ local PitBox = { row = 1, fuel = 0, compound = nil, tyres = 1, repair = {}, open
 do
   local num = CarRead.num
   local WHEELS = { [0] = 'FL', 'FR', 'RL', 'RR' }
-  local PRESS_SECTION = { FL = 'PRESSURE_LF', FR = 'PRESSURE_RF', RL = 'PRESSURE_LR', RR = 'PRESSURE_RR' }
   local TYRE_CHOICES = {
     { '-', {} }, { 'FL', { 0 } }, { 'FR', { 1 } }, { 'RL', { 2 } }, { 'RR', { 3 } },
     { '2F', { 0, 1 } }, { '2B', { 2, 3 } }, { '2L', { 0, 2 } }, { '2R', { 1, 3 } }, { '2A', { 0, 1, 2, 3 } },
@@ -5175,6 +5235,34 @@ do
     return sp.value
   end
   PitBox.presetValue = presetValue
+  local base, baseKey = {}, nil
+  local function baseLoad()
+    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    local key = tostring(sim.currentSessionIndex) .. '|' .. #all
+    if key == baseKey then return end
+    baseKey, base = key, {}
+    for i = 0, presetCount() - 1 do
+      base[i] = {}
+      for _, sp in ipairs(all) do
+        if sp.name and base[i][sp.name] == nil then base[i][sp.name] = presetValue(sp, i) end
+      end
+    end
+  end
+  local function baseValue(sp, idx)
+    baseLoad()
+    local v = base[idx] and base[idx][sp.name]
+    if v == nil then return presetValue(sp, idx) end
+    return v
+  end
+  PitBox.baseValue = baseValue
+  local function baseCommit(changes, preset)
+    baseLoad()
+    local i = math.floor(preset or 0)
+    base[i] = base[i] or {}
+    for _, c in ipairs(changes) do if c.name then base[i][c.name] = math.floor(c.value) end end
+  end
+  function PitBox.baseNew() baseKey = nil end
+  AppLink.sent = function(changes, preset) if not PitBox.sending then baseCommit(changes, preset) end end
   local function presetSpinners()
     local out = {}
     local idx = PitBox.presetIndex()
@@ -5191,7 +5279,7 @@ do
           wheel = PitBox.spinnerWheel(sp.name) or (pressures == 4 and WHEELS[seen - 1]) or nil
         end
         out[#out + 1] = { key = 'set:' .. (#out + 1), name = sp.name, type = sp.type, min = sp.min, max = sp.max,
-          value = presetValue(sp, idx), values = sp.values, readOnly = sp.readOnly, wheel = wheel }
+          value = baseValue(sp, idx), values = sp.values, readOnly = sp.readOnly, wheel = wheel }
       end
     end
     return out
@@ -5371,14 +5459,8 @@ do
     for k, v in pairs(PitBox.setupPress) do p.setupPress[k] = v end
     p.pressRows = 0
     for _, c in ipairs(presetChanges()) do
-      if c.type == 'pressure' then
-        if c.wheel and PRESS_SECTION[c.wheel] then
-          p.setupPress[PRESS_SECTION[c.wheel]] = math.floor(c.value)
-          p.pressRows = p.pressRows + 1
-        end
-      else
-        p.preset[#p.preset + 1] = c
-      end
+      p.preset[#p.preset + 1] = c
+      if c.type == 'pressure' then p.pressRows = p.pressRows + 1 end
     end
     p.presetIdx = PitBox.presetIndex()
     p.switch = presetCount() > 1 and PitBox.presetIdx ~= nil and p.presetIdx ~= num(sim.currentQuickPitPreset)
@@ -5423,6 +5505,7 @@ do
       if p.repair.body then d.body = 0 end
     end
     ac.log(string.format('race-control: pit stop done (%s)', planText(p)))
+    if PitBox.gameStopOn and PitBox.lastReq then baseCommit(PitBox.lastReq.req, PitBox.lastReq.idx) end
     PitBox.gameStop(false, 'end of the box stop')
     local repaired = p.repair.suspension or p.repair.powertrain or p.repair.body
     PitStops.record(car.lapCount, fuel - fuelBefore, #wheels, p.compound ~= mounted, repaired)
@@ -5440,21 +5523,46 @@ do
   PitBox.gameStop = gameStop
   local function gameNeeded(p) return #p.preset > 0 or p.switch end
   local function presetRequest(p)
-    local req = {}
-    for _, c in ipairs(p.preset) do req[#req + 1] = c end
+    local req, chosenV = {}, {}
+    for _, sp in ipairs(presetSpinners()) do chosenV[sp.name] = PitBox.preset[sp.key] or sp.value end
     for _, sp in ipairs(ac.getPitstopSpinners() or {}) do
-      if sp.type == 'fuel' and not sp.readOnly then req[#req + 1] = { name = sp.name, value = 0, type = 'fuel' } end
+      if not sp.readOnly and sp.name then
+        local v
+        if sp.type == 'pressure' or sp.type == 'wing' then v = chosenV[sp.name]
+        elseif sp.type == 'fuel' or sp.type == 'repair' then v = 0
+        elseif sp.type == 'compound' then v = math.max(-1, num(sp.min)) end
+        if v ~= nil then req[#req + 1] = { name = sp.name, value = v, type = sp.type } end
+      end
     end
     local parts = { tostring(p.presetIdx) }
     for _, c in ipairs(req) do parts[#parts + 1] = c.name .. '=' .. math.floor(c.value) end
     return req, table.concat(parts, ';')
   end
+  local function presetDrift(req, idx)
+    if presetCount() > 1 and num(sim.currentQuickPitPreset) ~= idx then return 'preset ' .. tostring(sim.currentQuickPitPreset) end
+    local live = {}
+    for _, sp in ipairs(ac.getPitstopSpinners() or {}) do if sp.name and live[sp.name] == nil then live[sp.name] = presetValue(sp, idx) end end
+    for _, c in ipairs(req) do
+      if live[c.name] ~= nil and math.floor(num(live[c.name])) ~= math.floor(c.value) then
+        return c.name .. '=' .. tostring(live[c.name])
+      end
+    end
+    return nil
+  end
   PitBox.sentSig = nil
+  PitBox.sentT = -1e9
+  local DRIFT_WAIT = 1
   local NUDGE_MS = 0.3
   local function writePreset(p, why, nudge)
     local req, sig = presetRequest(p)
-    if sig == PitBox.sentSig and PitBox.gameStopOn then return end
-    PitBox.sentSig = sig
+    if sig == PitBox.sentSig and PitBox.gameStopOn then
+      if state.ui.clock - PitBox.sentT < DRIFT_WAIT then return end
+      local moved = presetDrift(req, p.presetIdx)
+      if not moved then return end
+      ac.log('race-control: game pit stop: the preset of the game moved by its hidden menu (' .. moved .. '), written again')
+    end
+    PitBox.sentSig, PitBox.sentT = sig, state.ui.clock
+    PitBox.lastReq = { req = req, idx = p.presetIdx }
     AppLink.onWritten = function()
       PitBox.logSpinners('after the write')
       if PitBox.sentSig ~= sig then return end
@@ -5466,7 +5574,9 @@ do
       end
     end
     PitBox.logSpinners('before the write')
+    PitBox.sending = true
     AppLink.setPreset(req, p.presetIdx)
+    PitBox.sending = false
   end
   local function startStop(p)
     state.pitService = { startMs = serverTimeMs(), untilMs = serverTimeMs() + p.total * 1000, plan = planText(p) }
@@ -5488,7 +5598,7 @@ do
     PitBox.row, PitBox.fuel, PitBox.compound, PitBox.tyres, PitBox.repair = 1, 0, nil, 1, {}
     PitBox.preset, PitBox.setupPress = {}, {}
     PitBox.touched = false
-    PitBox.tab, PitBox.presetIdx, PitBox.sentSig = 'stop', nil, nil
+    PitBox.tab, PitBox.presetIdx, PitBox.sentSig, PitBox.lastReq = 'stop', nil, nil, nil
     PitBox.remoteUntil = 0
   end
   PitBox.reset = reset
@@ -7846,6 +7956,31 @@ do
     return out
   end
   RaceTable.losses = nil
+  local bestKey, bestOf = nil, nil
+  function RaceTable.ownBest()
+    local laps = RaceTable.laps
+    local last = laps[#laps]
+    local key = #laps .. '|' .. (last and last.ms or 0)
+    if key == bestKey then return bestOf end
+    local b = { ms = 0, lapS = {}, s = {} }
+    for _, l in ipairs(laps) do
+      if l.valid and l.ms > 0 then
+        if b.ms == 0 or l.ms < b.ms then
+          b.ms = l.ms
+          b.lapS = {}
+          for q, v in ipairs(l.s or {}) do b.lapS[q - 1] = v end
+        end
+        for q, v in ipairs(l.s or {}) do
+          if v > 0 and (not b.s[q - 1] or v < b.s[q - 1]) then b.s[q - 1] = v end
+        end
+      end
+    end
+    bestKey, bestOf = key, b
+    return b
+  end
+  function RaceTable.lapMarked(car)
+    return state.lapCut or state.lapOverdue or state.lapFuel or car.isLapValid == false
+  end
   function RaceTable.flying()
     local laps, sum, n = RaceTable.laps, 0, 0
     for i = #laps, 2, -1 do
@@ -8235,11 +8370,12 @@ function Panel.cellPit()
   return { value = TEXTS.pitMissed, color = 'red' }
 end
 function Panel.cellSwap()
-  if not config.swapOn() or not config.swapRequired or config.swapRequired <= 0 then
+  local req = config.swapRequiredNow()
+  if not config.swapOn() or not req or req <= 0 then
     return nil
   end
   local lit = ac.getCar(0).isInPitlane
-  return { value = string.format(TEXTS.swapCount, SwapRecord.validNow(), config.swapRequired), color = lit and 'green' or 'dim',
+  return { value = string.format(TEXTS.swapCount, SwapRecord.validNow(), req), color = lit and 'green' or 'dim',
     quiet = not lit }
 end
 function Panel.cellTrack()
@@ -8735,9 +8871,7 @@ do
   end
   local function valueStep(g, dir)
     if g == 'weather' then
-      if Desktop.filter.weather == 'map' then
-        if not Desktop.radarZoom(dir) and dir < 0 then Desktop.weatherMode('forecast') end
-      elseif not Desktop.weatherStep(dir) then Desktop.weatherMode('map') end
+      Desktop.weatherValue(dir)
     elseif g == 'laps' then
       Desktop.lapsStep(dir)
     elseif g == 'relative' or g == 'standings' or g == 'map' then
@@ -8770,6 +8904,8 @@ do
   Desktop.lapsStep = function() end
   Desktop.weatherStep = function() end
   Desktop.radarZoom = function() end
+  Desktop.weatherMove = function() end
+  Desktop.weatherValue = function() end
   Desktop.deltaStep = function() end
   Desktop.cockpitStep = function() end
   Desktop.cockpitMove = function() end
@@ -9055,6 +9191,10 @@ do
       if g == 'cockpit' then
         if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.cockpitMove(-1) end
         if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.cockpitMove(1) end
+      end
+      if g == 'weather' then
+        if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.weatherMove(-1) end
+        if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.weatherMove(1) end
       end
       if g == 'share' then
         if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.shareMove(-1) end
@@ -9850,7 +9990,7 @@ do
       for i = 0, presets - 1 do
         local press, wingV = {}, {}
         for _, sp in ipairs(all) do
-          local v = PitBox.presetValue(sp, i)
+          local v = PitBox.baseValue(sp, i)
           if sp.type == 'pressure' then press[#press + 1] = tostring(v) elseif sp.type == 'wing' then wingV[#wingV + 1] = tostring(v) end
         end
         local value = table.concat(press, ' ') .. (#wingV > 0 and ('  ' .. TEXTS.pitWing .. ' ' .. table.concat(wingV, '/')) or '')
@@ -10593,21 +10733,23 @@ local drawRaceScreens = (function()
     drawText(TEXTS.scrDeltaButton, FONT_TEXT, 9 * s, TMP.a:set(a.x + 6 * s, a.y), on and TMP.dark or COLOR_DIM)
     Drag.clickable(a, b, function() Drag.setMode('delta', on and 'hidden' or 'visible') end)
     row(p1, y, s, { { TEXTS.scrCurrent, 14, COLOR_DIM, false, FONT_TEXT },
-      { lapTime(CarRead.num(car.lapTimeMs)), 246, car.isLapValid == false and RED or COLOR_TITLE, true } })
+      { lapTime(CarRead.num(car.lapTimeMs)), 246, RaceTable.lapMarked(car) and RED or COLOR_TITLE, true } })
     y = y + ROW * s
     drawSeparator(p1, p2, y + 3 * s, s)
     y = y + 8 * s
     row(p1, y, s, { { 'S1', 110, COLOR_AXIS, true }, { 'S2', 178, COLOR_AXIS, true }, { 'S3', 246, COLOR_AXIS, true } })
     y = y + ROW * s
-    local lines = { { TEXTS.scrNow, car.currentSplits }, { TEXTS.scrBest, car.bestLapSplits }, { TEXTS.scrOpt, car.bestSplits } }
+    local own = RaceTable.ownBest()
+    local marked = RaceTable.lapMarked(car)
+    local lines = { { TEXTS.scrNow, car.currentSplits }, { TEXTS.scrBest, own.lapS }, { TEXTS.scrOpt, own.s } }
     for li, l in ipairs(lines) do
       local cells = { { l[1], 14, COLOR_DIM } }
       for k = 0, 2 do
         local v = l[2] and CarRead.num(l[2][k]) or 0
         local col = COLOR_TITLE
         if li == 1 and v > 0 then
-          local best = car.bestSplits and CarRead.num(car.bestSplits[k]) or 0
-          col = (best > 0 and v <= best) and GREEN or RED
+          local best = CarRead.num(own.s[k])
+          col = (not marked and best > 0 and v <= best) and GREEN or RED
         elseif li == 3 then col = PURPLE end
         cells[#cells + 1] = { secs(v), 110 + k * 68, col, true }
       end
@@ -10616,12 +10758,14 @@ local drawRaceScreens = (function()
     end
     drawSeparator(p1, p2, y + 3 * s, s)
     y = y + 8 * s
-    local best = CarRead.num(car.bestLapTimeMs)
-    local sessionBest = CarRead.num(sim.bestLapTimeMs)
-    local owner = ''
-    for _, r in ipairs(RaceTable.rows) do if sessionBest > 0 and r.best == sessionBest then owner = '  #' .. r.number end end
+    local best = own.ms
+    local sessionBest, owner = best, best > 0 and ('  #' .. tostring(ac.getDriverNumber(0) or '')) or ''
+    for _, r in ipairs(RaceTable.rows) do
+      if r.index ~= 0 and r.best and r.best > 0 and (sessionBest == 0 or r.best < sessionBest) then sessionBest, owner = r.best, '  #' .. r.number end
+    end
     local optimal = 0
-    for k = 0, 2 do optimal = optimal + (car.bestSplits and CarRead.num(car.bestSplits[k]) or 0) end
+    for k = 0, 2 do optimal = (optimal >= 0 and own.s[k]) and optimal + own.s[k] or -1 end
+    if optimal < 0 then optimal = 0 end
     local kept = RaceTable.laps[#RaceTable.laps]
     local lastValid = CarRead.num(car.previousLapTimeMs) <= 0 or (car.isLastLapValid ~= false and CarRead.num(car.lastLapCutsCount) == 0
       and not (kept and kept.ms == math.floor(CarRead.num(car.previousLapTimeMs)) and not kept.valid))
@@ -10673,13 +10817,15 @@ local drawRaceScreens = (function()
       end
     end
     local d0 = CarRead.num(car.performanceMeter)
-    local own = CarRead.num(car.bestLapTimeMs)
+    local traced = CarRead.num(car.bestLapTimeMs)
+    local ob = RaceTable.ownBest()
+    local own = ob.ms
     local all = RecordSync.base.best.value
-    local ref = deltaRef == 'session' and CarRead.num(sim.bestLapTimeMs) or deltaRef == 'optimal' and sumSplits(car.bestSplits)
+    local ref = deltaRef == 'session' and CarRead.num(sim.bestLapTimeMs) or deltaRef == 'optimal' and sumSplits(ob.s)
       or deltaRef == 'alltime' and (all and all.ms or 0) or own
     local d = nil
-    if deltaRef == 'best' then d = d0
-    elseif own > 0 and ref > 0 then d = d0 + (CarRead.num(car.lapTimeMs) / 1000 - d0) * (1 - ref / own) end
+    if deltaRef == 'best' and own > 0 and own == traced then d = d0
+    elseif traced > 0 and ref > 0 then d = d0 + (CarRead.num(car.lapTimeMs) / 1000 - d0) * (1 - ref / traced) end
     local bx1, bx2 = p1.x + 14 * s, p2.x - 14 * s
     local mid = (bx1 + bx2) / 2
     ui.drawRectFilled(vec2(bx1, y), vec2(bx2, y + 7 * s), rgbm(1, 1, 1, 0.06), 2 * s)
@@ -10688,10 +10834,10 @@ local drawRaceScreens = (function()
     elseif (d or 0) < 0 then ui.drawRectFilled(vec2(mid - f, y), vec2(mid, y + 7 * s), GREEN, 2 * s) end
     ui.drawSimpleLine(vec2(mid, y - 2 * s), vec2(mid, y + 9 * s), COLOR_TITLE, 1)
     y = y + 10 * s
-    if car.isLapValid == false then drawText(TEXTS.scrInvalid, FONT_MONO, 9 * s, TMP.a:set(bx1, y + 2 * s), RED) end
+    if RaceTable.lapMarked(car) then drawText(TEXTS.scrInvalid, FONT_MONO, 9 * s, TMP.a:set(bx1, y + 2 * s), RED) end
     drawTextRight(d and string.format('%+.3f', d) or '-', FONT_MONO, 13 * s, bx2, y, not d and COLOR_OFF or d > 0 and RED or GREEN)
     y = y + 15 * s
-    local refSplit = deltaRef == 'optimal' and car.bestSplits or car.bestLapSplits
+    local refSplit = deltaRef == 'optimal' and ob.s or ob.lapS
     local scale = (deltaRef == 'session' and own > 0 and ref > 0) and ref / own or 1
     if deltaRef == 'alltime' then
       refSplit, scale = {}, 1
@@ -11084,13 +11230,14 @@ local drawRaceScreens = (function()
     Radar.tbl = T
     return T
   end
+  Radar.WINDOW_SEGS = 7
+  function Radar.windowStart(FL) return math.floor(Radar.lineMinute(FL, Radar.nowMinute()) / 10) * 10 - 10 end
   function Radar.textSegments(fc)
     local FL = Radar.fixed(fc).fl
     if not FL then return {} end
-    local H = math.floor(Radar.lineMinute(FL, Radar.nowMinute()) / 60) * 60
+    local H = Radar.windowStart(FL)
     local out = {}
-    local M = H
-    while M <= math.max(FL.last, H + 50) and #out < 144 do out[#out + 1] = Radar.segAt(FL, M); M = M + 10 end
+    for k = 0, Radar.WINDOW_SEGS - 1 do out[#out + 1] = Radar.segAt(FL, H + k * 10) end
     return out
   end
   local RADAR_BACK, RADAR_STEPS = 24, 60
@@ -11208,8 +11355,8 @@ float4 main(PS_IN pin) {
     local half = Radar.half()
     local zoom = half <= 2500 and 'track' or 'wide'
     local FL = Radar.fixed(fc).fl
-    local H = math.floor(Radar.lineMinute(FL, Radar.nowMinute()) / 60) * 60
-    local k = math.floor(state.ui.clock) % 6
+    local H = Radar.windowStart(FL)
+    local k = math.floor(state.ui.clock) % Radar.WINDOW_SEGS
     local t = H + k * 10
     local sl = Radar.segAt(FL, t)
     local minute = t % 1440
@@ -11265,7 +11412,7 @@ float4 main(PS_IN pin) {
       drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 9 * s, TMP.a:set(a.x + 5 * s, b.y - 14 * s), YELLOW)
       local x1, x2 = a.x + 46 * s, b.x - 6 * s
       ui.drawRect(vec2(x1, b.y - 9 * s), vec2(x2, b.y - 5 * s), rgbm(0.35, 0.35, 0.35, 1))
-      ui.drawRectFilled(vec2(x1, b.y - 9 * s), vec2(x1 + (x2 - x1) * k / 5, b.y - 5 * s), YELLOW)
+      ui.drawRectFilled(vec2(x1, b.y - 9 * s), vec2(x1 + (x2 - x1) * k / (Radar.WINDOW_SEGS - 1), b.y - 5 * s), YELLOW)
     end
     ui.popClipRect()
     ui.drawRect(a, b, big and rgbm(0.27, 0.3, 0.35, 1) or rgbm(0.16, 0.43, 0.9, 1))
@@ -11281,6 +11428,30 @@ float4 main(PS_IN pin) {
     if n < 1 or n > wxPages(fc) then return false end
     wxPage = n
     return true
+  end
+  local wxRow = 1
+  local function wxRowList()
+    if (filter.weather or 'forecast') == 'map' then return { 'mode', 'zoom', 'size' } end
+    local fc = Weather.forecast or RecordSync.base.forecast.list or {}
+    local segs = #fc > 0 and Radar.textSegments(fc) or {}
+    return #segs > WX_PAGE and { 'mode', 'page' } or { 'mode' }
+  end
+  Desktop.weatherMove = function(dir)
+    local list = wxRowList()
+    wxRow = (math.min(wxRow, #list) - 1 + dir) % #list + 1
+  end
+  Desktop.weatherValue = function(dir)
+    local list = wxRowList()
+    local what = list[math.min(wxRow, #list)]
+    if what == 'mode' then Desktop.weatherMode(dir < 0 and 'forecast' or 'map')
+    elseif what == 'zoom' then Radar.zoomStep(dir)
+    elseif what == 'size' then filter.radarBig = not (filter.radarBig ~= false)
+    elseif what == 'page' then Desktop.weatherStep(dir) end
+  end
+  local function wxMark(what, a, b, s)
+    local list = wxRowList()
+    if Desktop.focus ~= 'weather' or list[math.min(wxRow, #list)] ~= what then return end
+    ui.drawRect(vec2(a.x - 2 * s, a.y - 2 * s), vec2(b.x + 2 * s, b.y + 2 * s), YELLOW, 2 * s, nil, 1.5 * s)
   end
   local function weatherScreen(car, w, h, s)
     local mode = filter.weather or 'forecast'
@@ -11308,6 +11479,7 @@ float4 main(PS_IN pin) {
         COLOR_TITLE)
     end
     local x = p2.x - 14 * s
+    local tabsR = vec2(x, p1.y + 18 * s)
     for i = 2, 1, -1 do
       local m = i == 1 and 'forecast' or 'map'
       local t = TEXTS.scrWeatherModes[m]
@@ -11318,6 +11490,7 @@ float4 main(PS_IN pin) {
       Drag.clickable(a, b, function() Desktop.weatherMode(m) end)
       x = a.x - 4 * s
     end
+    wxMark('mode', vec2(x + 4 * s, p1.y + 5 * s), tabsR, s)
     local okC, cs = pcall(ac.getConditionsSet)
     local nowName = weatherName(sim.weatherType)
     if mode == 'map' then
@@ -11334,12 +11507,14 @@ float4 main(PS_IN pin) {
         drawText(z[2], FONT_MONO, 9 * s, TMP.a:set(za.x + 4 * s, za.y + 1 * s), z[1] == 0 and YELLOW or COLOR_DIM)
         zx = zb.x + 4 * s
       end
+      wxMark('zoom', vec2(p1.x + 10 * s, y), vec2(zx - 4 * s, y + 13 * s), s)
       local st = big and TEXTS.scrRadarSmall or TEXTS.scrRadarBig
       local sw = textWidth(st, FONT_MONO, 9 * s)
       local sa, sb = vec2(p2.x - 10 * s - sw - 8 * s, y), vec2(p2.x - 10 * s, y + 13 * s)
       ui.drawRect(sa, sb, TMP.edge30, 2 * s)
       drawText(st, FONT_MONO, 9 * s, TMP.a:set(sa.x + 4 * s, sa.y + 1 * s), COLOR_DIM)
       Drag.clickable(sa, sb, function() filter.radarBig = not big end)
+      wxMark('size', sa, sb, s)
       local minute, sl = Radar.draw(vec2(p1.x + 10 * s, y + 18 * s), side, s, fc, big)
       if big then
         drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 10 * s, TMP.a:set(zx + 6 * s, y), YELLOW)
@@ -11404,6 +11579,7 @@ float4 main(PS_IN pin) {
           drawText(t, FONT_MONO, FS * s, TMP.a:set(cx - tw / 2, y), COLOR_DIM)
           Drag.clickable(vec2(cx - tw / 2 - 4 * s, y), vec2(cx, y + ROW * s), function() Desktop.weatherStep(-1) end)
           Drag.clickable(vec2(cx, y), vec2(cx + tw / 2 + 4 * s, y + ROW * s), function() Desktop.weatherStep(1) end)
+          wxMark('page', vec2(cx - tw / 2, y), vec2(cx + tw / 2, y + ROW * s), s)
         end
         y = y + ROW * s
         for k = (wxPage - 1) * WX_PAGE + 1, math.min(wxPage * WX_PAGE, #segs) do
@@ -11433,8 +11609,8 @@ float4 main(PS_IN pin) {
     out[#out + 1] = false
     local st = config.driverStint
     local rules = {
-      { TEXTS.evStops, config.pitStopsEnabled and tostring(config.pitStopsRequired) or '-' },
-      { TEXTS.evSwaps, config.swapOn() and tostring(config.swapRequired or 0) or '-' },
+      { TEXTS.evStops, config.pitStopsEnabled and tostring(config.stopsRequired()) or '-' },
+      { TEXTS.evSwaps, config.swapOn() and tostring(config.swapRequiredNow() or 0) or '-' },
       { TEXTS.evStint, (st.minMinutes > 0 or st.maxMinutes > 0) and string.format(TEXTS.evStintFmt, st.minMinutes, st.maxMinutes) or '-' },
       { TEXTS.evOrder, config.pitStopOrder },
       { TEXTS.evPitSpeed, string.format('%d km/h', config.pitSpeedLimit or 0) },
@@ -11572,7 +11748,7 @@ float4 main(PS_IN pin) {
         local l = sel.laps[k]
         local t, d = lapCells(l, 336)
         local cells = { { tostring(l.lap) .. (l.pit and ' P' or ''), 246, l.pit and YELLOW or COLOR_TITLE }, t, d }
-        for q = 1, 3 do cells[#cells + 1] = { secs(l.s and l.s[q]), 386 + q * 48, COLOR_TITLE, true } end
+        for q = 1, 3 do cells[#cells + 1] = { secs(l.s and l.s[q]), 386 + q * 48, l.valid and COLOR_TITLE or RED, true } end
         local cl = cmp and cmp.laps[k] or nil
         if cl then
           local ct, cd = lapCells(cl, 640)
@@ -11630,7 +11806,7 @@ float4 main(PS_IN pin) {
         { lapTime(l.ms), 118, col, true },
         { not l.valid and TEXTS.lapTag.cut or l.pit and TEXTS.lapTag.pit or (l.ms == best and TEXTS.lapTag.best) or string.format('%+.3f', (l.ms - best) / 1000),
           172, not l.valid and RED or (l.ms == best and GREEN) or (l.pit and COLOR_DIM) or RED, true } }
-      for q = 1, 3 do cells[#cells + 1] = { secs(l.s[q]), 172 + q * 48, COLOR_TITLE, true } end
+      for q = 1, 3 do cells[#cells + 1] = { secs(l.s[q]), 172 + q * 48, l.valid and COLOR_TITLE or RED, true } end
       row(p1, y, s, cells)
       y = y + ROW * s
     end
@@ -11705,12 +11881,12 @@ float4 main(PS_IN pin) {
     drawText(TEXTS.scrObligations, FONT_TITLE, 9 * s, TMP.a:set(x0, y), COLOR_DIM)
     y = y + ROW * s
     local cw = (p2.x - p1.x - 28 * s - CHIP_GAP * s) / 2
-    local req = config.pitStopsRequired
-    local inRace = sim.raceSessionType == ac.SessionType.Race
+    local req = config.stopsRequired()
     local stopsOn = config.pitStopsEnabled and req > 0
     local stops = stopsOn and string.format('%d / %d', PitRecord.stops, req) or ''
-    local stopsLight = not (stopsOn and inRace) and COLOR_OFF or (PitRecord.stops >= req and GREEN or YELLOW)
-    local swapReq = config.swapRequired and config.swapRequired > 0 and config.swapRequired or nil
+    local stopsLight = not stopsOn and COLOR_OFF or (PitRecord.stops >= req and GREEN or YELLOW)
+    local swapNow = config.swapRequiredNow()
+    local swapReq = swapNow and swapNow > 0 and swapNow or nil
     local swaps = swapReq and string.format('%d / %d', SwapRecord.validNow(), swapReq) or ''
     local swapsLight = not (swapReq and config.swapOn()) and COLOR_OFF or (SwapRecord.validNow() >= swapReq and GREEN or YELLOW)
     local pit = Panel.cellPit()
@@ -11754,8 +11930,8 @@ float4 main(PS_IN pin) {
     local ws, we = PitStops.window()
     local rule = config.driverStint
     local life = CarRead.tyreLife(car, 0, state.tyreLineKm[0] or 0)
-    return string.format('%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d', config.pitStopsEnabled and 1 or 0, config.pitStopsRequired or 0,
-      (config.swapOn() and config.swapRequired) and 1 or 0, config.swapRequired or 0, rule.minMinutes or 0, rule.maxMinutes or 0,
+    return string.format('%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d', config.pitStopsEnabled and 1 or 0, config.stopsRequired(),
+      (config.swapOn() and config.swapRequiredNow()) and 1 or 0, config.swapRequiredNow() or 0, rule.minMinutes or 0, rule.maxMinutes or 0,
       math.floor(ws or 0), math.floor(we or 0), math.floor(math.max(sessionElapsedMs() - PitStops.windowTime(), 0) / 1000) * 1000,
       state.tyreLaps[0] or 0, life and math.floor(life) or -1, CarRead.num(sim.rainWetness) > 0.05 and 1 or 0, math.floor(CarRead.num(sim.roadGrip) * 100))
   end
@@ -14238,7 +14414,7 @@ local drawDesktopUI = (function()
     local pen = Panel.cellPenalties()
     local rows = {
       { TEXTS.scrPosition, me and ('P' .. me.pos .. (me.class and string.format(TEXTS.posClassFmt, me.classPos, me.class) or '')) or '-' },
-      { TEXTS.lobbyStops, string.format('%d / %d', PitRecord.stops, config.pitStopsRequired) },
+      { TEXTS.lobbyStops, string.format('%d / %d', PitRecord.stops, config.stopsRequired()) },
       { TEXTS.scrPending, pen and pen.value or '-' },
       { TEXTS.lobbyKmr, string.format('%s / %d - %s', Audit.points and tostring(Audit.points) or '-', config.kmrPoints.limit,
         Audit.rating and Audit.num(Audit.rating) or '-') },
@@ -14931,6 +15107,8 @@ function script.update(dt)
     ac.log(string.format('race-control: session start (index %d%s%s)', sim.currentSessionIndex,
       state.sessionStartPending and ', start event' or '', transition and '' or ', script start'))
     state.sessionStartPending = false
+    RecordSync.base.forecastNew()
+    RecordSync.base.serverNew()
     if transition then
       Record.fresh()
       state.redFlag = nil
@@ -14984,6 +15162,7 @@ function script.update(dt)
     Audit.load()
     WrongWay.reset()
     PitBox.reset()
+    PitBox.baseNew()
     state.swap.swapInfo = nil
     state.tow.jumpPending = false
     state.tow.repairDone = false
@@ -15095,6 +15274,7 @@ function script.update(dt)
     if lineFrame then l.lastLap = lapCount end
     Start.update(car)
     Flags.update(car, lineFrame)
+    TrackList.update()
     if state.ui.clock >= RaceTable.nextT then
       RaceTable.nextT = state.ui.clock + 0.25
       RaceTable.refresh()
@@ -15200,6 +15380,7 @@ function script.update(dt)
     Start.update(car)
     Flags.officialStart(car, g)
     Flags.update(car, lineFrame)
+    TrackList.update()
     RaceTable.update(car, lineFrame, viaPit)
     CarState.update(car, lineFrame)
     DsqFlow.update(car, lineFrame)
