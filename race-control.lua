@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V180 - 2026.10.14'
+local RC_VERSION = 'V181 - 2026.10.14'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1062,8 +1062,10 @@ local state = {
   pitDsqActive = false,
   dtDsqActive = false,
   onJumped = {},
+  onSessionReset = {},
   sessionStartPending = false,
   jumpSinceUpdate = false,
+  sessionResetDue = false,
   kmrMessages = {},
   tyreLaps = { [0] = 0, 0, 0, 0 },
   tyreKm = { [0] = 0, 0, 0, 0 },
@@ -1160,8 +1162,11 @@ ac.onSessionStart(function(index, restarted)
 end)
 ac.onCarJumped(0, function()
   state.jumpSinceUpdate = true
-  if state.lastSessionIndex ~= -1 and (sim.currentSessionIndex ~= state.lastSessionIndex or state.sessionStartPending) then
-    ac.log('race-control: car reset by the session start (not a tow)')
+  local late = state.sessionResetDue
+  if state.lastSessionIndex ~= -1 and (sim.currentSessionIndex ~= state.lastSessionIndex or state.sessionStartPending or late) then
+    state.sessionResetDue = false
+    ac.log('race-control: car reset by the session start (not a tow)' .. (late and ', after the start was taken' or ''))
+    if late then for _, fn in ipairs(state.onSessionReset) do fn() end end
     return
   end
   for _, fn in ipairs(state.onJumped) do fn() end
@@ -3314,6 +3319,7 @@ do
     P.prog, P.broken = 0, true
     P.trace = {}
   end
+  state.onSessionReset[#state.onSessionReset + 1] = function() P.sp = nil end
   ac.onCarCollision(0, function()
     local t = serverTimeMs()
     if t - P.crashT >= CRASH_GAP * 1000 then P.info.crash = P.info.crash + 1 end
@@ -5437,7 +5443,10 @@ do
     if #all == 0 then return end
     baseLoad()
     local wrote = false
-    for i = 0, presetCount() - 1 do
+    local cur, order = gamePreset(), {}
+    for i = 0, presetCount() - 1 do if i ~= cur then order[#order + 1] = i end end
+    order[#order + 1] = cur
+    for _, i in ipairs(order) do
       local parts = {}
       for _, sp in ipairs(all) do
         if sp.name and not sp.readOnly then
@@ -5491,7 +5500,7 @@ do
     local r = box.repair
     return table.concat({ box.auto == nil and '-' or box.auto and 1 or 0, box.touched and 1 or 0, box.presetIdx or '-',
       math.floor(box.fuel), box.compound or '-', box.tyres, (r.suspension and 's' or '') .. (r.powertrain and 'p' or '') .. (r.body and 'b' or ''),
-      table.concat(rows, ','), table.concat(press, ','), PitControl.presetsBody() }, ';')
+      table.concat(rows, ','), table.concat(press, ','), PitControl.presetsBody(), box.lastPreset or '-' }, ';')
   end
   local function selApply(body, seq, from)
     local box = PitControl.box
@@ -5512,6 +5521,8 @@ do
     for n, v in f[8]:gmatch('(%d+)=(%-?%d+)') do box.preset['set:' .. n] = tonumber(v) end
     for k, v in f[9]:gmatch('([%w_]+):(%-?%d+)') do box.setupPress[k] = tonumber(v) end
     if f[10] then PitControl.presetsFromRecord(f[10]) end
+    local last = tonumber(f[11] or '') or box.presetIdx
+    if last and last >= 0 and last < presetCount() then box.lastPreset = last end
     box.imported = 'record'
     selSeq, selSig = seq or 0, selBody()
     ac.log('race-control: pit stop: the box back from the car record (' .. from .. '): ' .. selSig)
@@ -5545,6 +5556,7 @@ do
       and cause ~= 'place'
     if cause ~= 'place' and not PitControl.practiceReset then CarState.teleportBack() end
   end
+  state.onSessionReset[#state.onSessionReset + 1] = function() newPresence('session', true) end
   function PitControl.sessionStart(transition)
     local _, _, source = Record.load('car')
     newPresence(transition and 'session' or source == 'store' and 'reload' or 'connection', transition)
@@ -6344,12 +6356,14 @@ do
   PitBox.setupPress = {}
   PitBox.tab = 'stop'
   PitBox.presetIdx = nil
+  PitBox.lastPreset = nil
   local presetCount, baseValue = PitControl.presetCount, PitControl.baseValue
   PitBox.presetCount, PitBox.presetValue, PitBox.baseValue = PitControl.presetCount, PitControl.presetValue, PitControl.baseValue
   function PitBox.presetIndex()
     local n = presetCount()
     if n <= 1 then return 0 end
     local i = PitBox.presetIdx
+    if i == nil then i = PitBox.lastPreset end
     if i == nil then i = num(sim.currentQuickPitPreset) end
     return math.min(math.max(math.floor(i), 0), n - 1)
   end
@@ -6611,6 +6625,7 @@ do
     elseif what == 'strategy' then
       if dir > 0 then
         PitBox.presetIdx = (PitBox.presetIndex() + 1) % presetCount()
+        PitBox.lastPreset = PitBox.presetIdx
         PitBox.preset = {}
         PitControl.importPreset(PitBox.presetIdx)
         ac.log(string.format('race-control: pit stop: preset %d of the quick pit menu chosen for the stop (row of the box)', PitBox.presetIdx + 1))
@@ -6624,6 +6639,7 @@ do
     elseif what:sub(1, 7) == 'preset:' then
       if dir > 0 then
         PitBox.presetIdx = tonumber(what:sub(8))
+        PitBox.lastPreset = PitBox.presetIdx
         PitBox.preset = {}
         PitControl.importPreset(PitBox.presetIdx)
         PitBox.touched = true
@@ -6681,7 +6697,7 @@ do
     local car = ac.getCar(0)
     if not car then return end
     if b.preset and b.preset >= 0 and b.preset < presetCount() then
-      PitBox.presetIdx = b.preset
+      PitBox.presetIdx, PitBox.lastPreset = b.preset, b.preset
       PitControl.importPreset(b.preset)
     end
     if b.fuel then PitBox.fuel = math.max(0, math.min(b.fuel, math.max(num(car.maxFuel) - num(car.fuel), 0))) end
@@ -6735,12 +6751,16 @@ local PitSpeed = {
   over = false,
   annul = false,
   maxKmh = 0,
+  afterJump = false,
 }
+state.onJumped[#state.onJumped + 1] = function() PitSpeed.afterJump = true end
 function PitSpeed.update(car, inPit, lapCount)
+  if PitSpeed.afterJump and CarRead.num(car.speedKmh) < 1 then PitSpeed.afterJump = false end
+  local measured = not PitSpeed.afterJump
   if inPit then
     PitSpeed.entryLap = PitSpeed.entryLap or lapCount
     local limit = config.pitSpeedLimit
-    if limit > 0 and car.speedKmh > limit + config.pitSpeedTolerance and not state.list.jumped then
+    if limit > 0 and car.speedKmh > limit + config.pitSpeedTolerance and measured then
       if not PitSpeed.over then
         PitSpeed.over = true
         ac.log(string.format('race-control: pit lane speeding %.1f km/h (limit %d + %d)', car.speedKmh, limit,
@@ -6749,7 +6769,7 @@ function PitSpeed.update(car, inPit, lapCount)
       PitSpeed.maxKmh = math.max(PitSpeed.maxKmh, car.speedKmh)
     end
     local kmr = config.kmrPitSpeed
-    if kmr > 0 and car.speedKmh > kmr and not state.list.jumped and not PitSpeed.annul then
+    if kmr > 0 and car.speedKmh > kmr and measured and not PitSpeed.annul then
       PitSpeed.annul = true
       PitSpeed.maxKmh = math.max(PitSpeed.maxKmh, car.speedKmh)
       ac.log(string.format('race-control: pit pass above the KMR limit %.1f km/h (limit %d): payment annulled', car.speedKmh,
@@ -16217,6 +16237,7 @@ function script.update(dt)
       r.class, r.lapsLeft, r.text, r.detail, r.beyondSince, r.waived = 'normal', nil, nil, nil, nil, nil
       for i = 0, 3 do TyreUse.fitted(i) end
       PitSpeed.entryLap, PitSpeed.over, PitSpeed.annul, PitSpeed.maxKmh = nil, false, false, 0
+      state.sessionResetDue = not jumpedNow
     end
     Lap.sessionStart(transition)
     lapCount = Lap.count
@@ -16290,6 +16311,7 @@ function script.update(dt)
     state.ui.lastSeq = l.seq
     state.ui.notice = nil
   end
+  if state.sessionResetDue and CarRead.num(car.speedKmh) > 5 then state.sessionResetDue = false end
   CarControls.update(dt)
   Diag.update(car)
   CarRead.updateMotion(car)
