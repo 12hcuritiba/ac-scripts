@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V176 - 2026.10.14'
+local RC_VERSION = 'V177 - 2026.10.14'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -6126,21 +6126,13 @@ do
     for _, r in ipairs({ 'suspension', 'powertrain', 'body', 'mode' }) do rows[#rows + 1] = r end
     return rows
   end
-  local function presetChanges(all4)
+  local function presetChanges()
     local out = {}
     for _, sp in ipairs(presetSpinners()) do
       local v = PitBox.preset[sp.key]
-      if v and v ~= sp.value and (sp.type ~= 'pressure' or all4) then
-        out[#out + 1] = { name = sp.name, value = v, type = sp.type, wheel = sp.wheel }
-      end
+      if v and v ~= sp.value then out[#out + 1] = { name = sp.name, value = v, type = sp.type, wheel = sp.wheel } end
     end
     return out
-  end
-  local fourTyres = PitControl.fourTyres
-  local function dropPressure()
-    for _, sp in ipairs(presetSpinners()) do
-      if sp.type == 'pressure' then PitBox.preset[sp.key] = nil end
-    end
   end
   local function button(name, key, period)
     return ac.ControlButton('amxracing.race-control/Pit stop ' .. name, { keyboard = { key = key }, period = period })
@@ -6260,7 +6252,7 @@ do
     for k, v in pairs(PitBox.setupPress) do p.setupPress[k] = v end
     p.pressRows = 0
     p.wing = false
-    for _, c in ipairs(presetChanges(tyres == ALL_TYRES)) do
+    for _, c in ipairs(presetChanges()) do
       p.preset[#p.preset + 1] = c
       if c.type == 'pressure' then p.pressRows = p.pressRows + 1 end
       if c.type == 'wing' then p.wing = true end
@@ -6292,10 +6284,8 @@ do
       local n = 0
       for _ in pairs(list) do n = n + 1 end
       if n > 0 then PitBox.compound = ((PitBox.compound or num(car.compoundIndex)) + dir) % n end
-      if not fourTyres(car) then dropPressure() end
     elseif what == 'tyres' then
       PitBox.tyres = (PitBox.tyres - 1 + dir) % ALL_TYRES + 1
-      if not fourTyres(car) then dropPressure() end
     elseif what == 'mode' then
       PitBox.auto = not PitBox.isAuto()
       return
@@ -6318,7 +6308,6 @@ do
     elseif what:sub(1, 4) == 'set:' then
       for _, sp in ipairs(presetSpinners()) do
         if sp.key == what then
-          if sp.type == 'pressure' and not fourTyres(car) then return end
           PitBox.preset[what] = math.max(sp.min, math.min((PitBox.preset[what] or sp.value) + dir, sp.max))
         end
       end
@@ -10733,7 +10722,7 @@ do
     if #spinners > 0 then
       local count, seen = {}, {}
       for _, sp in ipairs(spinners) do count[sp.type] = (count[sp.type] or 0) + 1 end
-      local tyresOn = PitControl.fourTyres(car)
+      local tyresOn = #PitBox.TYRE_CHOICES[p.tyres][2] > 0
       for _, sp in ipairs(spinners) do
         seen[sp.type] = (seen[sp.type] or 0) + 1
         local names4 = count[sp.type] == 4 and { 'FL', 'FR', 'RL', 'RR' } or nil
