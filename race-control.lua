@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V177 - 2026.10.14'
+local RC_VERSION = 'V178 - 2026.10.14'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -6094,6 +6094,27 @@ do
     end
     return nil
   end
+  function PitBox.pressureReadOnly()
+    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    local out, pressures, seen = {}, 0, 0
+    for _, sp in ipairs(all) do
+      if sp.type == 'pressure' then pressures = pressures + 1 end
+    end
+    for _, sp in ipairs(all) do
+      if sp.type == 'pressure' then
+        seen = seen + 1
+        local wheel = PitBox.spinnerWheel(sp.name) or (pressures == 4 and WHEELS[seen - 1]) or nil
+        if wheel and sp.readOnly then out[wheel] = true end
+      end
+    end
+    return out
+  end
+  function PitBox.wingReadOnly()
+    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+      if sp.type == 'wing' and sp.readOnly then return true end
+    end
+    return false
+  end
   local loggedSession = nil
   function PitBox.logSpinners(why)
     local parts = {}
@@ -6308,6 +6329,7 @@ do
     elseif what:sub(1, 4) == 'set:' then
       for _, sp in ipairs(presetSpinners()) do
         if sp.key == what then
+          if sp.type == 'pressure' and not PitControl.fourTyres(car) then return end
           PitBox.preset[what] = math.max(sp.min, math.min((PitBox.preset[what] or sp.value) + dir, sp.max))
         end
       end
@@ -10719,27 +10741,30 @@ do
     end
     local spinners = PitBox.presetSpinners()
     if #spinners > 0 then PitBox.logSpinnersOnce() end
-    if #spinners > 0 then
-      local count, seen = {}, {}
-      for _, sp in ipairs(spinners) do count[sp.type] = (count[sp.type] or 0) + 1 end
-      local tyresOn = #PitBox.TYRE_CHOICES[p.tyres][2] > 0
-      for _, sp in ipairs(spinners) do
-        seen[sp.type] = (seen[sp.type] or 0) + 1
-        local names4 = count[sp.type] == 4 and { 'FL', 'FR', 'RL', 'RR' } or nil
-        local wheel = sp.type == 'pressure' and PitBox.spinnerWheel(sp.name) or nil
-        wheel = wheel and TEXTS.wheelCode[wheel] or wheel
-        local label = (sp.type == 'wing' and TEXTS.pitWing or TEXTS.pitPressure) .. ' '
-          .. (wheel or (names4 and TEXTS.wheelCode[names4[seen[sp.type]]]) or tostring(seen[sp.type]))
-        local on = sp.type == 'wing' or tyresOn
-        rows[#rows + 1] = { sp.key, label, on and ('< ' .. tostring(PitBox.preset[sp.key] or sp.value) .. ' >')
-          or tostring(sp.value), nil, off = not on }
+    local count, seen = {}, {}
+    for _, sp in ipairs(spinners) do count[sp.type] = (count[sp.type] or 0) + 1 end
+    local all4 = PitControl.fourTyres(car)
+    if (count.pressure or 0) == 0 then
+      local ro = PitBox.pressureReadOnly()
+      for wIdx = 0, 3 do
+        local w = PitBox.WHEELS[wIdx]
+        rows[#rows + 1] = { nil, TEXTS.pitPressure .. ' ' .. TEXTS.wheelCode[w],
+          string.format('%.1f', num(wh[wIdx] and wh[wIdx].tyrePressure)) .. (ro[w] and '  ro' or ''), nil }
       end
-    else
-      rows[#rows + 1] = { nil, TEXTS.pitPressureFront, string.format('%.1f  %.1f', num(wh[0] and wh[0].tyrePressure),
-        num(wh[1] and wh[1].tyrePressure)), nil }
-      rows[#rows + 1] = { nil, TEXTS.pitPressureRear, string.format('%.1f  %.1f', num(wh[2] and wh[2].tyrePressure),
-        num(wh[3] and wh[3].tyrePressure)), nil }
-      rows[#rows + 1] = { nil, TEXTS.pitWing, wing(), nil }
+    end
+    for _, sp in ipairs(spinners) do
+      seen[sp.type] = (seen[sp.type] or 0) + 1
+      local names4 = count[sp.type] == 4 and { 'FL', 'FR', 'RL', 'RR' } or nil
+      local wheel = sp.type == 'pressure' and PitBox.spinnerWheel(sp.name) or nil
+      wheel = wheel and TEXTS.wheelCode[wheel] or wheel
+      local label = (sp.type == 'wing' and TEXTS.pitWing or TEXTS.pitPressure) .. ' '
+        .. (wheel or (names4 and TEXTS.wheelCode[names4[seen[sp.type]]]) or tostring(seen[sp.type]))
+      local on = sp.type == 'wing' or all4
+      rows[#rows + 1] = { sp.key, label, on and ('< ' .. tostring(PitBox.preset[sp.key] or sp.value) .. ' >')
+        or tostring(sp.value), nil, off = not on }
+    end
+    if (count.wing or 0) == 0 then
+      rows[#rows + 1] = { nil, TEXTS.pitWing, wing() .. (PitBox.wingReadOnly() and '  ro' or ''), nil }
     end
     rows[#rows + 1] = { 'suspension', TEXTS.pitRepairSuspension, nil, p.times.suspension }
     rows[#rows + 1] = { 'powertrain', TEXTS.pitRepairPowertrain, nil, p.times.powertrain }
