@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V174 - 2026.10.14'
+local RC_VERSION = 'V175 - 2026.10.14'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -5190,6 +5190,7 @@ do
   local SERVICE_LOCK_EXTRA = 1
   local GAME_QUIET = 1
   local num = CarRead.num
+  local gameSet = nil
   local function settling() return state.ui.clock < PitControl.settleUntil end
   PitControl.settling = settling
   local function presetCount()
@@ -5376,13 +5377,17 @@ do
     newPresence(transition and 'session' or source == 'store' and 'reload' or 'connection', transition)
     PitControl.practiceReset, PitControl.changeSeen, PitControl.push, PitControl.presetsDue = false, false, nil, true
     PitControl.gameOn = false
+    gameSet = nil
     PitControl.baseNew()
   end
   function PitControl.drove() return PitControl.origin == 'driven' end
   local gameLogged = nil
   local function gameApply()
-    ac.disableQuickMenuPitstop(not PitControl.gameOn)
-    ac.disableExtraHUDElements('quickPitsMenu', true)
+    if gameSet ~= PitControl.gameOn then
+      gameSet = PitControl.gameOn
+      ac.disableQuickMenuPitstop(not PitControl.gameOn)
+      ac.disableExtraHUDElements('quickPitsMenu', true)
+    end
     if gameLogged ~= PitControl.gameOn then
       gameLogged = PitControl.gameOn
       local wh, parts = ac.getCar(0).wheels, {}
