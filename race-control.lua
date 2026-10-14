@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V178 - 2026.10.14'
+local RC_VERSION = 'V179 - 2026.10.14'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1912,6 +1912,11 @@ do
     RecordSync.askedT = state.ui.clock
     OnlineQueue.push(sendRecordEvent, { rcCar = ownSlot(), rcList = SYNC_REQUEST }, nil)
   end
+  local ASK_BASE_WAIT = 2
+  function RecordSync.askLater()
+    RecordSync.askLaterT = state.ui.clock + ASK_BASE_WAIT
+    RecordSync.baseGaveOwn = false
+  end
   local function keepPeer(car, list, seq, text)
     local byCar = RecordSync.peers[car] or {}
     RecordSync.peers[car] = byCar
@@ -1970,6 +1975,14 @@ do
     onRecordText(msg.rcCar, list, table.concat(chunks), sender)
   end
   function RecordSync.update()
+    if RecordSync.askLaterT and state.ui.clock >= RecordSync.askLaterT then
+      RecordSync.askLaterT = nil
+      if RecordSync.baseGaveOwn then
+        ac.log('race-control: records of this car from the base online: the other drivers not asked')
+      else
+        RecordSync.askOwn()
+      end
+    end
     for list, best in pairs(Trust.settled()) do
       local rec = Record.decode(best.text)
       if rec then RecordSync.pending[list] = { body = rec.body, seq = rec.seq, key = rec.key } end
@@ -2055,6 +2068,7 @@ do
     end
     local function keep(rec, from)
       local p = RecordSync.pending[rec.list]
+      if from == 'own car' then RecordSync.baseGaveOwn = true end
       if not p or rec.seq >= p.seq then
         RecordSync.pending[rec.list] = { body = rec.body, seq = rec.seq, key = rec.key }
         ac.log('race-control: record ' .. rec.list .. ' ' .. rec.seq .. ' from the base online (' .. from .. ')')
@@ -5358,9 +5372,9 @@ do
   function PitControl.drove() return PitControl.origin == 'driven' end
   local gameLogged = nil
   local function gameApply()
+    ac.disableQuickMenuPitstop(not PitControl.gameOn)
     if gameSet ~= PitControl.gameOn then
       gameSet = PitControl.gameOn
-      ac.disableQuickMenuPitstop(not PitControl.gameOn)
       ac.disableExtraHUDElements('quickPitsMenu', true)
     end
     if gameLogged ~= PitControl.gameOn then
@@ -5408,6 +5422,7 @@ do
     for _, c in ipairs(req) do parts[#parts + 1] = c.name .. '=' .. math.floor(c.value) end
     return req, table.concat(parts, ';')
   end
+  local TEST_PRESS_ALL_PRESETS = true
   local lastReq = nil
   local function writePreset(p, done)
     local box = PitControl.box
@@ -5422,6 +5437,19 @@ do
     sending = true
     AppLink.setPreset(req, p.presetIdx)
     sending = false
+    if TEST_PRESS_ALL_PRESETS then
+      local parts = {}
+      for _, c in ipairs(req) do
+        if c.type == 'pressure' or c.type == 'wing' then parts[#parts + 1] = c.name .. '=' .. math.floor(c.value) end
+      end
+      local text = table.concat(parts, ';')
+      if text ~= '' then
+        for i = 0, presetCount() - 1 do
+          if i ~= p.presetIdx then AppLink.writePreset(i, text) end
+        end
+        ac.log('race-control: TEST (to be removed): the pressure and the wing of the stop written in every preset of the game')
+      end
+    end
   end
   local function planText(p)
     return string.format('%.1f/%d/%d/%s%s%s', p.fuel, p.compound, p.tyres, p.repair.suspension and 's' or '',
@@ -5505,9 +5533,9 @@ do
     end
     if p.game then
       ac.log('race-control: pit stop: preset written for the game (' .. (p.all4game and '4 tyres by the game' or 'wing or preset') .. ')')
+      PitControl.gameOn, PitControl.gameUsed = true, true
+      gameApply()
       writePreset(p, function()
-        PitControl.gameOn, PitControl.gameUsed = true, true
-        gameApply()
         pushCar(ac.getCar(0))
       end)
     end
@@ -5610,9 +5638,13 @@ do
       elseif not state.pitService and #(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) > 0 then
         PitControl.lobbyDue = false
         PitControl.baseNew()
-        box.preset = {}
-        ac.log('race-control: pit stop: the car at its place coming from the menu of the game, the preset of the setup brought to the box')
-        PitControl.importPreset(box.presetIndex())
+        if box.imported == 'record' then
+          ac.log('race-control: pit stop: the car at its place coming from the menu of the game; the box of the car record kept (R16)')
+        else
+          box.preset = {}
+          ac.log('race-control: pit stop: the car at its place coming from the menu of the game, the preset of the setup brought to the box')
+          PitControl.importPreset(box.presetIndex())
+        end
       end
     end
     local sv = state.pitService
@@ -6311,8 +6343,15 @@ do
       PitBox.auto = not PitBox.isAuto()
       return
     elseif what == 'strategy' then
-      PitBox.tab, PitBox.row = 'strategy', PitBox.presetIndex() + 1
-      return
+      if dir > 0 then
+        PitBox.presetIdx = (PitBox.presetIndex() + 1) % presetCount()
+        PitBox.preset = {}
+        PitControl.importPreset(PitBox.presetIdx)
+        ac.log(string.format('race-control: pit stop: preset %d of the quick pit menu chosen for the stop (row of the box)', PitBox.presetIdx + 1))
+      else
+        PitBox.tab, PitBox.row = 'strategy', PitBox.presetIndex() + 1
+        return
+      end
     elseif what == 'back' then
       PitBox.tab, PitBox.row = 'stop', 1
       return
@@ -15969,8 +16008,10 @@ function script.update(dt)
     state.pit.stopDone = stopWindow == 'done'
     state.pit.stopMissed = stopWindow == 'missed'
     SwapRecord.apply(Record.load('swap'))
-    RecordSync.askOwn()
-    RecordSync.base.askOwn()
+    if not transition then
+      RecordSync.base.askOwn()
+      RecordSync.askLater()
+    end
     ac.log(string.format('race-control: laps of the Racing Control %d (lap %d), of the game %d, server time %d ms', lapCount, Lap.number(),
       CarRead.num(car.lapCount), serverTimeMs()))
     state.ui.lastSeq = l.seq
