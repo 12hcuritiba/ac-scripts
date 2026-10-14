@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V173 - 2026.10.13'
+local RC_VERSION = 'V174 - 2026.10.14'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1880,9 +1880,9 @@ do
   local SYNC_PART = 120
   local SYNC_ANSWER_WINDOW = 30
   local SYNC_REQUEST = 255
-  local SYNC_LISTS = { 'penalties', 'window', 'swap', 'track', 'car', 'gain', 'pit', 'stint', 'pass', 'kmr', 'stopwindow', 'lap' }
+  local SYNC_LISTS = { 'penalties', 'window', 'swap', 'track', 'car', 'gain', 'pit', 'stint', 'pass', 'kmr', 'stopwindow', 'lap', 'boxsel' }
   local SYNC_CODES = { penalties = 1, window = 2, swap = 3, track = 4, car = 5, gain = 6, pit = 7, stint = 8, pass = 9, kmr = 10,
-    stopwindow = 11, lap = 12 }
+    stopwindow = 11, lap = 12, boxsel = 13 }
   local sendRecordEvent = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.rec'),
     rcCar = ac.StructItem.uint8(),
@@ -2147,7 +2147,7 @@ do
     end
   end
   local BEST_GAP = 120
-  B.best = { value = nil, nextT = 0, busy = false }
+  B.best = { value = nil, nextT = 0, busy = false, done = false }
   function B.trackKey()
     local layout = tostring(ac.getTrackLayout and ac.getTrackLayout() or '')
     return (tostring(ac.getTrackID() or '') .. (layout ~= '' and ('-' .. layout) or '')):gsub('[|%s]', '_')
@@ -2155,12 +2155,13 @@ do
   function B.carKey() return (tostring(ac.getCarID(0) or ''):gsub('[|%s]', '_')) end
   function B.bestUpdate()
     local W = B.best
-    if not on() or W.busy or state.ui.clock < W.nextT then return end
+    if not on() or W.done or W.busy or state.ui.clock < W.nextT then return end
     W.busy, W.nextT = true, state.ui.clock + BEST_GAP
     WebQueue.request('GET', config.baseUrl .. '/v1/best?track=' .. urlEncode(B.trackKey()) .. '&car=' .. urlEncode(B.carKey()), nil, nil,
       function(err, res)
         W.busy = false
         if err or not res or tonumber(res.status) ~= 200 then return end
+        W.done = true
         local ms, s = tostring(res.body or ''):match('^OK|(%d+)|([%d/]*)')
         if not ms then W.value = nil return end
         local sec = {}
@@ -2197,6 +2198,13 @@ do
           ac.log(string.format('race-control: %s from the tool of the organization: %d (key of the server: %s)', name, v, tostring(config[field])))
           config[field] = v
         end
+      end
+      local org, tv = tonumber(body:match('staffOrg=(%d+)')), tonumber(body:match('staffTv=(%d+)'))
+      if org and tv and (org ~= config.staffPits.org or tv ~= config.staffPits.tv) then
+        ac.log(string.format('race-control: staffPits from the tool of the organization: org:%d | tv:%d (key of the server: org:%d | tv:%d)', org, tv,
+          config.staffPits.org, config.staffPits.tv))
+        config.staffPits.org, config.staffPits.tv = org, tv
+        CarRead.staffIndex, CarRead.staffLogged = nil, {}
       end
       local req = tonumber(body:match('pitStopsRequired=(%-?%d+)'))
       local race = ac.SessionType.Race
@@ -2347,11 +2355,14 @@ do
     if not on() or state.ui.clock < T.nextT then return end
     T.nextT = state.ui.clock + STRAT_GAP
     local parts = {}
+    local box = B.pitBox
+    local cur = math.floor(tonumber(sim.currentQuickPitPreset) or 0)
+    local function value(sp, i, live) return math.floor(tonumber(box and box.baseValue(sp, i) or live) or 0) end
     for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
       local vals = {}
-      if type(sp.values) == 'table' then for k = 1, #sp.values do vals[#vals + 1] = tostring(math.floor(tonumber(sp.values[k]) or 0)) end end
+      if type(sp.values) == 'table' then for k = 1, #sp.values do vals[#vals + 1] = tostring(value(sp, k - 1, sp.values[k])) end end
       parts[#parts + 1] = table.concat({ clean(sp.name), clean(sp.type), tostring(math.floor(tonumber(sp.min) or 0)), tostring(math.floor(tonumber(sp.max) or 0)),
-        tostring(math.floor(tonumber(sp.value) or 0)), table.concat(vals, '/') }, ',')
+        tostring(value(sp, cur, sp.value)), table.concat(vals, '/') }, ',')
     end
     if #parts > 0 then
       local body = tostring(sim.currentQuickPitPreset or 0) .. '|' .. table.concat(parts, ';')
@@ -2456,7 +2467,7 @@ do
           end
         end
         B.pitBox.remote({ fuel = tonumber(f.fuel), compound = tonumber(f.compound), tyres = tonumber(f.tyres), repair = f.repair,
-          preset = tonumber(f.preset), auto = f.mode == 'auto' and true or f.mode == 'manual' and false or nil, start = f.start == '1', press = f.press })
+          preset = tonumber(f.preset), auto = (f.mode == 'auto' and 1 or f.mode == 'manual' and 0 or nil), start = f.start == '1', press = f.press })
         B.box.nextT, B.box.sig = state.ui.clock + 1, nil
         rcLog(TEXTS.rc.pitPlan, 'box from the Racing Room: ' .. box .. (list ~= '' and ('; ' .. list) or ''))
         if f.start == '1' then showNotice(TEXTS.rcTitle, TEXTS.remotePitStart, nil, 6) end
@@ -2464,6 +2475,7 @@ do
         if #changes == 0 then return end
         if not (B.app and B.app.alive) then P.done = nil; ac.storage['rc.pitplan'] = ''; return end
         B.app.setPreset(changes, tonumber(preset) or 0)
+        PitControl.presetsCheck()
         B.strat.nextT, B.strat.sig = state.ui.clock + 2, nil
         rcLog(TEXTS.rc.pitPlan, string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
       end
@@ -2531,6 +2543,11 @@ do
     ac.broadcastSharedEvent(APP_REQUEST, text)
     ac.log('race-control: pit stop preset sent to the app: ' .. text)
     if AppLink.sent then AppLink.sent(changes, preset) end
+  end
+  function AppLink.writePreset(preset, text)
+    local data = '#' .. math.floor(preset or 0) .. ';' .. text
+    ac.broadcastSharedEvent(APP_REQUEST, data)
+    ac.log('race-control: preset kept by the app: ' .. data)
   end
   local pingT = -1e9
   function AppLink.ping()
@@ -2652,6 +2669,7 @@ do
     if tostring(data or '') == '' then return end
     ac.log(string.format('race-control: pit stop preset written by the app (%s, %s, %s): %s', tostring(senderName),
       tostring(senderType), tostring(senderID), tostring(data)))
+    if tostring(data):sub(1, 1) == '#' then return end
     local cb = AppLink.onWritten
     AppLink.onWritten = nil
     if cb then cb(tostring(data)) end
@@ -3189,7 +3207,7 @@ do
   local CRASH_GAP = 1
   local SPIN_SETTLE = 1
   local SEND_GAP = 15
-  local P = { sp = nil, t = nil, raw = nil, prog = 1, start = nil, secT = {}, broken = false, trace = {}, lineT = -1e9,
+  local P = { sp = nil, t = nil, raw = nil, prog = 1, start = nil, open = false, secT = {}, broken = false, trace = {}, lineT = -1e9,
     info = nil, pit = { started = false, entered = false, left = false }, crashT = -1e9, spinning = false, calmT = nil }
   Lap.best = { ms = 0, trace = nil, s = {} }
   local function newInfo() return { crash = 0, cut = 0, spin = 0, pen = {} } end
@@ -3228,21 +3246,23 @@ do
   function Lap.number() return Lap.base + Lap.count end
   function Lap.save()
     Lap.seq = (Lap.seq or 0) + 1
-    Record.save('lap', Lap.seq, string.format('%d|%d|%s|%d|%d', Lap.number(), P.start and math.floor(P.start) or -1, why(Lap.marks),
-      (P.pit.started or P.pit.left) and 1 or 0, nameCode(ac.getDriverName(0))))
+    Record.save('lap', Lap.seq, string.format('%d|%d|%s|%d|%d|%d', Lap.number(), P.open and P.start and math.floor(P.start) or -1, why(Lap.marks),
+      (P.pit.started or P.pit.left) and 1 or 0, nameCode(ac.getDriverName(0)), P.open and 1 or 0))
   end
   local function apply(body, seq)
-    local n, start, m, out, driver = tostring(body or ''):match('^(%d+)|(%-?%d+)|(%a*)|?(%d?)|?(%d*)')
+    local n, start, m, out, driver, open = tostring(body or ''):match('^(%d+)|(%-?%d+)|(%a*)|?(%d?)|?(%d*)|?(%d?)')
     if not n then return end
     Lap.seq = math.max(Lap.seq or 0, seq or 0)
     Lap.base = tonumber(n) - Lap.count
-    if tonumber(start) >= 0 then P.start = tonumber(start) end
+    P.open = tonumber(start) >= 0 and open ~= '0'
+    P.start = P.open and tonumber(start) or nil
     Lap.marks.cut = Lap.marks.cut or m:find('C') ~= nil
     Lap.marks.overdue = Lap.marks.overdue or m:find('V') ~= nil
     Lap.marks.fuel = Lap.marks.fuel or m:find('F') ~= nil
     if out == '1' then P.pit.started = true elseif out == '0' then P.pit.started = false end
     P.recDriver = tonumber(driver)
-    ac.log(string.format('race-control: lap %d of the car taken back (start %s, marks %s)', tonumber(n), start, m ~= '' and m or '-'))
+    ac.log(string.format('race-control: lap %d of the car taken back (%s, marks %s)', tonumber(n), P.open and ('open, start ' .. start) or 'no lap open',
+      m ~= '' and m or '-'))
   end
   RecordSync.restorers.lap = function(body, seq) if (seq or 0) >= (Lap.seq or 0) then apply(body, seq) end end
   function Lap.sessionStart(transition)
@@ -3251,16 +3271,25 @@ do
     Lap.best, Lap.others = { ms = 0, trace = nil, s = {} }, {}
     P.sp, P.t, P.raw, P.prog, P.secT, P.broken, P.trace, P.lineT = nil, nil, nil, transition and 0 or 1, {}, false, {}, -1e9
     P.info, P.pit = newInfo(), { started = nil, entered = false, left = false, wasIn = nil }
-    P.start = serverTimeMs()
+    P.open = transition and not ac.getCar(0).isInPitlane or false
+    P.start = P.open and serverTimeMs() or nil
     if not transition then
-      P.start = serverTimeMs() - CarRead.num(ac.getCar(0).lapTimeMs)
       local body, seq = Record.load('lap')
       if body then apply(body, seq) end
+      local car = ac.getCar(0)
+      if not body and not car.isInPitlane then
+        P.open, P.start = true, serverTimeMs() - CarRead.num(car.lapTimeMs)
+        ac.log('race-control: lap: the script started with the car on the track and no record of the lap: the lap open, the next line closes it')
+      end
     end
     Lap.sentT, Lap.sentBest = -1e9, nil
   end
   function Lap.connected(car)
     if not car.isInPitlane then return end
+    if not P.open then
+      ac.log('race-control: lap: connection with the car in its box, no lap open: the next line opens it')
+      return
+    end
     local back = P.recDriver ~= nil and P.recDriver == nameCode(ac.getDriverName(0))
     P.prog = back and 0 or 1
     if back then P.broken, P.trace = true, {} end
@@ -3269,7 +3298,7 @@ do
   end
   state.onJumped[#state.onJumped + 1] = function()
     P.sp = nil
-    if state.list.prevInPit then return end
+    if state.list.prevInPit or not P.open then return end
     P.prog, P.broken = 0, true
     P.trace = {}
   end
@@ -3327,6 +3356,14 @@ do
     P.lineT = state.ui.clock
     Lap.save()
   end
+  local function open(car, t)
+    P.open, P.start, P.secT, P.broken, P.trace, P.info = true, t, {}, false, {}, newInfo()
+    Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel = false, false, false
+    P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
+    P.lineT = state.ui.clock
+    ac.log(string.format('race-control: line - lap %d opened (no lap open before)', Lap.number() + 1))
+    Lap.save()
+  end
   local function spinWatch(car)
     if CarRead.spinning(car) then
       if not P.spinning then P.info.spin = P.info.spin + 1 end
@@ -3364,7 +3401,11 @@ do
     P.pit.wasIn = car.isInPitlane == true
     spinWatch(car)
     local closed = false
-    if crossT or gameLine then
+    if (crossT or gameLine) and not P.open then
+      open(car, crossT or now)
+      P.prog = crossT and math.max(sp, 0) or 0
+      if crossT then along(0, sp, crossT, now) end
+    elseif crossT or gameLine then
       if P.prog >= HALF then
         close(car, crossT or now, car.isInPitlane or state.list.prevInPit)
         P.prog = crossT and math.max(sp, 0) or 0
@@ -3377,10 +3418,11 @@ do
     Lap.tell()
     return Lap.count, closed
   end
-  function Lap.currentMs() return P.start and math.max(serverTimeMs() - P.start, 0) or nil end
+  function Lap.currentMs() return P.open and P.start and math.max(serverTimeMs() - P.start, 0) or nil end
+  function Lap.isOpen() return P.open end
   function Lap.currentSectors()
     local out, prev = {}, P.start
-    if not prev or P.broken then return out end
+    if not P.open or not prev or P.broken then return out end
     for k = 1, #splits() do
       local v = P.secT[k]
       if not v or v < prev then break end
@@ -3388,17 +3430,6 @@ do
       prev = v
     end
     return out
-  end
-  function Lap.delta(car, scale)
-    local tr = Lap.best.trace
-    local now = Lap.currentMs()
-    if not tr or not now or P.broken then return nil end
-    local x = CarRead.num(car.splinePosition) * BINS
-    local i = math.floor(x)
-    local a = i >= 1 and tr[i] or 0
-    local b = tr[math.min(i + 1, BINS)] or a
-    local ref = (a + (b - a) * (x - i)) * (scale or 1)
-    return (now - ref) / 1000
   end
   function Lap.bestOf(laps)
     local b = { ms = 0, lap = nil, lapS = {}, s = {} }
@@ -3419,16 +3450,27 @@ do
     ac.StructItem.key('amxracing.race-control.lap'),
     lapN = ac.StructItem.uint16(),
     lapBest = ac.StructItem.uint32(),
+    lapSec = ac.StructItem.string(48),
   }, function(sender, msg)
     if not sender or sender.index == 0 then return end
-    Lap.others[sender.index] = { n = tonumber(msg.lapN) or 0, best = tonumber(msg.lapBest) or 0, t = state.ui.clock }
+    local s, k = {}, 0
+    for v in tostring(msg.lapSec or ''):gmatch('%d+') do s[k], k = tonumber(v), k + 1 end
+    Lap.others[sender.index] = { n = tonumber(msg.lapN) or 0, best = tonumber(msg.lapBest) or 0, s = s, t = state.ui.clock }
   end, nil, nil, { processPostponed = true })
   function Lap.tell()
-    local best = Lap.ownBest and Lap.ownBest() or 0
-    local sig = Lap.number() .. '|' .. best
+    local all = Lap.ownBestAll and Lap.ownBestAll() or { ms = 0, lapS = {} }
+    local best = all.ms or 0
+    local parts = {}
+    for k = 0, 15 do
+      local v = all.lapS and all.lapS[k]
+      if not v then break end
+      parts[#parts + 1] = tostring(math.floor(v))
+    end
+    local sec = table.concat(parts, '/')
+    local sig = Lap.number() .. '|' .. best .. '|' .. sec
     if sig == Lap.sentBest and state.ui.clock - Lap.sentT < SEND_GAP then return end
     Lap.sentBest, Lap.sentT = sig, state.ui.clock
-    OnlineQueue.push(sendLap, { lapN = math.min(Lap.number(), 65535), lapBest = math.floor(best) }, nil)
+    OnlineQueue.push(sendLap, { lapN = math.min(Lap.number(), 65535), lapBest = math.floor(best), lapSec = sec }, nil)
   end
   function Lap.of(i)
     if i == 0 then return Lap.number(), Lap.ownBest and Lap.ownBest() or 0 end
@@ -4808,6 +4850,11 @@ do
     saveBody(CarState.lastBody)
     ac.log('race-control: car state saved before the teleport')
   end
+  function CarState.teleportBack()
+    if CarState.restoring or not CarState.lastBody then return end
+    CarState.restoring, CarState.startT, CarState.teleport = true, state.ui.clock, true
+    CarState.pending = { body = CarState.lastBody, seq = CarState.seq, source = 'teleport' }
+  end
   local function suspSearch(car)
     local open = false
     for i, s in pairs(CarState.search) do
@@ -4903,6 +4950,7 @@ do
     CarState.lastBody = nil
     CarState.search = nil
     CarState.startT = state.ui.clock
+    CarState.teleport = false
     local body, seq, source = Record.load('car')
     CarState.seq = seq or 0
     if dropReset then
@@ -4959,12 +5007,12 @@ do
       end
     end
     if CarState.restoring then
-      local practice = sim.raceSessionType == ac.SessionType.Practice
+      local practice = sim.raceSessionType == ac.SessionType.Practice and not CarState.teleport
       if practice then
         CarState.restoring = false
         if CarState.pending then ac.log('race-control: car state not put back: practice resets on leaving') end
         CarState.pending = nil
-      elseif not CarRead.parked(car) then
+      elseif not CarRead.parked(car) and not (CarState.teleport and state.ui.clock - CarState.startT < 2) then
         CarState.restoring = false
         if CarState.search then ac.log('race-control: suspension not put back: the car left the pit place') end
         CarState.search = nil
@@ -4976,10 +5024,13 @@ do
         carApply(car, CarState.pending)
       elseif CarState.search then
         suspSearch(car)
+      elseif CarState.teleport and CarState.pending and CarState.pending.seq == CarState.appliedSeq then
+        CarState.restoring = false
       elseif state.ui.clock - CarState.startT > CAR_RESTORE_WINDOW then
         CarState.restoring = false
       end
       if CarState.restoring then return end
+      CarState.teleport = false
       CarState.prevParked = parked
       CarState.damageSig = damageSig(car)
       CarState.lastBody = carBody(car)
@@ -5128,6 +5179,541 @@ do
     r.class, r.text, r.detail = c.class, c.text, c.detail
   end
 end
+PitControl = { origin = 'connection', settleUntil = 0, snap = nil, atPlace = false, armed = false, reason = nil, gameOn = false,
+  push = nil, changeSeen = false, presetsDue = true }
+do
+  local SETTLE_SECONDS = 5
+  local PUSH_MAX = 0.3
+  local PUSH_NEAR = 0.2
+  local PRESETS_GAP = 2
+  local KEPT_AGAIN = 30
+  local SERVICE_LOCK_EXTRA = 1
+  local GAME_QUIET = 1
+  local num = CarRead.num
+  local function settling() return state.ui.clock < PitControl.settleUntil end
+  PitControl.settling = settling
+  local function presetCount()
+    local n = 1
+    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+      if type(sp.values) == 'table' then n = math.max(n, #sp.values) end
+    end
+    return n
+  end
+  PitControl.presetCount = presetCount
+  local function presetValue(sp, idx)
+    if type(sp.values) == 'table' and sp.values[idx + 1] ~= nil then return sp.values[idx + 1] end
+    return sp.value
+  end
+  PitControl.presetValue = presetValue
+  local function neutral(sp)
+    return (sp.type == 'fuel' or sp.type == 'repair') and 0 or sp.type == 'compound' and math.max(-1, num(sp.min)) or nil
+  end
+  local base, baseKey = {}, nil
+  local function driverKey() return 'rc.presetData.' .. tostring(ac.getCarID(0) or '') end
+  local function baseLoad()
+    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    local key = tostring(sim.currentSessionIndex) .. '|' .. #all
+    if key == baseKey then return end
+    baseKey, base = key, {}
+    local kept = {}
+    for i, name, v in tostring(ac.storage[driverKey()] or ''):gmatch('(%d+):([%w_]+)=(%-?%d+)') do
+      kept[tonumber(i)] = kept[tonumber(i)] or {}
+      kept[tonumber(i)][name] = tonumber(v)
+    end
+    local parts = {}
+    for i = 0, presetCount() - 1 do
+      base[i] = {}
+      for _, sp in ipairs(all) do
+        if sp.name and base[i][sp.name] == nil then
+          local v = presetValue(sp, i)
+          local n = neutral(sp)
+          if n then
+            if math.floor(num(v)) == n and kept[i] and kept[i][sp.name] then v = kept[i][sp.name] end
+            parts[#parts + 1] = string.format('%d:%s=%d', i, sp.name, math.floor(num(v)))
+          end
+          base[i][sp.name] = v
+        end
+      end
+    end
+    ac.storage[driverKey()] = table.concat(parts, ';')
+  end
+  function PitControl.baseValue(sp, idx)
+    baseLoad()
+    local v = base[idx] and base[idx][sp.name]
+    if v == nil then return presetValue(sp, idx) end
+    return v
+  end
+  local function baseCommit(changes, preset)
+    baseLoad()
+    local i = math.floor(preset or 0)
+    base[i] = base[i] or {}
+    for _, c in ipairs(changes) do if c.name then base[i][c.name] = math.floor(c.value) end end
+  end
+  function PitControl.baseNew() baseKey = nil end
+  local sending = false
+  AppLink.sent = function(changes, preset) if not sending then baseCommit(changes, preset) end end
+  local REPAIR_OF = { REPAIR_BODY = 'body', REPAIR_SUSPENSION = 'suspension', REPAIR_ENGINE = 'powertrain' }
+  function PitControl.importPreset(idx)
+    local box = PitControl.box
+    baseLoad()
+    local b = base[idx] or {}
+    box.fuel, box.compound, box.tyres, box.repair = 0, nil, 1, {}
+    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+      local v = math.floor(num(b[sp.name]))
+      if sp.type == 'fuel' then box.fuel = math.max(v, 0)
+      elseif sp.type == 'compound' and v >= 0 and box.compounds()[v] then box.compound, box.tyres = v, #box.TYRE_CHOICES
+      elseif sp.type == 'repair' and REPAIR_OF[sp.name] then box.repair[REPAIR_OF[sp.name]] = v > 0 end
+    end
+    box.imported = baseKey
+    ac.log(string.format('race-control: pit stop: preset %d brought to the box (fuel %d, compound %s, tyres %d)', idx + 1, box.fuel,
+      tostring(box.compound), box.tyres))
+  end
+  local presetsT, kept = -1e9, {}
+  local function presetsKeep()
+    if not AppLink.alive or state.pitService or (not PitControl.presetsDue and state.ui.clock - presetsT < PRESETS_GAP) then return end
+    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    baseLoad()
+    for i = 0, presetCount() - 1 do
+      local parts = {}
+      for _, sp in ipairs(all) do
+        local n = sp.name and not sp.readOnly and neutral(sp)
+        if n and math.floor(num(presetValue(sp, i))) ~= n then parts[#parts + 1] = sp.name .. '=' .. n end
+      end
+      local data = table.concat(parts, ';')
+      local last = kept[i]
+      if #parts > 0 and (not last or last.data ~= data or state.ui.clock - last.t >= KEPT_AGAIN) then
+        kept[i] = { data = data, t = state.ui.clock }
+        AppLink.writePreset(i, data)
+      end
+    end
+    presetsT = state.ui.clock
+    PitControl.presetsDue = false
+  end
+  function PitControl.presetsCheck() PitControl.presetsDue = true end
+  function PitControl.fuelLocked() return state.redFlag ~= nil and not state.redFuelOk end
+  function PitControl.repairLocked() return state.redFlag ~= nil and state.redTow ~= nil end
+  function PitControl.fourTyres(car)
+    local box = PitControl.box
+    local mounted = num(car.compoundIndex)
+    return (box.compound or mounted) ~= mounted or box.tyres == #box.TYRE_CHOICES
+  end
+  function PitControl.rules(p)
+    local box = PitControl.box
+    p.all4 = p.tyres == #box.TYRE_CHOICES
+    local gameTyres = false
+    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do if sp.type == 'compound' and not sp.readOnly then gameTyres = true end end
+    p.all4game = p.all4 and gameTyres
+    p.game = p.all4game or p.wing or p.switch
+    p.chosen = box.touched and (p.fuel > 0 or #box.TYRE_CHOICES[p.tyres][2] > 0 or p.repair.suspension or p.repair.powertrain
+      or p.repair.body or #p.preset > 0 or p.switch or p.pressRows > 0) or false
+    return p
+  end
+  local selSeq, selSig = 0, nil
+  local function selBody()
+    local box = PitControl.box
+    local rows, press = {}, {}
+    for k, v in pairs(box.preset) do rows[#rows + 1] = tostring(k):sub(5) .. '=' .. math.floor(v) end
+    for k, v in pairs(box.setupPress) do press[#press + 1] = k .. ':' .. math.floor(v) end
+    table.sort(rows)
+    table.sort(press)
+    local r = box.repair
+    return table.concat({ box.auto == nil and '-' or box.auto and 1 or 0, box.touched and 1 or 0, box.presetIdx or '-',
+      math.floor(box.fuel), box.compound or '-', box.tyres, (r.suspension and 's' or '') .. (r.powertrain and 'p' or '') .. (r.body and 'b' or ''),
+      table.concat(rows, ','), table.concat(press, ',') }, ';')
+  end
+  local function selApply(body, seq, from)
+    local box = PitControl.box
+    local f = {}
+    for v in (tostring(body) .. ';'):gmatch('([^;]*);') do f[#f + 1] = v end
+    if #f < 9 then return end
+    box.reset()
+    if f[1] == '1' then box.auto = true elseif f[1] == '0' then box.auto = false end
+    box.touched = f[2] == '1'
+    local idx = tonumber(f[3])
+    if idx and idx >= 0 and idx < presetCount() then box.presetIdx = idx end
+    box.fuel = math.max(0, tonumber(f[4]) or 0)
+    local c = tonumber(f[5])
+    if c and box.compounds()[c] then box.compound = c end
+    local t = tonumber(f[6])
+    if t and box.TYRE_CHOICES[t] then box.tyres = t end
+    box.repair = { suspension = f[7]:find('s') ~= nil, powertrain = f[7]:find('p') ~= nil, body = f[7]:find('b') ~= nil }
+    for n, v in f[8]:gmatch('(%d+)=(%-?%d+)') do box.preset['set:' .. n] = tonumber(v) end
+    for k, v in f[9]:gmatch('([%w_]+):(%-?%d+)') do box.setupPress[k] = tonumber(v) end
+    box.imported = 'record'
+    selSeq, selSig = seq or 0, selBody()
+    ac.log('race-control: pit stop: the box back from the car record (' .. from .. '): ' .. selSig)
+  end
+  function PitControl.boxLoad(transition)
+    selSeq, selSig = 0, nil
+    if transition then return end
+    local body, seq, source = Record.load('boxsel')
+    if body then selApply(body, seq, source == 'store' and 'reload' or 'this computer') end
+  end
+  RecordSync.restorers.boxsel = function(body, seq, from)
+    if (seq or 0) > selSeq and not state.pitService then selApply(body, seq, from or 'other drivers') end
+  end
+  local function boxSave()
+    local sig = selBody()
+    if sig == selSig then return end
+    selSig, selSeq = sig, selSeq + 1
+    selSeq = Record.save('boxsel', selSeq, sig)
+  end
+  local function newPresence(origin, settle)
+    PitControl.origin, PitControl.settleUntil = origin, settle and state.ui.clock + SETTLE_SECONDS or 0
+    PitControl.snap, PitControl.atPlace, PitControl.armed, PitControl.reason = nil, false, false, nil
+    PitControl.prevPitlane = nil
+  end
+  state.onJumped[#state.onJumped + 1] = function()
+    local cause = Rules.dsqOn() and 'dsq' or (state.hold or state.ui.clock <= state.tow.ownJumpUntil) and 'held'
+      or state.repair.class == 'beyond' and 'broken' or state.list.prevInPit and 'place' or 'tow'
+    newPresence('teleport ' .. cause, true)
+    PitControl.practiceReset = sim.raceSessionType == ac.SessionType.Practice and (config.tow[sim.raceSessionType] or {}).mode == 'RESET'
+      and cause ~= 'place'
+    if cause ~= 'place' and not PitControl.practiceReset then CarState.teleportBack() end
+  end
+  function PitControl.sessionStart(transition)
+    local _, _, source = Record.load('car')
+    newPresence(transition and 'session' or source == 'store' and 'reload' or 'connection', transition)
+    PitControl.practiceReset, PitControl.changeSeen, PitControl.push, PitControl.presetsDue = false, false, nil, true
+    PitControl.gameOn = false
+    PitControl.baseNew()
+  end
+  function PitControl.drove() return PitControl.origin == 'driven' end
+  local gameLogged = nil
+  local function gameApply()
+    ac.disableQuickMenuPitstop(not PitControl.gameOn)
+    ac.disableExtraHUDElements('quickPitsMenu', true)
+    if gameLogged ~= PitControl.gameOn then
+      gameLogged = PitControl.gameOn
+      local wh, parts = ac.getCar(0).wheels, {}
+      for i = 0, 3 do parts[#parts + 1] = string.format('%.1f', num(wh[i] and wh[i].tyrePressure)) end
+      ac.log(string.format('race-control: game pit stop %s; tyre pressure %s psi', PitControl.gameOn and 'on' or 'off', table.concat(parts, ' / ')))
+    end
+  end
+  local function centreDist(car)
+    local a, b = car.position, car.pitTransform and car.pitTransform.position
+    if not a or not b then return nil end
+    return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2), b.x - a.x, b.z - a.z
+  end
+  local function pushCar(car)
+    local d, dx, dz = centreDist(car)
+    local vx, vz
+    if d and d >= PUSH_NEAR then
+      local v = math.min(d, PUSH_MAX)
+      vx, vz = dx / d * v, dz / d * v
+    elseif car.look then
+      vx, vz = car.look.x * PUSH_NEAR, car.look.z * PUSH_NEAR
+    end
+    if not vx then return end
+    physics.setCarVelocity(0, vec3(vx, 0, vz))
+    PitControl.push = { before = d, t = state.ui.clock }
+    PitControl.pushed, PitControl.quietT = true, nil
+    ac.log(string.format('race-control: game pit stop: the car pushed %.2f m/s to the centre of its place (%.2f m from it)',
+      math.sqrt(vx * vx + vz * vz), d or -1))
+  end
+  local function presetRequest(p)
+    local box = PitControl.box
+    local req, chosenV = {}, {}
+    for _, sp in ipairs(box.presetSpinners()) do chosenV[sp.name] = box.preset[sp.key] or sp.value end
+    for _, sp in ipairs(ac.getPitstopSpinners() or {}) do
+      if not sp.readOnly and sp.name then
+        local v
+        if sp.type == 'pressure' or sp.type == 'wing' then v = chosenV[sp.name]
+        elseif sp.type == 'compound' and p.all4game then v = p.compound
+        else v = neutral(sp) end
+        if v ~= nil then req[#req + 1] = { name = sp.name, value = v, type = sp.type } end
+      end
+    end
+    local parts = { tostring(p.presetIdx) }
+    for _, c in ipairs(req) do parts[#parts + 1] = c.name .. '=' .. math.floor(c.value) end
+    return req, table.concat(parts, ';')
+  end
+  local lastReq = nil
+  local function writePreset(p, done)
+    local box = PitControl.box
+    local req, sig = presetRequest(p)
+    lastReq = { req = req, idx = p.presetIdx, sig = sig }
+    AppLink.onWritten = function()
+      box.logSpinners('after the write')
+      if not lastReq or lastReq.sig ~= sig or not state.pitService then return end
+      done()
+    end
+    box.logSpinners('before the write')
+    sending = true
+    AppLink.setPreset(req, p.presetIdx)
+    sending = false
+  end
+  local function planText(p)
+    return string.format('%.1f/%d/%d/%s%s%s', p.fuel, p.compound, p.tyres, p.repair.suspension and 's' or '',
+      p.repair.powertrain and 'p' or '', p.repair.body and 'b' or '')
+  end
+  local function planParse(text)
+    local fuel, compound, tyres, groups, rest = tostring(text):match('^([%d%.]+)/(%d+)/(%d+)/(%a*)(.*)$')
+    if not fuel or (rest ~= '' and not rest:match('^;h%d+$')) then return nil end
+    return { fuel = tonumber(fuel), compound = tonumber(compound), tyres = tonumber(tyres),
+      repair = { suspension = groups:find('s') ~= nil, powertrain = groups:find('p') ~= nil,
+        body = groups:find('b') ~= nil } }
+  end
+  local function beginService(p)
+    state.pitService = { startMs = serverTimeMs(), untilMs = serverTimeMs() + p.total * 1000, plan = planText(p) }
+    PitStops.markService()
+    if next(p.setupPress) then AppLink.setSetup(p.setupPress) end
+    physics.lockUserControlsFor(p.total + SERVICE_LOCK_EXTRA)
+    PitRecord.save()
+    ac.log(string.format('race-control: pit stop started, %.1f s (%s)', p.total, planText(p)))
+  end
+  function PitControl.resume(startMs, untilMs, plan)
+    if Rules.dsqOn() or not planParse(plan) then return end
+    state.pitService = { startMs = startMs, untilMs = untilMs, plan = plan }
+    local left = (untilMs - serverTimeMs()) / 1000
+    if left > 0 then physics.lockUserControlsFor(left + SERVICE_LOCK_EXTRA) end
+    ac.log(string.format('race-control: pit stop goes on, %.1f s left', math.max(left, 0)))
+  end
+  PitRecord.onService = PitControl.resume
+  local function endService(car, p)
+    local box = PitControl.box
+    local fuelBefore, mounted = num(car.fuel), num(car.compoundIndex)
+    local fuel = math.min(num(car.fuel) + p.fuel, num(car.maxFuel) > 0 and num(car.maxFuel) or math.huge)
+    local wheels = box.TYRE_CHOICES[p.tyres][2]
+    local byGame = p.tyres == #box.TYRE_CHOICES and PitControl.tyresByGame
+    local km = {}
+    for i = 0, 3 do km[i] = num(car.wheels[i].tyreVirtualKM) end
+    for _, w in ipairs(wheels) do
+      if not byGame then km[w] = 0 end
+      TyreUse.fitted(w)
+    end
+    local body = {}
+    for i = 0, 3 do body[i] = p.repair.body and 0 or num(car.damage[i]) end
+    if p.repair.powertrain and num(car.gearboxDamage) > 0 then physics.resetCarState(0, 1) end
+    physics.setCarFuel(0, fuel)
+    if not byGame and p.compound ~= num(car.compoundIndex) then physics.setTyresCompound(0, nil, p.compound) end
+    if not byGame then
+      for i = 0, 3 do physics.setTyresVirtualKM(0, i, km[i]) end
+    end
+    physics.setCarBodyDamage(0, vec4(body[0], body[1], body[2], body[3]))
+    if p.repair.suspension then
+      for i = 0, 3 do physics.setSuspensionDamage(0, i, 0) end
+    end
+    if p.repair.powertrain then physics.setCarEngineLife(0, 1000) end
+    local d = state.tow.damage
+    if d then
+      if p.repair.suspension then d.suspension = 0 end
+      if p.repair.powertrain then d.powertrain = 0 end
+      if p.repair.body then d.body = 0 end
+    end
+    ac.log(string.format('race-control: pit stop done (%s)', planText(p)))
+    if PitControl.gameUsed and lastReq then
+      local keepReq = {}
+      for _, c in ipairs(lastReq.req) do if c.type == 'pressure' or c.type == 'wing' then keepReq[#keepReq + 1] = c end end
+      baseCommit(keepReq, lastReq.idx)
+    end
+    PitControl.tyresByGame, PitControl.tyresBefore, lastReq = false, nil, nil
+    PitControl.gameOn, PitControl.gameUsed, PitControl.snap, PitControl.reason, PitControl.presetsDue = false, false, nil, nil, true
+    local repaired = p.repair.suspension or p.repair.powertrain or p.repair.body
+    PitStops.record(Lap.number(), fuel - fuelBefore, #wheels, p.compound ~= mounted, repaired)
+  end
+  local function start(p, cause)
+    PitControl.armed = false
+    PitControl.reason = 'service'
+    ac.log('race-control: pit stop service: yes (' .. cause .. ')')
+    beginService(p)
+    local car = ac.getCar(0)
+    PitControl.tyresByGame, PitControl.tyresBefore, PitControl.pushed, PitControl.quietT = false, nil, false, nil
+    if p.all4game and car then
+      PitControl.tyresBefore = { compound = num(car.compoundIndex), want = p.compound, km = {} }
+      for i = 0, 3 do PitControl.tyresBefore.km[i] = num(car.wheels[i].tyreVirtualKM) end
+    end
+    if p.game then
+      ac.log('race-control: pit stop: preset written for the game (' .. (p.all4game and '4 tyres by the game' or 'wing or preset') .. ')')
+      writePreset(p, function()
+        PitControl.gameOn, PitControl.gameUsed = true, true
+        gameApply()
+        pushCar(ac.getCar(0))
+      end)
+    end
+  end
+  local function blocked()
+    if Rules.dsqOn() then return 'DSQ' end
+    if state.hold then return 'held at the pits' end
+    if state.redFlag and PitControl.origin:sub(1, 8) == 'teleport' then return 'red flag' end
+    if PitControl.practiceReset then return 'practice reset' end
+    return nil
+  end
+  function PitControl.command(p, cause)
+    local car = ac.getCar(0)
+    if state.pitService then return end
+    if not (car and CarRead.parked(car)) or CarState.restoring then return end
+    local why = blocked()
+    if why then
+      ac.log('race-control: pit stop service: no (' .. why .. '), command ignored')
+      return
+    end
+    if not p.chosen then
+      ac.log('race-control: pit stop service: no (nothing chosen), command ignored')
+      return
+    end
+    start(p, cause)
+  end
+  local function decide(car)
+    local why = blocked()
+    if not why then
+      local box = PitControl.box
+      local p = box.plan(car)
+      if not p.chosen then why = 'nothing chosen'
+      elseif not box.isAuto() then why = 'waiting for the command'
+      elseif not PitControl.armed then why = 'waiting for the command (AUTO after the stop)'
+      else
+        start(p, 'AUTO')
+        return
+      end
+    end
+    if why ~= 'DSQ' and why ~= 'held at the pits' and why ~= 'red flag' and why ~= 'practice reset' then PitControl.armed = false end
+    if why ~= PitControl.reason then
+      PitControl.reason = why
+      ac.log('race-control: pit stop service: no (' .. why .. ')')
+    end
+  end
+  local HOLD_SAME_MS = 2000
+  local function serviceRules(sv)
+    local box = PitControl.box
+    if Rules.dsqOn() then
+      state.pitService = nil
+      PitControl.gameOn, PitControl.gameUsed, PitControl.tyresByGame, PitControl.tyresBefore, lastReq = false, false, false, nil, nil
+      ac.log('race-control: pit stop void (DSQ: the race is over for the driver)')
+      PitRecord.save()
+      box.reset()
+      return nil
+    end
+    local h = state.hold
+    local mark = tonumber(tostring(sv.plan):match(';h(%d+)$'))
+    if h and not (mark and math.abs(mark - h.untilMs) < HOLD_SAME_MS) then
+      local add = math.max(h.untilMs - serverTimeMs(), 0)
+      sv.untilMs = sv.untilMs + add
+      sv.plan = tostring(sv.plan):gsub(';h%d+$', '') .. ';h' .. math.floor(h.untilMs)
+      local left = (sv.untilMs - serverTimeMs()) / 1000
+      physics.lockUserControlsFor(left + SERVICE_LOCK_EXTRA)
+      PitRecord.save()
+      ac.log(string.format('race-control: pit stop: the hold of %.0f s added to the service, %.1f s left', add / 1000, left))
+    end
+    return sv
+  end
+  function PitControl.update(car)
+    local box = PitControl.box
+    gameApply()
+    presetsKeep()
+    boxSave()
+    if box.imported == nil and #(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) > 0 and not state.pitService then
+      PitControl.importPreset(box.presetIndex())
+    end
+    local hold = state.hold
+    if hold then
+      local c = tostring(hold.cause or '')
+      PitControl.towHold = (c:sub(1, 4) == 'tow/' or c:sub(1, 7) == 'repair/') or nil
+    elseif PitControl.towHold then
+      PitControl.towHold = nil
+      state.tow.damage = nil
+      local groups = {}
+      for _, g in ipairs({ 'suspension', 'powertrain', 'body' }) do
+        if box.damaged(car, g) then
+          box.repair[g] = true
+          groups[#groups + 1] = g
+        end
+      end
+      if #groups > 0 then box.touched = true end
+      ac.log('race-control: pit stop: the hold of the tow is over, the repair authorized (' .. (#groups > 0 and table.concat(groups, ', ') or 'no damage') .. ')')
+    end
+    local menu = sim.isInMainMenu == true
+    if PitControl.menuBefore and not menu then PitControl.lobbyDue = true end
+    PitControl.menuBefore = menu
+    if PitControl.lobbyDue and not menu then
+      if not car.isInPit then
+        PitControl.lobbyDue = false
+      elseif not state.pitService and #(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) > 0 then
+        PitControl.lobbyDue = false
+        PitControl.baseNew()
+        box.preset = {}
+        ac.log('race-control: pit stop: the car at its place coming from the menu of the game, the preset of the setup brought to the box')
+        PitControl.importPreset(box.presetIndex())
+      end
+    end
+    local sv = state.pitService
+    if sv then sv = serviceRules(sv) end
+    if sv and serverTimeMs() >= sv.untilMs and CarState.ready() then
+      local p = planParse(sv.plan)
+      state.pitService = nil
+      if p then endService(car, p) end
+      PitRecord.save()
+      box.reset()
+    end
+    local inPit = car.isInPitlane == true
+    if inPit and PitControl.prevPitlane == false and not state.list.jumped then
+      PitControl.origin = 'driven'
+      PitControl.snap, PitControl.atPlace, PitControl.reason = nil, false, nil
+    end
+    PitControl.prevPitlane = inPit
+    if not inPit then PitControl.changeSeen = false end
+    local pu = PitControl.push
+    if pu and CarRead.parked(car) and state.ui.clock - pu.t > 0.3 then
+      PitControl.push = nil
+      ac.log(string.format('race-control: game pit stop: the car stopped again, isInPit %s, %.2f m from the centre of its place',
+        tostring(car.isInPit), centreDist(car) or -1))
+    end
+    local tb = PitControl.tyresBefore
+    if tb and PitControl.gameOn and not PitControl.tyresByGame then
+      local back = true
+      for i = 0, 3 do if num(car.wheels[i].tyreVirtualKM) >= tb.km[i] - 0.001 or tb.km[i] <= 0.001 then back = false end end
+      if back or (tb.compound ~= tb.want and num(car.compoundIndex) == tb.want) then
+        PitControl.tyresByGame = true
+        local wh, parts = car.wheels, {}
+        for i = 0, 3 do parts[#parts + 1] = string.format('%.1f', num(wh[i] and wh[i].tyrePressure)) end
+        ac.log('race-control: game pit stop: the 4 tyres changed by the game; tyre pressure ' .. table.concat(parts, ' / ') .. ' psi')
+      end
+    end
+    if PitControl.gameOn and state.pitService and PitControl.pushed and not PitControl.push then
+      local busy = car.isRefueling == true or car.isChangingTyres == true or car.isRepairing == true
+      if busy or not CarRead.parked(car) or (PitControl.tyresBefore and not PitControl.tyresByGame) then
+        PitControl.quietT = nil
+      else
+        PitControl.quietT = PitControl.quietT or state.ui.clock
+        if state.ui.clock - PitControl.quietT >= GAME_QUIET then
+          PitControl.gameOn, PitControl.pushed, PitControl.quietT = false, false, nil
+          ac.log('race-control: game pit stop: its part is over, the menu off again')
+        end
+      end
+    end
+    if not car.isInPit then
+      if PitControl.atPlace then
+        PitControl.atPlace, PitControl.reason, PitControl.snap = false, nil, nil
+        if PitControl.gameOn and not state.pitService then PitControl.gameOn = false end
+      end
+      return
+    end
+    if CarState.restoring then return end
+    local parked = CarRead.parked(car)
+    if parked and not PitControl.atPlace then
+      PitControl.atPlace, PitControl.armed, PitControl.reason = true, true, nil
+      ac.log(string.format('race-control: arrived at the pit place (%s, %s%s%s)', PitControl.origin,
+        box.isAuto() and 'AUTO' or 'MANUAL', Rules.dsqOn() and ', DSQ' or state.hold and ', held at the pits' or '',
+        state.redFlag and ', red flag' or ''))
+      if PitControl.practiceReset then ac.log('race-control: practice: the teleport reset the car by its setup') end
+    end
+    if not PitControl.atPlace then return end
+    if not state.pitService and not PitControl.gameOn and not settling() then
+      PitControl.snap = PitControl.snap or CarRead.snapshot(car)
+      if not PitControl.changeSeen and not PitControl.practiceReset then
+        local changed, what = CarRead.serviced(car, PitControl.snap)
+        if changed then
+          PitControl.changeSeen = true
+          ac.log('race-control: change in the car at the pit place (not by the box): ' .. tostring(what))
+          PitStops.noteService('service')
+          PitStops.countStop()
+        end
+      end
+    end
+    if state.pitService or not parked then return end
+    decide(car)
+  end
+end
 PitStops = {
   passInWindow = false,
   passInStopWindow = false,
@@ -5138,9 +5724,7 @@ PitStops = {
   endChecked = false,
   lastIsInPit = nil,
   stopLogged = false,
-  settleUntil = 0,
 }
-PitStops.SETTLE_SECONDS = 5
 do
   local function raceTime(ms)
     local s = math.max(math.floor((ms or 0) / 1000), 0)
@@ -5382,7 +5966,7 @@ do
       PitRecord.save()
       ac.log('race-control: marks of a pit pass already over cleared')
     end
-    if PitStops.pass and PitStops.pass.entryMs and CarRead.parked(car) and state.ui.clock >= PitStops.settleUntil then
+    if PitStops.pass and PitStops.pass.entryMs and CarRead.parked(car) and not PitControl.settling() then
       PitStops.pass.stopped = true
     end
     local p = PitStops.pass
@@ -5391,18 +5975,6 @@ do
         p.sgParked = true
       elseif p.sgParked and state.pitService == nil then
         sgBack('left the pit place')
-      end
-    end
-    if p and state.ui.clock < PitStops.settleUntil then
-      p.snap = nil
-    elseif p and car.isInPit and not CarState.restoring then
-      p.snap = p.snap or CarRead.snapshot(car)
-      local serviced, what = false, nil
-      if not p.stop and state.pitService == nil then serviced, what = CarRead.serviced(car, p.snap) end
-      if serviced then
-        ac.log('race-control: change in the car at the pit place: ' .. tostring(what))
-        PitStops.noteService('service')
-        PitStops.countStop()
       end
     end
     raceEnd(car)
@@ -5499,14 +6071,8 @@ do
   PitBox.setupPress = {}
   PitBox.tab = 'stop'
   PitBox.presetIdx = nil
-  local function presetCount()
-    local n = 1
-    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
-      if type(sp.values) == 'table' then n = math.max(n, #sp.values) end
-    end
-    return n
-  end
-  PitBox.presetCount = presetCount
+  local presetCount, baseValue = PitControl.presetCount, PitControl.baseValue
+  PitBox.presetCount, PitBox.presetValue, PitBox.baseValue = PitControl.presetCount, PitControl.presetValue, PitControl.baseValue
   function PitBox.presetIndex()
     local n = presetCount()
     if n <= 1 then return 0 end
@@ -5514,39 +6080,6 @@ do
     if i == nil then i = num(sim.currentQuickPitPreset) end
     return math.min(math.max(math.floor(i), 0), n - 1)
   end
-  local function presetValue(sp, idx)
-    if type(sp.values) == 'table' and sp.values[idx + 1] ~= nil then return sp.values[idx + 1] end
-    return sp.value
-  end
-  PitBox.presetValue = presetValue
-  local base, baseKey = {}, nil
-  local function baseLoad()
-    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
-    local key = tostring(sim.currentSessionIndex) .. '|' .. #all
-    if key == baseKey then return end
-    baseKey, base = key, {}
-    for i = 0, presetCount() - 1 do
-      base[i] = {}
-      for _, sp in ipairs(all) do
-        if sp.name and base[i][sp.name] == nil then base[i][sp.name] = presetValue(sp, i) end
-      end
-    end
-  end
-  local function baseValue(sp, idx)
-    baseLoad()
-    local v = base[idx] and base[idx][sp.name]
-    if v == nil then return presetValue(sp, idx) end
-    return v
-  end
-  PitBox.baseValue = baseValue
-  local function baseCommit(changes, preset)
-    baseLoad()
-    local i = math.floor(preset or 0)
-    base[i] = base[i] or {}
-    for _, c in ipairs(changes) do if c.name then base[i][c.name] = math.floor(c.value) end end
-  end
-  function PitBox.baseNew() baseKey = nil end
-  AppLink.sent = function(changes, preset) if not PitBox.sending then baseCommit(changes, preset) end end
   local function presetSpinners()
     local out = {}
     local idx = PitBox.presetIndex()
@@ -5614,15 +6147,22 @@ do
     for _, r in ipairs({ 'suspension', 'powertrain', 'body', 'mode' }) do rows[#rows + 1] = r end
     return rows
   end
-  local function presetChanges()
+  local function presetChanges(all4)
     local out = {}
     for _, sp in ipairs(presetSpinners()) do
       local v = PitBox.preset[sp.key]
-      if v and v ~= sp.value then out[#out + 1] = { name = sp.name, value = v, type = sp.type, wheel = sp.wheel } end
+      if v and v ~= sp.value and (sp.type ~= 'pressure' or all4) then
+        out[#out + 1] = { name = sp.name, value = v, type = sp.type, wheel = sp.wheel }
+      end
     end
     return out
   end
-  local SERVICE_LOCK_EXTRA = 1
+  local fourTyres = PitControl.fourTyres
+  local function dropPressure()
+    for _, sp in ipairs(presetSpinners()) do
+      if sp.type == 'pressure' then PitBox.preset[sp.key] = nil end
+    end
+  end
   local function button(name, key, period)
     return ac.ControlButton('amxracing.race-control/Pit stop ' .. name, { keyboard = { key = key }, period = period })
   end
@@ -5721,19 +6261,17 @@ do
     for i = 0, 3 do if num(car.damage[i]) > 0 then return true end end
     return false
   end
-  function PitBox.fuelLocked() return state.redFlag ~= nil and not state.redFuelOk end
-  function PitBox.repairLocked() return state.redFlag ~= nil and state.redTow ~= nil end
   function PitBox.plan(car)
     local r = carRates()
     local mounted = num(car.compoundIndex)
     local compound = PitBox.compound or mounted
     local tyres = compound ~= mounted and ALL_TYRES or PitBox.tyres
-    local fuel = PitBox.fuelLocked() and 0 or math.min(PitBox.fuel, math.max(num(car.maxFuel) - num(car.fuel), 0))
+    local fuel = PitControl.fuelLocked() and 0 or math.min(PitBox.fuel, math.max(num(car.maxFuel) - num(car.fuel), 0))
     local p = { fuel = fuel, compound = compound, tyres = tyres, repair = {}, times = {} }
     p.times.fuel = fuel * r.fuel
     p.times.tyres = #TYRE_CHOICES[tyres][2] * r.tyre
     for _, g in ipairs({ 'suspension', 'powertrain', 'body' }) do
-      p.repair[g] = PitBox.repair[g] and damaged(car, g) and not PitBox.repairLocked() or false
+      p.repair[g] = PitBox.repair[g] and damaged(car, g) and not PitControl.repairLocked() or false
       p.times[g] = p.repair[g] and repairTime(g) or 0
     end
     p.total = orderTotal({ F = p.times.fuel, T = p.times.tyres,
@@ -5742,158 +6280,29 @@ do
     p.setupPress = {}
     for k, v in pairs(PitBox.setupPress) do p.setupPress[k] = v end
     p.pressRows = 0
-    for _, c in ipairs(presetChanges()) do
+    p.wing = false
+    for _, c in ipairs(presetChanges(tyres == ALL_TYRES)) do
       p.preset[#p.preset + 1] = c
       if c.type == 'pressure' then p.pressRows = p.pressRows + 1 end
+      if c.type == 'wing' then p.wing = true end
     end
     p.presetIdx = PitBox.presetIndex()
     p.switch = presetCount() > 1 and PitBox.presetIdx ~= nil and p.presetIdx ~= num(sim.currentQuickPitPreset)
+    PitControl.rules(p)
     return p
-  end
-  local function planText(p)
-    return string.format('%.1f/%d/%d/%s%s%s', p.fuel, p.compound, p.tyres, p.repair.suspension and 's' or '',
-      p.repair.powertrain and 'p' or '', p.repair.body and 'b' or '')
-  end
-  local function planParse(text)
-    local fuel, compound, tyres, groups = tostring(text):match('^([%d%.]+)/(%d+)/(%d+)/(%a*)$')
-    if not fuel then return nil end
-    return { fuel = tonumber(fuel), compound = tonumber(compound), tyres = tonumber(tyres),
-      repair = { suspension = groups:find('s') ~= nil, powertrain = groups:find('p') ~= nil,
-        body = groups:find('b') ~= nil } }
-  end
-  local function applyPlan(car, p)
-    local fuelBefore, mounted = num(car.fuel), num(car.compoundIndex)
-    local fuel = math.min(num(car.fuel) + p.fuel, num(car.maxFuel) > 0 and num(car.maxFuel) or math.huge)
-    local wheels = TYRE_CHOICES[p.tyres][2]
-    local km = {}
-    for i = 0, 3 do km[i] = num(car.wheels[i].tyreVirtualKM) end
-    for _, w in ipairs(wheels) do
-      km[w] = 0
-      TyreUse.fitted(w)
-    end
-    local body = {}
-    for i = 0, 3 do body[i] = p.repair.body and 0 or num(car.damage[i]) end
-    if p.repair.powertrain and num(car.gearboxDamage) > 0 then physics.resetCarState(0, 1) end
-    physics.setCarFuel(0, fuel)
-    if p.compound ~= num(car.compoundIndex) then physics.setTyresCompound(0, nil, p.compound) end
-    for i = 0, 3 do physics.setTyresVirtualKM(0, i, km[i]) end
-    physics.setCarBodyDamage(0, vec4(body[0], body[1], body[2], body[3]))
-    if p.repair.suspension then
-      for i = 0, 3 do physics.setSuspensionDamage(0, i, 0) end
-    end
-    if p.repair.powertrain then physics.setCarEngineLife(0, 1000) end
-    local d = state.tow.damage
-    if d then
-      if p.repair.suspension then d.suspension = 0 end
-      if p.repair.powertrain then d.powertrain = 0 end
-      if p.repair.body then d.body = 0 end
-    end
-    ac.log(string.format('race-control: pit stop done (%s)', planText(p)))
-    if PitBox.gameStopOn and PitBox.lastReq then baseCommit(PitBox.lastReq.req, PitBox.lastReq.idx) end
-    PitBox.gameStop(false, 'end of the box stop')
-    local repaired = p.repair.suspension or p.repair.powertrain or p.repair.body
-    PitStops.record(Lap.number(), fuel - fuelBefore, #wheels, p.compound ~= mounted, repaired)
-  end
-  PitBox.gameStopOn = false
-  local function gameStop(on, why)
-    if PitBox.gameStopOn == on then return end
-    PitBox.gameStopOn = on
-    ac.disableQuickMenuPitstop(not on)
-    local wh, parts = ac.getCar(0).wheels, {}
-    for i = 0, 3 do parts[#parts + 1] = string.format('%.1f', num(wh[i] and wh[i].tyrePressure)) end
-    ac.log(string.format('race-control: game pit stop %s (%s); tyre pressure %s psi', on and 'on' or 'off', why,
-      table.concat(parts, ' / ')))
-  end
-  PitBox.gameStop = gameStop
-  local function gameNeeded(p) return #p.preset > 0 or p.switch end
-  local function presetRequest(p)
-    local req, chosenV = {}, {}
-    for _, sp in ipairs(presetSpinners()) do chosenV[sp.name] = PitBox.preset[sp.key] or sp.value end
-    for _, sp in ipairs(ac.getPitstopSpinners() or {}) do
-      if not sp.readOnly and sp.name then
-        local v
-        if sp.type == 'pressure' or sp.type == 'wing' then v = chosenV[sp.name]
-        elseif sp.type == 'fuel' or sp.type == 'repair' then v = 0
-        elseif sp.type == 'compound' then v = math.max(-1, num(sp.min)) end
-        if v ~= nil then req[#req + 1] = { name = sp.name, value = v, type = sp.type } end
-      end
-    end
-    local parts = { tostring(p.presetIdx) }
-    for _, c in ipairs(req) do parts[#parts + 1] = c.name .. '=' .. math.floor(c.value) end
-    return req, table.concat(parts, ';')
-  end
-  local function presetDrift(req, idx)
-    if presetCount() > 1 and num(sim.currentQuickPitPreset) ~= idx then return 'preset ' .. tostring(sim.currentQuickPitPreset) end
-    local live = {}
-    for _, sp in ipairs(ac.getPitstopSpinners() or {}) do if sp.name and live[sp.name] == nil then live[sp.name] = presetValue(sp, idx) end end
-    for _, c in ipairs(req) do
-      if live[c.name] ~= nil and math.floor(num(live[c.name])) ~= math.floor(c.value) then
-        return c.name .. '=' .. tostring(live[c.name])
-      end
-    end
-    return nil
-  end
-  PitBox.sentSig = nil
-  PitBox.sentT = -1e9
-  local DRIFT_WAIT = 1
-  local NUDGE_MS = 0.3
-  local function writePreset(p, why, nudge)
-    local req, sig = presetRequest(p)
-    if sig == PitBox.sentSig and PitBox.gameStopOn then
-      if state.ui.clock - PitBox.sentT < DRIFT_WAIT then return end
-      local moved = presetDrift(req, p.presetIdx)
-      if not moved then return end
-      ac.log('race-control: game pit stop: the preset of the game moved by its hidden menu (' .. moved .. '), written again')
-    end
-    PitBox.sentSig, PitBox.sentT = sig, state.ui.clock
-    PitBox.lastReq = { req = req, idx = p.presetIdx }
-    AppLink.onWritten = function()
-      PitBox.logSpinners('after the write')
-      if PitBox.sentSig ~= sig then return end
-      gameStop(true, why)
-      local car = ac.getCar(0)
-      if nudge and car and car.look and CarRead.parked(car) then
-        physics.setCarVelocity(0, vec3(car.look.x * NUDGE_MS, 0, car.look.z * NUDGE_MS))
-        ac.log(string.format('race-control: game pit stop: the car moved %.1f m/s at its place, to stop there with the stop of the game on', NUDGE_MS))
-      end
-    end
-    PitBox.logSpinners('before the write')
-    gameStop(false, 'before the write of the preset')
-    PitBox.sending = true
-    AppLink.setPreset(req, p.presetIdx)
-    PitBox.sending = false
-  end
-  local function startStop(p)
-    state.pitService = { startMs = serverTimeMs(), untilMs = serverTimeMs() + p.total * 1000, plan = planText(p) }
-    PitStops.markService()
-    if gameNeeded(p) then writePreset(p, 'preset written by the app', CarRead.parked(ac.getCar(0))) end
-    if next(p.setupPress) then AppLink.setSetup(p.setupPress) end
-    physics.lockUserControlsFor(p.total + SERVICE_LOCK_EXTRA)
-    PitRecord.save()
-    ac.log(string.format('race-control: pit stop started, %.1f s (%s)', p.total, planText(p)))
-  end
-  function PitBox.resume(startMs, untilMs, plan)
-    if Rules.dsqOn() or not planParse(plan) then return end
-    state.pitService = { startMs = startMs, untilMs = untilMs, plan = plan }
-    local left = (untilMs - serverTimeMs()) / 1000
-    if left > 0 then physics.lockUserControlsFor(left + SERVICE_LOCK_EXTRA) end
-    ac.log(string.format('race-control: pit stop goes on, %.1f s left', math.max(left, 0)))
   end
   local function reset()
     PitBox.row, PitBox.fuel, PitBox.compound, PitBox.tyres, PitBox.repair = 1, 0, nil, 1, {}
     PitBox.preset, PitBox.setupPress = {}, {}
     PitBox.touched = false
-    PitBox.tab, PitBox.presetIdx, PitBox.sentSig, PitBox.lastReq = 'stop', nil, nil, nil
+    PitBox.tab, PitBox.presetIdx = 'stop', nil
     PitBox.remoteUntil = 0
+    PitBox.imported = nil
   end
   PitBox.reset = reset
   function PitBox.isAuto()
     if PitBox.auto == nil then return config.pitStopAuto end
     return PitBox.auto
-  end
-  local function chosen(p)
-    return p.fuel > 0 or #TYRE_CHOICES[p.tyres][2] > 0 or p.repair.suspension or p.repair.powertrain or p.repair.body
-      or #p.preset > 0 or p.switch or p.pressRows > 0
   end
   local function choose(car, dir)
     local what = ROWS[PitBox.row]
@@ -5904,8 +6313,10 @@ do
       local n = 0
       for _ in pairs(list) do n = n + 1 end
       if n > 0 then PitBox.compound = ((PitBox.compound or num(car.compoundIndex)) + dir) % n end
+      if not fourTyres(car) then dropPressure() end
     elseif what == 'tyres' then
       PitBox.tyres = (PitBox.tyres - 1 + dir) % ALL_TYRES + 1
+      if not fourTyres(car) then dropPressure() end
     elseif what == 'mode' then
       PitBox.auto = not PitBox.isAuto()
       return
@@ -5919,6 +6330,7 @@ do
       if dir > 0 then
         PitBox.presetIdx = tonumber(what:sub(8))
         PitBox.preset = {}
+        PitControl.importPreset(PitBox.presetIdx)
         PitBox.touched = true
         ac.log(string.format('race-control: pit stop: preset %d of the quick pit menu chosen for the stop', PitBox.presetIdx + 1))
       end
@@ -5927,6 +6339,7 @@ do
     elseif what:sub(1, 4) == 'set:' then
       for _, sp in ipairs(presetSpinners()) do
         if sp.key == what then
+          if sp.type == 'pressure' and not fourTyres(car) then return end
           PitBox.preset[what] = math.max(sp.min, math.min((PitBox.preset[what] or sp.value) + dir, sp.max))
         end
       end
@@ -5935,31 +6348,12 @@ do
     end
     PitBox.touched = true
   end
-  local menuOff = false
   function PitBox.update(car)
-    if PitBox.gameStopOn and not car.isInPitlane then gameStop(false, 'left the pit lane') end
-    if not car.isInPitlane then PitBox.sentSig = nil end
-    if not menuOff then
-      ac.disableQuickMenuPitstop(true)
-      ac.disableExtraHUDElements('quickPitsMenu', true)
-      menuOff = true
-    end
     PitBox.logSpinnersOnce()
-    local sv = state.pitService
-    if sv then
-      if serverTimeMs() >= sv.untilMs and CarState.ready() then
-        local p = planParse(sv.plan)
-        state.pitService = nil
-        if p then applyPlan(car, p) end
-        PitRecord.save()
-        reset()
-      end
-      return
-    end
+    if state.pitService then return end
     ROWS = buildRows()
     PitBox.ROWS = ROWS
     if PitBox.row > #ROWS then PitBox.row = #ROWS end
-    local wasOpen = PitBox.open
     PitBox.open = CarRead.parked(car) and not state.hold and not Rules.dsqOn()
       and not CarState.restoring
     local padOn = not PitBox.padFor or PitBox.padFor('pitbox')
@@ -5974,18 +6368,13 @@ do
     if left then choose(car, -1) end
     if right and not confirm then choose(car, 1) end
     if (up or down or left or right) and not PitBox.open then PitBox.shownUntil = state.ui.clock + config.screens.pitBoxSeconds end
-    if PitBox.gameStopOn and not state.pitService then
-      PitBox.sentSig = nil
-      gameStop(false, 'no stop of the box')
-    end
     if not PitBox.open then return end
-    local p = PitBox.plan(car)
-    if not chosen(p) then return end
     local remoteGo = PitBox.remoteUntil > state.ui.clock
-    if confirm or remoteGo or (PitBox.isAuto() and not wasOpen and PitBox.touched) then
-      if remoteGo and not confirm then ac.log('race-control: pit stop started from the Racing Room') end
+    if confirm or remoteGo then
+      local p = PitBox.plan(car)
+      if remoteGo and not confirm and not p.chosen then return end
       PitBox.remoteUntil = 0
-      startStop(p)
+      PitControl.command(p, confirm and 'box command' or 'Racing Room')
     end
   end
   local REMOTE_START_S = 120
@@ -5999,7 +6388,7 @@ do
     if b.repair then
       PitBox.repair = { suspension = b.repair:find('s') ~= nil, powertrain = b.repair:find('p') ~= nil, body = b.repair:find('b') ~= nil }
     end
-    if b.auto ~= nil then PitBox.auto = b.auto end
+    if b.auto ~= nil then PitBox.auto = b.auto == 1 end
     if b.press then
       PitBox.setupPress = {}
       for k, v in tostring(b.press):gmatch('([%w_]+):(%-?%d+)') do PitBox.setupPress[k] = tonumber(v) end
@@ -6030,7 +6419,7 @@ do
     return table.concat({ f(d.rateFuel, '%.3f'), f(d.rateTyre, '%.2f'), (tostring(config.pitStopOrder):gsub('[|;]', '')), f(d.lapMs, '%.0f'), tostring(d.flying or 0),
       f(d.fuel, '%.3f'), f(d.wear, '%.3f'), f(d.pitLoss, '%.0f'), tostring(d.losses or 0), f(d.raceMin, '%.0f') }, '|')
   end
-  PitRecord.onService = PitBox.resume
+  PitControl.box = PitBox
   RecordSync.base.pitBox = PitBox
   PitBox.WHEELS = WHEELS
   PitBox.TYRE_CHOICES = TYRE_CHOICES
@@ -6100,7 +6489,6 @@ end
 local StopAndGo = {
   drove = false,
   serviced = false,
-  snap = nil,
   stopping = false,
   base = 0,
   startMs = 0,
@@ -6162,23 +6550,14 @@ do
   function StopAndGo.update(car)
     if not config.sg then return end
     local sg = sgItem()
+    StopAndGo.drove = car.isInPitlane and PitControl.drove()
     if not car.isInPitlane then
-      StopAndGo.drove = false
       StopAndGo.serviced = false
-      StopAndGo.snap = nil
-    elseif not car.isInPit and CarRead.moving(car) and not state.list.jumped then
-      StopAndGo.drove = true
-    end
-    if state.ui.clock < PitStops.settleUntil then
-      StopAndGo.snap, StopAndGo.serviced = nil, false
-    elseif car.isInPit and not CarState.restoring then
-      StopAndGo.snap = StopAndGo.snap or CarRead.snapshot(car)
-      if not StopAndGo.serviced and CarRead.serviced(car, StopAndGo.snap) then
-        StopAndGo.serviced = true
-        if sg then
-          showNotice(TEXTS.rcTitle, TEXTS.sgServiced, sg)
-          ac.log('race-control: service at the pit place: stop & go not served in this pit pass')
-        end
+    elseif state.pitPassServiced and not StopAndGo.serviced then
+      StopAndGo.serviced = true
+      if sg then
+        showNotice(TEXTS.rcTitle, TEXTS.sgServiced, sg)
+        ac.log('race-control: service at the pit place: stop & go not served in this pit pass')
       end
     end
     if not sg then
@@ -8413,6 +8792,109 @@ do
     end
   end
 end
+Delta = { REFS = { 'best', 'session', 'optimal', 'alltime' } }
+do
+  local num = CarRead.num
+  local function lapOf(ms, s0)
+    if not ms or ms <= 0 then return nil end
+    local s = {}
+    for k = 0, 15 do
+      local v = s0 and num(s0[k]) or 0
+      if v <= 0 then break end
+      s[#s + 1] = v
+    end
+    return { ms = ms, s = s }
+  end
+  function Delta.ownBest()
+    local ob = RaceTable.ownBest()
+    return lapOf(ob.ms, ob.lapS)
+  end
+  function Delta.sessionBest()
+    local ms, who = Lap.sessionBest()
+    if not ms or ms <= 0 then return nil end
+    if who == 0 then return Delta.ownBest() end
+    local o = Lap.others[who]
+    return lapOf(ms, o and o.s)
+  end
+  function Delta.ownOptimal()
+    local ob = RaceTable.ownBest()
+    local t = 0
+    for k = 0, 15 do
+      local v = num(ob.s and ob.s[k])
+      if v <= 0 then break end
+      t = t + v
+    end
+    return lapOf(t, ob.s)
+  end
+  local allTime, baseMs = nil, nil
+  function Delta.allTimeBest()
+    if not RecordSync.base.best.done then return nil end
+    local b = RecordSync.base.best.value
+    if b and b.ms ~= baseMs then
+      baseMs = b.ms
+      local s0 = {}
+      for k, v in ipairs(b.s or {}) do s0[k - 1] = v end
+      local l = lapOf(b.ms, s0)
+      if l and (not allTime or l.ms < allTime.ms) then allTime = l end
+    end
+    local own = Delta.ownBest()
+    if own and (not allTime or own.ms < allTime.ms) then allTime = own end
+    return allTime
+  end
+  local BY = { best = Delta.ownBest, session = Delta.sessionBest, optimal = Delta.ownOptimal, alltime = Delta.allTimeBest }
+  function Delta.ref(name)
+    local f = BY[name]
+    return f and f() or nil
+  end
+  local function traceAt(x)
+    local tr = Lap.best and Lap.best.trace
+    if not tr then return nil end
+    local n = #tr
+    local p = x * n
+    local i = math.floor(p)
+    local a = i >= 1 and tr[i] or 0
+    local b = tr[math.min(i + 1, n)] or a
+    return a + (b - a) * (p - i)
+  end
+  function Delta.refAt(ref, x)
+    local splits = Lap.splits or {}
+    local bounds = { 0 }
+    for _, b in ipairs(splits) do bounds[#bounds + 1] = b end
+    bounds[#bounds + 1] = 1
+    if #ref.s ~= #bounds - 1 then
+      local own = traceAt(x)
+      local total = traceAt(1)
+      if own and total and total > 0 then return own / total * ref.ms end
+      return x * ref.ms
+    end
+    local before = 0
+    for k = 1, #ref.s do
+      local a, b = bounds[k], bounds[k + 1]
+      if x <= b or k == #ref.s then
+        local ta, tb, tx = traceAt(a), traceAt(b), traceAt(x)
+        local f
+        if ta and tb and tx and tb > ta then f = (tx - ta) / (tb - ta) else f = (x - a) / (b - a) end
+        return before + ref.s[k] * math.min(math.max(f, 0), 1)
+      end
+      before = before + ref.s[k]
+    end
+    return before
+  end
+  function Delta.now(car, ref)
+    local cur = Lap.currentMs()
+    if not ref or not cur then return nil end
+    return (cur - Delta.refAt(ref, num(car.splinePosition))) / 1000
+  end
+  function Delta.sectors(ref)
+    local out = {}
+    if not ref then return out end
+    for k, v in pairs(Lap.currentSectors()) do
+      local r = ref.s[k + 1]
+      if v > 0 and r and r > 0 then out[k] = (v - r) / 1000 end
+    end
+    return out
+  end
+end
 local function applyKMR(car, r)
   if r.penalty == 'DSQ' then
     queueCommand(string.format('/kmr player_kick %d', car.sessionID))
@@ -10256,9 +10738,9 @@ do
     for _, wIdx in ipairs(PitBox.TYRE_CHOICES[p.tyres][2]) do chips[wIdx] = true end
     local wh = car.wheels or {}
     local rows = {
-      { 'fuel', TEXTS.pitFuel, PitBox.fuelLocked() and TEXTS.pitFuelLocked
+      { 'fuel', TEXTS.pitFuel, PitControl.fuelLocked() and TEXTS.pitFuelLocked
         or string.format(TEXTS.pitFuelValue, p.fuel, num(car.fuel) + p.fuel, num(car.maxFuel)), p.times.fuel,
-        off = PitBox.fuelLocked() },
+        off = PitControl.fuelLocked() },
       { 'compound', TEXTS.pitCompound, tostring((ac.getTyresLongName(0, p.compound) or '') ~= ''
         and ac.getTyresLongName(0, p.compound) or names[p.compound] or '-'), nil },
       { 'tyres', TEXTS.pitTyres, nil, p.times.tyres },
@@ -10272,7 +10754,7 @@ do
     if #spinners > 0 then
       local count, seen = {}, {}
       for _, sp in ipairs(spinners) do count[sp.type] = (count[sp.type] or 0) + 1 end
-      local tyresOn = #PitBox.TYRE_CHOICES[p.tyres][2] > 0
+      local tyresOn = PitControl.fourTyres(car)
       for _, sp in ipairs(spinners) do
         seen[sp.type] = (seen[sp.type] or 0) + 1
         local names4 = count[sp.type] == 4 and { 'FL', 'FR', 'RL', 'RR' } or nil
@@ -10385,7 +10867,7 @@ do
         if sel then cursorLine(vx, vx + 3 * 26 * s + textWidth(TEXTS.wheelCode[PitBox.WHEELS[3]], FONT_MONO, fs), y) end
       elseif r[1] == 'suspension' or r[1] == 'powertrain' or r[1] == 'body' then
         local value = p.repair[r[1]] and TEXTS.pitRepairYes
-          or (PitBox.damaged(car, r[1]) and (PitBox.repairLocked() and TEXTS.pitRepairLocked or TEXTS.pitRepairNo)
+          or (PitBox.damaged(car, r[1]) and (PitControl.repairLocked() and TEXTS.pitRepairLocked or TEXTS.pitRepairNo)
           or TEXTS.pitRepairNone)
         drawText(value, FONT_MONO, fs, TMP.a:set(vx, y), sel and COLOR_SEL or COLOR_TITLE)
         if sel then cursorLine(vx, vx + textWidth(value, FONT_MONO, fs), y) end
@@ -11105,8 +11587,8 @@ local drawRaceScreens = (function()
     end
     Drag.icons('laptime', p1, p2, s)
   end
-  local DELTA_REFS = { 'best', 'session', 'optimal', 'alltime' }
-  local function refOn(r) return r ~= 'alltime' or RecordSync.base.best.value ~= nil end
+  local DELTA_REFS = Delta.REFS
+  local function refOn(r) return r ~= 'alltime' or Delta.ref('alltime') ~= nil end
   local deltaRef = tostring(ac.storage['rc.deltaRef'] or '')
   if not TEXTS.scrDeltaRefs[deltaRef] then deltaRef = 'best' end
   local function setDeltaRef(r) deltaRef = r; ac.storage['rc.deltaRef'] = r end
@@ -11118,11 +11600,6 @@ local drawRaceScreens = (function()
       if refOn(DELTA_REFS[at]) then break end
     end
     setDeltaRef(DELTA_REFS[at])
-  end
-  local function sumSplits(list)
-    local t = 0
-    for k = 0, 2 do t = t + (list and CarRead.num(list[k]) or 0) end
-    return t
   end
   local function deltaScreen(car, w, h, s)
     local p1, p2, y, bare = frame('delta', w, h, s, 2.9, TEXTS.scrDelta, nil)
@@ -11142,13 +11619,8 @@ local drawRaceScreens = (function()
         x = a.x - 4 * s
       end
     end
-    local ob = RaceTable.ownBest()
-    local own = ob.ms
-    local all = RecordSync.base.best.value
-    local ref = deltaRef == 'session' and Lap.sessionBest() or deltaRef == 'optimal' and sumSplits(ob.s)
-      or deltaRef == 'alltime' and (all and all.ms or 0) or own
-    local d = nil
-    if own > 0 and ref > 0 and Lap.best.ms == own then d = Lap.delta(car, ref / own) end
+    local ref = Delta.ref(deltaRef)
+    local d = Delta.now(car, ref)
     local bx1, bx2 = p1.x + 14 * s, p2.x - 14 * s
     local mid = (bx1 + bx2) / 2
     ui.drawRectFilled(vec2(bx1, y), vec2(bx2, y + 7 * s), rgbm(1, 1, 1, 0.06), 2 * s)
@@ -11160,18 +11632,10 @@ local drawRaceScreens = (function()
     if Lap.invalidNow() then drawText(TEXTS.scrInvalid, FONT_MONO, 9 * s, TMP.a:set(bx1, y + 2 * s), RED) end
     drawTextRight(d and string.format('%+.3f', d) or '-', FONT_MONO, 13 * s, bx2, y, not d and COLOR_OFF or d > 0 and RED or GREEN)
     y = y + 15 * s
-    local refSplit = deltaRef == 'optimal' and ob.s or ob.lapS
-    local scale = (deltaRef == 'session' and own > 0 and ref > 0) and ref / own or 1
-    if deltaRef == 'alltime' then
-      refSplit, scale = {}, 1
-      for k, v in ipairs(all and all.s or {}) do refSplit[k - 1] = v end
-    end
     local cells = { { TEXTS.scrDeltaSectors, 14, COLOR_DIM } }
-    local curS = Lap.currentSectors()
+    local ds = Delta.sectors(ref)
     for k = 0, 2 do
-      local cur = CarRead.num(curS[k])
-      local rs = refSplit and CarRead.num(refSplit[k]) * scale or 0
-      local v = (cur > 0 and rs > 0) and (cur - rs) / 1000 or nil
+      local v = ds[k]
       cells[#cells + 1] = { v and string.format('%+.2f', v) or '-', 94 + k * 46, v and (v > 0 and RED or GREEN) or nil, true }
     end
     row(p1, y, s, cells)
@@ -15483,13 +15947,13 @@ function script.update(dt)
     KmrDT.sessionReset()
     PassMirror.load()
     if not transition then Lap.connected(car) end
-    if transition then PitStops.settleUntil = state.ui.clock + PitStops.SETTLE_SECONDS end
+    PitControl.sessionStart(transition)
     DriverTable.reset()
     RaceTable.load()
     Audit.load()
     WrongWay.reset()
     PitBox.reset()
-    PitBox.baseNew()
+    PitControl.boxLoad(transition)
     state.swap.swapInfo = nil
     state.tow.jumpPending = false
     state.tow.repairDone = false
@@ -15565,7 +16029,10 @@ function script.update(dt)
   DriverTable.update()
   Desktop.update(car)
   if Desktop.teleSample then Desktop.teleSample(car) end
-  if config.mode == 'CSP' then PitBox.update(car) end
+  if config.mode == 'CSP' then
+    PitControl.update(car)
+    PitBox.update(car)
+  end
   if sw.pendingList then
     local items = sw.pendingList
     sw.pendingList = nil
