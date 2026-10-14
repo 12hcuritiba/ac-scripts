@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V175 - 2026.10.14'
+local RC_VERSION = 'V176 - 2026.10.14'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2475,7 +2475,6 @@ do
         if #changes == 0 then return end
         if not (B.app and B.app.alive) then P.done = nil; ac.storage['rc.pitplan'] = ''; return end
         B.app.setPreset(changes, tonumber(preset) or 0)
-        PitControl.presetsCheck()
         B.strat.nextT, B.strat.sig = state.ui.clock + 2, nil
         rcLog(TEXTS.rc.pitPlan, string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
       end
@@ -5180,13 +5179,11 @@ do
   end
 end
 PitControl = { origin = 'connection', settleUntil = 0, snap = nil, atPlace = false, armed = false, reason = nil, gameOn = false,
-  push = nil, changeSeen = false, presetsDue = true }
+  push = nil, changeSeen = false }
 do
   local SETTLE_SECONDS = 5
   local PUSH_MAX = 0.3
   local PUSH_NEAR = 0.2
-  local PRESETS_GAP = 2
-  local KEPT_AGAIN = 30
   local SERVICE_LOCK_EXTRA = 1
   local GAME_QUIET = 1
   local num = CarRead.num
@@ -5269,28 +5266,6 @@ do
     ac.log(string.format('race-control: pit stop: preset %d brought to the box (fuel %d, compound %s, tyres %d)', idx + 1, box.fuel,
       tostring(box.compound), box.tyres))
   end
-  local presetsT, kept = -1e9, {}
-  local function presetsKeep()
-    if not AppLink.alive or state.pitService or (not PitControl.presetsDue and state.ui.clock - presetsT < PRESETS_GAP) then return end
-    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
-    baseLoad()
-    for i = 0, presetCount() - 1 do
-      local parts = {}
-      for _, sp in ipairs(all) do
-        local n = sp.name and not sp.readOnly and neutral(sp)
-        if n and math.floor(num(presetValue(sp, i))) ~= n then parts[#parts + 1] = sp.name .. '=' .. n end
-      end
-      local data = table.concat(parts, ';')
-      local last = kept[i]
-      if #parts > 0 and (not last or last.data ~= data or state.ui.clock - last.t >= KEPT_AGAIN) then
-        kept[i] = { data = data, t = state.ui.clock }
-        AppLink.writePreset(i, data)
-      end
-    end
-    presetsT = state.ui.clock
-    PitControl.presetsDue = false
-  end
-  function PitControl.presetsCheck() PitControl.presetsDue = true end
   function PitControl.fuelLocked() return state.redFlag ~= nil and not state.redFuelOk end
   function PitControl.repairLocked() return state.redFlag ~= nil and state.redTow ~= nil end
   function PitControl.fourTyres(car)
@@ -5375,7 +5350,7 @@ do
   function PitControl.sessionStart(transition)
     local _, _, source = Record.load('car')
     newPresence(transition and 'session' or source == 'store' and 'reload' or 'connection', transition)
-    PitControl.practiceReset, PitControl.changeSeen, PitControl.push, PitControl.presetsDue = false, false, nil, true
+    PitControl.practiceReset, PitControl.changeSeen, PitControl.push = false, false, nil
     PitControl.gameOn = false
     gameSet = nil
     PitControl.baseNew()
@@ -5513,7 +5488,7 @@ do
       baseCommit(keepReq, lastReq.idx)
     end
     PitControl.tyresByGame, PitControl.tyresBefore, lastReq = false, nil, nil
-    PitControl.gameOn, PitControl.gameUsed, PitControl.snap, PitControl.reason, PitControl.presetsDue = false, false, nil, nil, true
+    PitControl.gameOn, PitControl.gameUsed, PitControl.snap, PitControl.reason = false, false, nil, nil
     local repaired = p.repair.suspension or p.repair.powertrain or p.repair.body
     PitStops.record(Lap.number(), fuel - fuelBefore, #wheels, p.compound ~= mounted, repaired)
   end
@@ -5605,7 +5580,6 @@ do
   function PitControl.update(car)
     local box = PitControl.box
     gameApply()
-    presetsKeep()
     boxSave()
     if box.imported == nil and #(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) > 0 and not state.pitService then
       PitControl.importPreset(box.presetIndex())
