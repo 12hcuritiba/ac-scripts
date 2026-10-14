@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V181 - 2026.10.14'
+local RC_VERSION = 'V182 - 2026.10.14'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1066,6 +1066,8 @@ local state = {
   sessionStartPending = false,
   jumpSinceUpdate = false,
   sessionResetDue = false,
+  sessionStartIndex = nil,
+  sessionPhase = 'start',
   kmrMessages = {},
   tyreLaps = { [0] = 0, 0, 0, 0 },
   tyreKm = { [0] = 0, 0, 0, 0 },
@@ -1157,13 +1159,14 @@ for _, zone in ipairs(config.cutZones) do
   zoneLog[#zoneLog + 1] = zone.category .. '=' .. tostring(zone.enabled) .. ' ' .. zone.startPos .. '-' .. zone.endPos
 end
 ac.onSessionStart(function(index, restarted)
-  state.sessionStartPending = true
+  state.sessionStartPending, state.sessionStartIndex = true, index
   ac.log(string.format('race-control: session start event (index %d, restarted %s)', index, tostring(restarted)))
 end)
 ac.onCarJumped(0, function()
   state.jumpSinceUpdate = true
   local late = state.sessionResetDue
-  if state.lastSessionIndex ~= -1 and (sim.currentSessionIndex ~= state.lastSessionIndex or state.sessionStartPending or late) then
+  local waiting = state.sessionPhase == 'waiting'
+  if state.lastSessionIndex ~= -1 and (sim.currentSessionIndex ~= state.lastSessionIndex or state.sessionStartPending or late or waiting) then
     state.sessionResetDue = false
     ac.log('race-control: car reset by the session start (not a tow)' .. (late and ', after the start was taken' or ''))
     if late then for _, fn in ipairs(state.onSessionReset) do fn() end end
@@ -2022,30 +2025,40 @@ do
     if on() then B.queue[list] = text end
   end
   local LINES_MAX = 30
+  B.old = {}
+  function B.closeSession(key)
+    if next(B.queue) == nil and #state.rcOut == 0 and #state.lapOut == 0 then return end
+    B.old[#B.old + 1] = { key = key, queue = B.queue, rc = state.rcOut, laps = state.lapOut }
+    B.queue, state.rcOut, state.lapOut = {}, {}, {}
+  end
   function B.update()
-    if not on() or B.busy or state.ui.clock < B.nextT or (next(B.queue) == nil and #state.rcOut == 0 and #state.lapOut == 0) then
+    if not on() or B.busy or state.ui.clock < B.nextT then return end
+    local src = B.old[1] or { key = Record.key(), queue = B.queue, rc = state.rcOut, laps = state.lapOut, now = true }
+    if next(src.queue) == nil and #src.rc == 0 and #src.laps == 0 then
+      if not src.now then table.remove(B.old, 1) end
       return
     end
-    local sent, parts = B.queue, {}
-    B.queue = {}
+    local sent, parts = src.queue, {}
+    if src.now then B.queue = {} else src.queue = {} end
     for _, text in pairs(sent) do parts[#parts + 1] = jsonStr(text) end
     local lines, lineParts = {}, {}
-    while #lines < LINES_MAX and #state.rcOut > 0 do lines[#lines + 1] = table.remove(state.rcOut, 1) end
+    while #lines < LINES_MAX and #src.rc > 0 do lines[#lines + 1] = table.remove(src.rc, 1) end
     for _, l in ipairs(lines) do lineParts[#lineParts + 1] = jsonStr(l) end
     local lapLines, lapParts = {}, {}
-    while #lapLines < LINES_MAX and #state.lapOut > 0 do lapLines[#lapLines + 1] = table.remove(state.lapOut, 1) end
+    while #lapLines < LINES_MAX and #src.laps > 0 do lapLines[#lapLines + 1] = table.remove(src.laps, 1) end
     for _, l in ipairs(lapLines) do lapParts[#lapParts + 1] = jsonStr(l) end
     B.busy, B.nextT = true, state.ui.clock + BASE_GAP
-    local body = '{"key":' .. jsonStr(Record.key()) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '')
+    local body = '{"key":' .. jsonStr(src.key) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '')
       .. ',"records":[' .. table.concat(parts, ',') .. '],"lines":[' .. table.concat(lineParts, ',') .. '],"laps":['
       .. table.concat(lapParts, ',') .. ']}'
     WebQueue.request('POST', config.baseUrl .. '/v1/batch', { ['Content-Type'] = 'application/json' }, body,
       function(err, res)
         B.busy = false
         if err or not res or (tonumber(res.status) or 0) >= 300 then
-          for list, text in pairs(sent) do if B.queue[list] == nil then B.queue[list] = text end end
-          for i = #lines, 1, -1 do table.insert(state.rcOut, 1, lines[i]) end
-          for i = #lapLines, 1, -1 do table.insert(state.lapOut, 1, lapLines[i]) end
+          local q = src.now and B.queue or src.queue
+          for list, text in pairs(sent) do if q[list] == nil then q[list] = text end end
+          for i = #lines, 1, -1 do table.insert(src.rc, 1, lines[i]) end
+          for i = #lapLines, 1, -1 do table.insert(src.laps, 1, lapLines[i]) end
           if not B.failLogged then
             B.failLogged = true
             ac.log('race-control: base online not reached (' .. tostring(err or (res and res.status)) .. '): kept to send again')
@@ -16201,16 +16214,157 @@ function CarControls.update(dt)
   CarControls.timer = 0
   ac.setCurrentCamera(CarControls.mode)
 end
+Session = { phase = 'start', target = nil, lastTime = nil, g = nil }
+function Session.close(index)
+  Session.phase, Session.target, Session.jumped = 'waiting', { index = index, time = Session.lastTime or math.huge }, false
+  state.sessionPhase = 'waiting'
+  state.sessionStartPending = false
+  ac.log(string.format('race-control: session %d dropped by the game: every task stopped, waiting for the session %d', CarRead.num(state.lastSessionIndex),
+    CarRead.num(index)))
+  rcLog(TEXTS.rc.sessionEnd, 'session dropped by the game')
+  showNotice(TEXTS.rcTitle, TEXTS.rc.sessionEnd, nil, 10)
+  RecordSync.base.closeSession(Record.key())
+  OnlineQueue.items = {}
+  state.chat.queue = {}
+end
+function Session.begin(car, transition, jumpedNow)
+  local l = state.list
+  local g = { t = car.currentPenaltyType, p = car.currentPenaltyParameter }
+  local inPit = car.isInPitlane
+  ac.log(string.format('race-control: session start (index %d%s)', sim.currentSessionIndex, transition and '' or ', script start'))
+  Session.phase, Session.target = 'running', nil
+  state.sessionPhase = 'running'
+  state.sessionStartPending = false
+  RecordSync.base.forecastNew()
+  RecordSync.base.serverNew()
+  if transition then
+    Record.fresh()
+    state.redFlag = nil
+    state.restart = nil
+    state.postRed = nil
+    state.lights = nil
+    local r = state.repair
+    r.class, r.lapsLeft, r.text, r.detail, r.beyondSince, r.waived = 'normal', nil, nil, nil, nil, nil
+    for i = 0, 3 do TyreUse.fitted(i) end
+    PitSpeed.entryLap, PitSpeed.over, PitSpeed.annul, PitSpeed.maxKmh, PitSpeed.afterJump = nil, false, false, 0, false
+    state.sessionResetDue = not jumpedNow
+    RecordSync.peers, RecordSync.parts, RecordSync.pending = {}, {}, {}
+    StopAndGo.stopping, StopAndGo.resume, StopAndGo.checkedKind, StopAndGo.base = false, false, nil, 0
+    Connection.cars, Connection.menu, Connection.kicks = {}, {}, {}
+  end
+  Lap.sessionStart(transition)
+  local lapCount = Lap.count
+  l.curLap = lapCount
+  state.lastSessionIndex = sim.currentSessionIndex
+  l.jumped = false
+  state.prevInPitlane = {}
+  state.cutPassPenalized = {}
+  state.zonePass = {}
+  GainRef.load()
+  state.cutChecks = {}
+  state.slowdowns = {}
+  state.pitDsqActive = false
+  state.dtDsqActive = false
+  state.code80 = nil
+  state.code80Ended = false
+  Flags.sessionReset()
+  Start.reset()
+  state.pitPaid = nil
+  Audit.askAt = nil
+  state.dsqFlagPutBack = nil
+  TrackList.load()
+  CarState.load(transition and jumpedNow)
+  state.hold = nil
+  PitRecord.holdEnded = nil
+  PitRecord.load(transition)
+  PitStops.wasInPitlane = nil
+  PitStops.passInWindow = false
+  PitStops.pass = nil
+  PitStops.line = 0
+  PitStops.endChecked = false
+  Rules.endTimeDone = false
+  KmrDT.sessionReset()
+  PassMirror.load()
+  if not transition then Lap.connected(car) end
+  PitControl.sessionStart(transition)
+  DriverTable.reset()
+  RaceTable.load()
+  Audit.load()
+  WrongWay.reset()
+  PitBox.reset()
+  PitControl.boxLoad(transition)
+  state.swap.swapInfo = nil
+  state.tow.jumpPending = false
+  state.tow.repairDone = false
+  state.tow.damage = nil
+  state.tow.lastRead = nil
+  l.endOfLap = {}
+  l.lastLap = lapCount
+  l.prevInPit = inPit
+  physics.lockUserControlsFor(0)
+  if g.t == BLACK_FLAG then
+    physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag)
+    g = { t = 0, p = 0 }
+  end
+  l.prevGame = { t = g.t, p = g.p }
+  Rules.sessionSync(g)
+  local window = Record.load('window')
+  state.pit.done = window == 'done'
+  state.pit.missed = window == 'missed'
+  local stopWindow = Record.load('stopwindow')
+  state.pit.stopDone = stopWindow == 'done'
+  state.pit.stopMissed = stopWindow == 'missed'
+  SwapRecord.apply(Record.load('swap'))
+  if not transition then
+    RecordSync.base.askOwn()
+    RecordSync.askLater()
+  end
+  ac.log(string.format('race-control: laps of the Racing Control %d (lap %d), of the game %d, server time %d ms', lapCount, Lap.number(),
+    CarRead.num(car.lapCount), serverTimeMs()))
+  state.ui.lastSeq = l.seq
+  state.ui.notice = nil
+  Session.g = g
+end
+function Session.update(car)
+  local jumpedNow = state.jumpSinceUpdate
+  state.jumpSinceUpdate = false
+  if Session.phase == 'start' then
+    Session.begin(car, state.lastSessionIndex ~= -1, jumpedNow)
+  elseif Session.phase == 'running' and state.sessionStartPending then
+    Session.close(state.sessionStartIndex or sim.currentSessionIndex)
+  elseif Session.phase == 'running' and sim.currentSessionIndex ~= state.lastSessionIndex then
+    Session.close(sim.currentSessionIndex)
+    Session.target.time = math.huge
+  end
+  if Session.phase == 'waiting' then
+    if state.sessionStartPending then
+      state.sessionStartPending = false
+      Session.target.index = state.sessionStartIndex or Session.target.index
+    end
+    if jumpedNow then Session.jumped = true end
+    local t = Session.target
+    if sim.currentSessionIndex ~= t.index or CarRead.num(sim.currentSessionTime) >= t.time then return false end
+    Session.begin(car, true, Session.jumped)
+  end
+  Session.lastTime = CarRead.num(sim.currentSessionTime)
+  return true
+end
 function script.update(dt)
   if not ServerGuard.check(dt) then return end
   local car = ac.getCar(0)
   local l = state.list
-  local g = { t = car.currentPenaltyType, p = car.currentPenaltyParameter }
-  local inPit = car.isInPitlane
   state.ui.clock = state.ui.clock + dt
-  local lapCount = Lap.frame(car)
   OnlineQueue.update()
   AppLink.update()
+  if not Session.update(car) then
+    RecordSync.base.update()
+    OnlineQueue.web.update()
+    return
+  end
+  local g = Session.g or { t = car.currentPenaltyType, p = car.currentPenaltyParameter }
+  Session.g = nil
+  local inPit = car.isInPitlane
+  local lapCount = Lap.frame(car)
   RecordSync.base.nameUpdate()
   if lapCount > (Audit.askLap or lapCount) then Audit.askPending = true end
   if Audit.askAt == nil then Audit.askAt = state.ui.clock + 15 end
@@ -16218,99 +16372,6 @@ function script.update(dt)
   Audit.askLap = lapCount
   if sim.isOnlineRace ~= false then Audit.kmrAsk() end
   Audit.kmrSend()
-  local jumpedNow = state.jumpSinceUpdate
-  state.jumpSinceUpdate = false
-  if sim.currentSessionIndex ~= state.lastSessionIndex or state.sessionStartPending then
-    local transition = state.lastSessionIndex ~= -1
-    ac.log(string.format('race-control: session start (index %d%s%s)', sim.currentSessionIndex,
-      state.sessionStartPending and ', start event' or '', transition and '' or ', script start'))
-    state.sessionStartPending = false
-    RecordSync.base.forecastNew()
-    RecordSync.base.serverNew()
-    if transition then
-      Record.fresh()
-      state.redFlag = nil
-      state.restart = nil
-      state.postRed = nil
-      state.lights = nil
-      local r = state.repair
-      r.class, r.lapsLeft, r.text, r.detail, r.beyondSince, r.waived = 'normal', nil, nil, nil, nil, nil
-      for i = 0, 3 do TyreUse.fitted(i) end
-      PitSpeed.entryLap, PitSpeed.over, PitSpeed.annul, PitSpeed.maxKmh = nil, false, false, 0
-      state.sessionResetDue = not jumpedNow
-    end
-    Lap.sessionStart(transition)
-    lapCount = Lap.count
-    l.curLap = lapCount
-    state.lastSessionIndex = sim.currentSessionIndex
-    l.jumped = false
-    state.prevInPitlane = {}
-    state.cutPassPenalized = {}
-    state.zonePass = {}
-    GainRef.load()
-    state.cutChecks = {}
-    state.slowdowns = {}
-    state.pitDsqActive = false
-    state.dtDsqActive = false
-    state.code80 = nil
-    state.code80Ended = false
-    Flags.sessionReset()
-    Start.reset()
-    state.pitPaid = nil
-    Audit.askAt = nil
-    state.dsqFlagPutBack = nil
-    TrackList.load()
-    CarState.load(transition and jumpedNow)
-    state.hold = nil
-    PitRecord.holdEnded = nil
-    PitRecord.load(transition)
-    PitStops.wasInPitlane = nil
-    PitStops.passInWindow = false
-    PitStops.pass = nil
-    PitStops.line = 0
-    PitStops.endChecked = false
-    Rules.endTimeDone = false
-    KmrDT.sessionReset()
-    PassMirror.load()
-    if not transition then Lap.connected(car) end
-    PitControl.sessionStart(transition)
-    DriverTable.reset()
-    RaceTable.load()
-    Audit.load()
-    WrongWay.reset()
-    PitBox.reset()
-    PitControl.boxLoad(transition)
-    state.swap.swapInfo = nil
-    state.tow.jumpPending = false
-    state.tow.repairDone = false
-    state.tow.damage = nil
-    state.tow.lastRead = nil
-    l.endOfLap = {}
-    l.lastLap = lapCount
-    l.prevInPit = inPit
-    physics.lockUserControlsFor(0)
-    if g.t == BLACK_FLAG then
-      physics.setCarPenalty(ac.PenaltyType.ReleaseBlackFlag)
-      g = { t = 0, p = 0 }
-    end
-    l.prevGame = { t = g.t, p = g.p }
-    Rules.sessionSync(g)
-    local window = Record.load('window')
-    state.pit.done = window == 'done'
-    state.pit.missed = window == 'missed'
-    local stopWindow = Record.load('stopwindow')
-    state.pit.stopDone = stopWindow == 'done'
-    state.pit.stopMissed = stopWindow == 'missed'
-    SwapRecord.apply(Record.load('swap'))
-    if not transition then
-      RecordSync.base.askOwn()
-      RecordSync.askLater()
-    end
-    ac.log(string.format('race-control: laps of the Racing Control %d (lap %d), of the game %d, server time %d ms', lapCount, Lap.number(),
-      CarRead.num(car.lapCount), serverTimeMs()))
-    state.ui.lastSeq = l.seq
-    state.ui.notice = nil
-  end
   if state.sessionResetDue and CarRead.num(car.speedKmh) > 5 then state.sessionResetDue = false end
   CarControls.update(dt)
   Diag.update(car)
