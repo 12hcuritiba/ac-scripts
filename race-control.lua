@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V184 - 2026.10.15'
+local RC_VERSION = 'V185 - 2026.10.15'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -3231,7 +3231,7 @@ ac.onClientConnected(function(carIndex, sessionID)
       list = sw.carLists[carIndex], dueT = state.ui.clock + delay }
   end
 end)
-local Lap = { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false }, last = nil, others = {}, splits = nil }
+local Lap = { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false }, last = nil, others = {}, splits = nil, passT = {} }
 do
   local HALF = 0.5
   local ABSORB_S = 2
@@ -3300,7 +3300,7 @@ do
   function Lap.sessionStart(transition)
     Lap.count, Lap.base, Lap.last, Lap.seq, P.recDriver = 0, 0, nil, 0, nil
     Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel = false, false, false
-    Lap.best, Lap.others = { ms = 0, trace = nil, s = {} }, {}
+    Lap.best, Lap.others, Lap.passT = { ms = 0, trace = nil, s = {} }, {}, {}
     P.sp, P.t, P.raw, P.prog, P.secT, P.broken, P.trace, P.lineT = nil, nil, nil, transition and 0 or 1, {}, false, {}, -1e9
     P.info, P.pit = newInfo(), { started = nil, entered = false, left = false, wasIn = nil }
     P.open = transition and not ac.getCar(0).isInPitlane or false
@@ -3340,17 +3340,57 @@ do
     if t - P.crashT >= CRASH_GAP * 1000 then P.info.crash = P.info.crash + 1 end
     P.crashT = t
   end)
+  local function binsAlong(p0, p1, t0, t1, into, minus)
+    if p1 <= p0 then return end
+    for i = math.floor(p0 * BINS) + 1, math.floor(p1 * BINS) do
+      if i >= 1 and i <= BINS then into[i] = t0 + (i / BINS - p0) / (p1 - p0) * (t1 - t0) - minus end
+    end
+  end
+  local function stepOf(a, ta, b, tb)
+    local d = b - a
+    if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
+    if d > 0 and b < a then return d, ta + (1 - a) / d * (tb - ta) end
+    return d, nil
+  end
   local function along(p0, p1, t0, t1)
     if p1 <= p0 then return end
     local function at(x) return t0 + (x - p0) / (p1 - p0) * (t1 - t0) end
     for k, b in ipairs(splits()) do
       if p0 < b and b <= p1 then P.secT[k] = at(b) end
     end
-    if P.start then
-      for i = math.floor(p0 * BINS) + 1, math.floor(p1 * BINS) do
-        if i >= 1 and i <= BINS then P.trace[i] = at(i / BINS) - P.start end
+    if P.start then binsAlong(p0, p1, t0, t1, P.trace, P.start) end
+  end
+  function Lap.passAt(i, sp, now)
+    local o = Lap.passT[i]
+    if not o then
+      o = { at = {} }
+      Lap.passT[i] = o
+    end
+    if o.sp ~= nil and sim.isSessionStarted then
+      local d, crossT = stepOf(o.sp, o.t, sp, now)
+      if crossT then
+        binsAlong(o.sp, 1, o.t, crossT, o.at, 0)
+        binsAlong(0, sp, crossT, now, o.at, 0)
+      elseif d > 0 then
+        binsAlong(o.sp, sp, o.t, now, o.at, 0)
       end
     end
+    o.sp, o.t = sp, now
+  end
+  ac.onCarJumped(-1, function(i)
+    local o = Lap.passT[i]
+    if o then o.sp = nil end
+  end)
+  function Lap.gapAt(b, a)
+    local ob, oa = Lap.passT[b], Lap.passT[a]
+    if not ob or not oa or ob.sp == nil then return nil end
+    local x = ob.sp * BINS
+    local k = math.floor(x)
+    local t0 = oa.at[k >= 1 and k or BINS]
+    if not t0 then return nil end
+    local t1 = k + 1 <= BINS and oa.at[k + 1] or nil
+    local ta = (t1 and t1 >= t0) and (t0 + (t1 - t0) * (x - k)) or t0
+    return math.max(ob.t - ta, 0) / 1000
   end
   local function close(car, t, viaPit)
     Lap.count = Lap.count + 1
@@ -3416,10 +3456,9 @@ do
     local sp = CarRead.num(car.splinePosition)
     local crossT
     if P.sp ~= nil then
-      local d = sp - P.sp
-      if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
-      if d > 0 and sp < P.sp then
-        crossT = P.t + (1 - P.sp) / d * (now - P.t)
+      local d
+      d, crossT = stepOf(P.sp, P.t, sp, now)
+      if crossT then
         along(P.sp, 1, P.t, crossT)
       elseif d > 0 then
         along(P.sp, sp, P.t, now)
@@ -8881,6 +8920,7 @@ do
     local session = ac.getSession(sim.currentSessionIndex)
     local board = session and session.leaderboard
     local rows, byIndex, absent, added = {}, {}, {}, false
+    local now = serverTimeMs()
     if board then
       for k = 0, #board do
         local e = board[k]
@@ -8899,6 +8939,7 @@ do
             team = tostring(ac.getDriverTeam(c.index) or ''), laps = laps, best = best,
             spline = CarRead.num(c.splinePosition), inPit = c.isInPitlane, connected = c.isConnected,
             stops = RaceTable.stops[c.index] or 0 }
+          Lap.passAt(c.index, r.spline, now)
           if RaceTable.seen[c.index] or laps > 0 or best > 0 or inBoard then
             rows[#rows + 1] = r
           else
@@ -11958,7 +11999,12 @@ local drawRaceScreens = (function()
     local function gapTo(r, front)
       if not front or r == front then return '-' end
       local dl = front.laps - r.laps
-      return dl >= 1 and string.format(TEXTS.lapsShort, dl) or string.format('%.1f', math.abs(ac.getGapBetweenCars(r.index, front.index)))
+      if dl >= 1 then return string.format(TEXTS.lapsShort, dl) end
+      if sim.raceSessionType == ac.SessionType.Race then
+        local g = Lap.gapAt(r.index, front.index)
+        return g and string.format('%.1f', g) or '-'
+      end
+      return string.format('%.1f', math.abs(ac.getGapBetweenCars(r.index, front.index)))
     end
     for i = first, last do
       local r = list[i]
@@ -13106,8 +13152,16 @@ float4 main(PS_IN pin) {
       local gap = '-'
       if me and r and r ~= me then
         local dl = math.abs(r.laps - me.laps)
-        local g = ac.getGapBetweenCars(0, r.index)
-        gap = dl >= 1 and ('+' .. string.format(TEXTS.lapsShort, dl)) or string.format('%+.3f', -g)
+        if dl >= 1 then
+          gap = '+' .. string.format(TEXTS.lapsShort, dl)
+        elseif sim.raceSessionType == ac.SessionType.Race then
+          local ahead = (r.pos or 0) < (me.pos or 0)
+          local g
+          if ahead then g = Lap.gapAt(0, r.index) else g = Lap.gapAt(r.index, 0) end
+          gap = g and string.format('%+.3f', ahead and -g or g) or '-'
+        else
+          gap = string.format('%+.3f', -ac.getGapBetweenCars(0, r.index))
+        end
       end
       row(p1, y, s, { { label, 14, COLOR_DIM, false, FONT_TEXT }, { r and r ~= me and ('#' .. r.number) or '-', 90 },
         { gap, 272, COLOR_TITLE, true } })
