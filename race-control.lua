@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V185 - 2026.10.15'
+local RC_VERSION = 'V186 - 2026.10.15'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1169,9 +1169,12 @@ ac.onCarJumped(0, function()
   local late = state.sessionResetDue
   local waiting = state.sessionPhase == 'waiting'
   if state.lastSessionIndex ~= -1 and (sim.currentSessionIndex ~= state.lastSessionIndex or state.sessionStartPending or late or waiting) then
-    state.sessionResetDue = false
     ac.log('race-control: car reset by the session start (not a tow)' .. (late and ', after the start was taken' or ''))
     if late then for _, fn in ipairs(state.onSessionReset) do fn() end end
+    return
+  end
+  if state.sessionPhase == 'over' or Session.ended(ac.getCar(0)) then
+    ac.log('race-control: car reset after the end of the session (not a tow)')
     return
   end
   for _, fn in ipairs(state.onJumped) do fn() end
@@ -1486,10 +1489,13 @@ function Record.decode(text)
 end
 Record.onSave = nil
 Record.onTampered = nil
-Record.floor = 0
-function Record.fresh() Record.floor = math.floor(serverTimeMs() / 1000) end
+Record.floor, Record.top = 0, 0
+function Record.fresh(lastSec)
+  Record.floor = math.max(math.floor(serverTimeMs() / 1000), math.floor(lastSec or 0), Record.top + 1)
+end
 function Record.save(list, seq, body)
   if seq < Record.floor then seq = Record.floor + seq end
+  if seq > Record.top then Record.top = seq end
   local text = Record.encode(list, seq, body)
   ac.store(RECORD_PREFIX .. list, text)
   ac.storage[STORAGE_PREFIX .. list] = text
@@ -1498,6 +1504,7 @@ function Record.save(list, seq, body)
 end
 local function valid(rec, list)
   if not rec or rec.list ~= list or not Record.sameRace(rec.key, Record.key()) or rec.seq < Record.floor then return nil end
+  if rec.seq > Record.top then Record.top = rec.seq end
   return rec
 end
 function Record.load(list)
@@ -7971,6 +7978,8 @@ do
     Flags.timeSeen = false
     Flags.lastLap, Flags.lastLapSession, Flags.sector, Flags.greenUntil, Flags.lastGroup = nil, nil, nil, 0, nil
     if Flags.parkedReset then Flags.parkedReset() end
+    if Flags.formationReset then Flags.formationReset() end
+    if Flags.officialReset then Flags.officialReset() end
   end
   local function sessionEnd(car, lineFrame)
     if Flags.endSession ~= sim.currentSessionIndex then
@@ -8282,6 +8291,7 @@ do
     os_ = { session = idx, lockT = -1e9, held = false, released = false, relPos = nil, relLook = nil, jumped = false,
       creep = 0, startLogged = false }
   end
+  function Flags.officialReset() os_ = { session = nil } end
   local lastGame = nil
   function Flags.officialStart(car, g)
     local gameNow = tostring(g.t) .. '/' .. tostring(g.p)
@@ -8474,6 +8484,7 @@ do
     Formation.armed = false
     Formation.gridAt, Formation.leftGrid, Formation.speedWarn = nil, false, nil
   end
+  function Flags.formationReset() reset(nil) end
   local function tag(i) return string.format('#%s', tostring(ac.getDriverNumber(i) or i)) end
   local function lapLen() return tonumber(sim.trackLengthM) or 0 end
   local function gapM(a, b) return ((CarRead.num(b.splinePosition) - CarRead.num(a.splinePosition)) % 1) * lapLen() end
@@ -16383,9 +16394,31 @@ function CarControls.update(dt)
   CarControls.timer = 0
   ac.setCurrentCamera(CarControls.mode)
 end
-Session = { phase = 'start', target = nil, lastTime = nil, g = nil }
+Session = { phase = 'start', target = nil, lastTime = nil, g = nil, tableT = 0 }
+function Session.ended(car)
+  if sim.isSessionFinished == true or Flags.ending == 'finished' then return true end
+  local race = sim.raceSessionType == ac.SessionType.Race
+  if not race then return Flags.ending == 'timeOver' end
+  return Flags.ending ~= nil and car ~= nil and car.isRaceFinished == true
+end
+function Session.finish()
+  Session.phase = 'over'
+  state.sessionPhase = 'over'
+  ac.log(string.format('race-control: session %d over for this car (chequered flag): every task stopped, the history to the base',
+    CarRead.num(sim.currentSessionIndex)))
+  rcLog(TEXTS.rc.sessionEnd, 'session over for this car - history sent')
+  RecordSync.base.closeSession(Record.key())
+end
+function Session.screens(car)
+  Desktop.update(car)
+  if state.ui.clock >= Session.tableT then
+    Session.tableT = state.ui.clock + 0.25
+    RaceTable.refresh()
+  end
+end
 function Session.close(index)
   Session.phase, Session.target, Session.jumped = 'waiting', { index = index, time = Session.lastTime or math.huge }, false
+  Session.dropTime = Session.lastTime
   state.sessionPhase = 'waiting'
   state.sessionStartPending = false
   ac.log(string.format('race-control: session %d dropped by the game: every task stopped, waiting for the session %d', CarRead.num(state.lastSessionIndex),
@@ -16407,7 +16440,7 @@ function Session.begin(car, transition, jumpedNow)
   RecordSync.base.forecastNew()
   RecordSync.base.serverNew()
   if transition then
-    Record.fresh()
+    Record.fresh((Session.dropTime or 0) / 1000)
     state.redFlag = nil
     state.restart = nil
     state.postRed = nil
@@ -16416,7 +16449,7 @@ function Session.begin(car, transition, jumpedNow)
     r.class, r.lapsLeft, r.text, r.detail, r.beyondSince, r.waived = 'normal', nil, nil, nil, nil, nil
     for i = 0, 3 do TyreUse.fitted(i) end
     PitSpeed.entryLap, PitSpeed.over, PitSpeed.annul, PitSpeed.maxKmh, PitSpeed.afterJump = nil, false, false, 0, false
-    state.sessionResetDue = not jumpedNow
+    state.sessionResetDue = true
     RecordSync.peers, RecordSync.parts, RecordSync.pending = {}, {}, {}
     StopAndGo.stopping, StopAndGo.resume, StopAndGo.checkedKind, StopAndGo.base = false, false, nil, 0
     Connection.cars, Connection.menu, Connection.kicks = {}, {}, {}
@@ -16499,11 +16532,18 @@ function Session.update(car)
   state.jumpSinceUpdate = false
   if Session.phase == 'start' then
     Session.begin(car, state.lastSessionIndex ~= -1, jumpedNow)
-  elseif Session.phase == 'running' and state.sessionStartPending then
+  elseif (Session.phase == 'running' or Session.phase == 'over') and state.sessionStartPending then
     Session.close(state.sessionStartIndex or sim.currentSessionIndex)
-  elseif Session.phase == 'running' and sim.currentSessionIndex ~= state.lastSessionIndex then
+  elseif (Session.phase == 'running' or Session.phase == 'over') and sim.currentSessionIndex ~= state.lastSessionIndex then
     Session.close(sim.currentSessionIndex)
     Session.target.time = math.huge
+  elseif Session.phase == 'running' and Flags.ending == 'finished'
+      and (sim.raceSessionType ~= ac.SessionType.Race or PitStops.endChecked) then
+    Session.finish()
+  end
+  if Session.phase == 'over' then
+    Session.lastTime = CarRead.num(sim.currentSessionTime)
+    return false
   end
   if Session.phase == 'waiting' then
     if state.sessionStartPending then
@@ -16528,6 +16568,7 @@ function script.update(dt)
   if not Session.update(car) then
     RecordSync.base.update()
     OnlineQueue.web.update()
+    if Session.phase == 'over' then Session.screens(car) end
     return
   end
   local g = Session.g or { t = car.currentPenaltyType, p = car.currentPenaltyParameter }
