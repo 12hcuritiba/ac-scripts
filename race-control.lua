@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V182 - 2026.10.14'
+local RC_VERSION = 'V183 - 2026.10.15'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -213,6 +213,7 @@ local TEXTS = {
   pitFuelValue = '+%d L (to %d / %d L)',
   pitCompound = 'Compound',
   pitTyres = 'Tyres',
+  pitTyresByCompound = '4: compound change',
   pitPressureFront = 'Pressure front',
   pitPressureRear = 'Pressure rear',
   pitWing = 'Wing',
@@ -359,6 +360,7 @@ local TEXTS = {
   },
   dsqBlackFlag = 'Black flag',
   dsqDtReason = 'Drive-through not served',
+  dsqSgReason = 'Stop & go not served',
   wrongWayDsq = 'Driving the wrong way',
   swapVoidService = 'Driver swap not valid - service in the same pit stop',
   swapVoidSg = 'Driver swap not valid - stop & go served in the same pit stop',
@@ -4207,8 +4209,8 @@ end
 local PitStops
 local Rules = {}
 function Rules.itemEncode(it)
-  return string.format('%s,%s,%d,%d,%d,%d,%d,%d', it.cat, it.kind, it.laps, it.givenLap, it.expireLap, it.seq,
-    it.dt0OnTrack and 1 or 0, it.id or it.seq)
+  return string.format('%s,%s,%d,%d,%d,%d,%d,%d,%s', it.cat, it.kind, it.laps, it.givenLap, it.expireLap, it.seq,
+    it.dt0OnTrack and 1 or 0, it.id or it.seq, it.why or '')
 end
 function Rules.itemDecode(text, shift)
   local f = {}
@@ -4219,7 +4221,7 @@ function Rules.itemDecode(text, shift)
   shift = shift or 0
   return { cat = f[1], kind = f[2], laps = tonumber(f[3]), givenLap = tonumber(f[4]) + shift,
     expireLap = tonumber(f[5]) + shift, seq = tonumber(f[6]), dt0OnTrack = f[7] == '1',
-    id = tonumber(f[8]) or tonumber(f[6]) }
+    id = tonumber(f[8]) or tonumber(f[6]), why = f[9] and f[9]:match('^[%w/]+$') or nil }
 end
 function Rules.lapShift(lap)
   local lapNow = Lap.count
@@ -4287,6 +4289,26 @@ local function reasonLog(cat)
   local base = TEXTS.kmrReasons[cat]
   return base and (base .. ' (issued by KMR)') or tostring(TEXTS.reason[cat] or cat)
 end
+function Rules.sgWhy(it, log)
+  local out = {}
+  for code in tostring(it.why or ''):gmatch('[^/]+') do
+    local car = code:match('^YP(%d+)$')
+    if code == '2DT' then out[#out + 1] = TEXTS.holdTwoDT
+    elseif car then out[#out + 1] = string.format(TEXTS.yellowPassSG, '#' .. car)
+    elseif code == 'RS' then out[#out + 1] = string.format(TEXTS.redFlagSpeedSG, config.flags.redSpeedKmh, config.flags.redOverSeconds)
+    elseif code == 'RL' then out[#out + 1] = TEXTS.redNoLineSG
+    elseif code == 'PC' then out[#out + 1] = TEXTS.dsqWhy.pitClosed
+    else out[#out + 1] = log and reasonLog(code) or tostring(TEXTS.reason[code] or code) end
+  end
+  return table.concat(out, ', ')
+end
+function Rules.itemReasonLog(it)
+  if it.kind:sub(1, 2) == 'SG' then
+    local why = Rules.sgWhy(it, true)
+    if why ~= '' then return why end
+  end
+  return reasonLog(it.cat)
+end
 local function listAdd(cat, laps)
   local l = state.list
   if Rules.dsqOn() then
@@ -4299,6 +4321,7 @@ local function listAdd(cat, laps)
     local n = sgCount(sg) + 1
     sg.cat = 'SG' .. n
     if TEXTS.kmrReasons[cat] then sg.kind = sg.kind .. 'x' .. cat:sub(2) end
+    sg.why = ((sg.why or '') ~= '' and (sg.why .. '/') or '') .. cat
     l.seq = l.seq + 1
     sg.seq = l.seq
     ac.log(string.format('race-control: stop & go +1 (%s): %d DT, %d s', cat, n, sgSeconds(sg)))
@@ -4359,7 +4382,7 @@ local function carDsq(kind, reason, mode, detail)
   l.seq = l.seq + 1
   if l.dsq == 2 then state.pitDsqActive = true else state.dtDsqActive = true end
   local voided = {}
-  for _, it in ipairs(l.items) do voided[#voided + 1] = reasonLog(it.cat) end
+  for _, it in ipairs(l.items) do voided[#voided + 1] = Rules.itemReasonLog(it) end
   Rules.zero()
   local why = detail and (reason .. ' - ' .. detail) or reason
   if #voided > 0 then why = why .. ' - ' .. string.format(TEXTS.dsqVoided, table.concat(voided, ', ')) end
@@ -4403,7 +4426,9 @@ function Rules.raceEndTime(car)
   for _, it in ipairs(l.items) do
     local sgItemHere = it.kind:sub(1, 2) == 'SG'
     local seconds = config.sgUnservedDT + (sgItemHere and sgSeconds(it) or 0)
-    local why = sgItemHere and string.format(TEXTS.rc.sgSeconds, sgSeconds(it)) or reasonLog(it.cat)
+    local sgWhy = sgItemHere and Rules.sgWhy(it, true) or ''
+    local why = sgItemHere and (string.format(TEXTS.rc.sgSeconds, sgSeconds(it)) .. (sgWhy ~= '' and (' - ' .. sgWhy) or ''))
+      or reasonLog(it.cat)
     total = total + seconds
     what[#what + 1] = why
     rcLog(TEXTS.rc.timePenalty, string.format(TEXTS.timeNotServedLog, seconds, why))
@@ -4429,7 +4454,7 @@ function Rules.practiceClear(car)
   end
   if #l.items == 0 and not next(state.slowdowns) and #l.endOfLap == 0 then return nil end
   local cleared = {}
-  for _, it in ipairs(l.items) do cleared[#cleared + 1] = reasonLog(it.cat) end
+  for _, it in ipairs(l.items) do cleared[#cleared + 1] = Rules.itemReasonLog(it) end
   Rules.zero()
   ac.log('race-control: practice, car at its pit place: penalties cleared')
   rcLog(TEXTS.rc.pit, #cleared > 0 and string.format(TEXTS.practiceClearedWhat, table.concat(cleared, ', '))
@@ -4455,7 +4480,7 @@ local function applyHold(long)
   local seconds = long and config.holdLong or config.holdShort
   local reason = long and TEXTS.holdTwoDTLong or TEXTS.holdTwoDT
   local held = {}
-  for _, it in ipairs(state.list.items) do held[#held + 1] = reasonLog(it.cat) end
+  for _, it in ipairs(state.list.items) do held[#held + 1] = Rules.itemReasonLog(it) end
   startHold(seconds, reason, long and 'dt2long' or 'dt2')
   Rules.zero()
   ac.log(string.format('race-control: hold %d s', seconds))
@@ -4467,39 +4492,47 @@ local function applyExpiredDSQ(expired, viaPit)
     ac.log('race-control: deadline over in practice or qualifying: the penalty stays pending')
     return false
   end
-  local cats, kmr = {}, nil
+  local cats, kmr, sg = {}, nil, nil
   for _, it in ipairs(expired) do
     cats[#cats + 1] = it.cat
     if TEXTS.kmrReasons[it.cat] then kmr = kmr or reasonLog(it.cat) end
+    if it.kind:sub(1, 2) == 'SG' then sg = sg or it end
   end
-  carDsq(1, TEXTS.dsqDtReason, nil, kmr)
+  if sg then
+    local why = Rules.sgWhy(sg, true)
+    carDsq(1, TEXTS.dsqSgReason, nil, why ~= '' and why or nil)
+  else
+    carDsq(1, TEXTS.dsqDtReason, nil, kmr)
+  end
   ac.log(string.format('race-control: DSQ for unpaid DT0 (%s), lap completed %s',
     table.concat(cats, ','), viaPit and 'via pit' or 'on track'))
   return true
 end
-function Rules.sgForm(extra, why)
+function Rules.sgForm(extra, why, code)
   local l = state.list
   local n = #l.items
   extra = extra or 0
   local reasons = {}
   local kmr = ''
+  local codes = { code or '2DT' }
   for _, it in ipairs(l.items) do
     reasons[#reasons + 1] = reasonLog(it.cat)
     if TEXTS.kmrReasons[it.cat] then kmr = kmr .. 'x' .. it.cat:sub(2) end
+    codes[#codes + 1] = it.cat
   end
   if why then reasons[#reasons + 1] = why end
   if not l.owner then l.owner = nameCode(ac.getDriverName(0)) end
   l.seq = l.seq + 1
   local laps = config.sgDeadlineLaps
   l.items = { { cat = 'SG' .. n, kind = 'SG' .. (extra > 0 and ('e' .. extra) or '') .. kmr, laps = laps,
-    givenLap = l.curLap, expireLap = l.curLap + laps, seq = l.seq, dt0OnTrack = false, id = l.seq } }
+    givenLap = l.curLap, expireLap = l.curLap + laps, seq = l.seq, dt0OnTrack = false, id = l.seq, why = table.concat(codes, '/') } }
   local seconds = n * config.sgSecondsPerDT + extra
   ac.log(string.format('race-control: stop & go %d s (%d DT)', seconds, n))
   rcLog(string.format(TEXTS.rc.sgSeconds, seconds), 'includes ' .. table.concat(reasons, ', '))
   if seconds > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(n) end
   listSave()
 end
-function Rules.sgAddSeconds(seconds, why)
+function Rules.sgAddSeconds(seconds, why, code)
   local l = state.list
   if Rules.dsqOn() then
     ac.log('race-control: ' .. why .. ' after the DSQ: logged, not applied')
@@ -4516,6 +4549,7 @@ function Rules.sgAddSeconds(seconds, why)
     local suffix = sgKmrSuffix(sg)
     local extra = (tonumber(sg.kind:match('e(%d+)')) or 0) + seconds
     sg.kind = (sg.kind:sub(1, #sg.kind - #suffix):gsub('e%d+', '')) .. 'e' .. extra .. suffix
+    if code then sg.why = ((sg.why or '') ~= '' and (sg.why .. '/') or '') .. code end
     l.seq = l.seq + 1
     sg.seq = l.seq
     ac.log(string.format('race-control: stop & go +%d s (%s): %d s', seconds, why, sgSeconds(sg)))
@@ -4523,7 +4557,7 @@ function Rules.sgAddSeconds(seconds, why)
     if sgSeconds(sg) > config.sgMaxDT * config.sgSecondsPerDT then Rules.sgOverLimit(sgCount(sg)) end
     listSave()
   else
-    Rules.sgForm(seconds, why)
+    Rules.sgForm(seconds, why, code)
   end
   sg = sgItem()
   if sg then showNotice(TEXTS.rcTitle, string.format(TEXTS.sgFlagGiven, sgSeconds(sg), why), sg) end
@@ -7645,10 +7679,12 @@ do
     end
     local g, cause = sim.raceFlagType, sim.raceFlagCause
     if cause and cause >= 0 and CarRead.isStaff(cause) then g = nil end
+    Flags.yellowOwn = false
     if g == ac.FlagType.Caution and not yellow then
       yellow = { 2, 'yellow', TEXTS.flagYellow, TEXTS.flagYellowLine,
         cause and cause >= 0 and string.format(TEXTS.flagCausedBy, carTag(cause)) or '' }
       Flags.localYellow = true
+      Flags.yellowOwn = cause == 0
     end
     for i, t in pairs(Flags.giveBack) do
       if yellow and Flags.localYellow then
@@ -7764,10 +7800,10 @@ do
       elseif clock - t >= config.flags.yellowGiveBackSeconds then
         Flags.giveBack[i] = nil
         ac.log(string.format('race-control: yellow flag overtake of car %d not given back: stop & go', i))
-        Rules.sgAddSeconds(config.flags.yellowPassSG, string.format(TEXTS.yellowPassSG, carTag(i)))
+        Rules.sgAddSeconds(config.flags.yellowPassSG, string.format(TEXTS.yellowPassSG, carTag(i)), 'YP' .. string.format('%d', ac.getDriverNumber(i) or i))
       end
     end
-    if not Flags.localYellow or state.code80 then
+    if not Flags.localYellow or state.code80 or Flags.yellowOwn then
       yellowSide = {}
       return
     end
@@ -7827,7 +7863,7 @@ do
         Flags.redOver = true
         ac.log(string.format('race-control: CODE-65, over %d km/h for more than %d s with the red flag: stop & go %d s',
           cfg.redSpeedKmh, cfg.redOverSeconds, cfg.redSpeedSG))
-        Rules.sgAddSeconds(cfg.redSpeedSG, string.format(TEXTS.redFlagSpeedSG, cfg.redSpeedKmh, cfg.redOverSeconds))
+        Rules.sgAddSeconds(cfg.redSpeedSG, string.format(TEXTS.redFlagSpeedSG, cfg.redSpeedKmh, cfg.redOverSeconds), 'RS')
       end
     end
     local entered = car.isInPitlane and Flags.redPrevLane == false
@@ -7835,7 +7871,7 @@ do
     if entered and not Flags.redReceived and not grace and not car.isInPit and not state.list.jumped
         and state.ui.clock > (state.tow.ownJumpUntil or 0) then
       ac.log('race-control: pit entry with the red flag not received at the line: stop & go ' .. cfg.redNoLineSG .. ' s')
-      Rules.sgAddSeconds(cfg.redNoLineSG, TEXTS.redNoLineSG)
+      Rules.sgAddSeconds(cfg.redNoLineSG, TEXTS.redNoLineSG, 'RL')
     end
     local me = CarRead.num(car.splinePosition)
     for i = 1, (sim.carsCount or 1) - 1 do
@@ -8291,6 +8327,18 @@ do
       and not state.redFlag and not state.restart
       and not Flags.onGrid and Flags.ending ~= 'finished' and not Rules.dsqOn()
   end
+  function Flags.stillUpdate(st, pos, kmh, clock)
+    local rule = config.parkedCar
+    if st.last then
+      local d = math.sqrt((pos.x - st.last.x) ^ 2 + (pos.z - st.last.z) ^ 2)
+      if d < JUMP_M or d <= kmh / 3.6 * (clock - st.last.t) + JUMP_M then st.odo = st.odo + d end
+    end
+    st.last = { x = pos.x, z = pos.z, t = clock }
+    st.hist[#st.hist + 1] = { t = clock, odo = st.odo }
+    while #st.hist > 2 and st.hist[2].t <= clock - rule.seconds do table.remove(st.hist, 1) end
+    local first = st.hist[1]
+    return first.t <= clock - rule.seconds and st.odo - first.odo < rule.distance and kmh <= ARM_KMH
+  end
   local function detection(car)
     local rule = config.parkedCar
     if state.repair.class == 'beyond' then
@@ -8326,17 +8374,8 @@ do
       return
     end
     local clock = state.ui.clock
-    local pos = car.position
     local kmh = CarRead.num(car.speedKmh)
-    if P.last then
-      local d = math.sqrt((pos.x - P.last.x) ^ 2 + (pos.z - P.last.z) ^ 2)
-      if d < JUMP_M or d <= kmh / 3.6 * (clock - P.last.t) + JUMP_M then P.odo = P.odo + d end
-    end
-    P.last = { x = pos.x, z = pos.z, t = clock }
-    P.hist[#P.hist + 1] = { t = clock, odo = P.odo }
-    while #P.hist > 2 and P.hist[2].t <= clock - rule.seconds do table.remove(P.hist, 1) end
-    local first = P.hist[1]
-    local stopped = first.t <= clock - rule.seconds and P.odo - first.odo < rule.distance and kmh <= ARM_KMH
+    local stopped = Flags.stillUpdate(P, car.position, kmh, clock)
     if not stopped then
       P.slowT, P.elapsed, P.detected, P.fuelStop = nil, 0, false, false
       return
@@ -9230,6 +9269,55 @@ do
     return out
   end
 end
+Relative = {}
+do
+  local SAMPLE = 0.25
+  local cars, lastT, session = {}, nil, nil
+  local function wrap(d)
+    if d > 0.5 then return d - 1 elseif d < -0.5 then return d + 1 end
+    return d
+  end
+  local function sample(i, c, clock)
+    local st = cars[i]
+    if not st then
+      st = { hist = {}, odo = 0, last = nil }
+      cars[i] = st
+    end
+    local kmh = CarRead.num(c.speedKmh)
+    st.place = ac.worldCoordinateToTrackProgress(c.position)
+    st.kmh = kmh
+    st.stopped = Flags.stillUpdate(st, c.position, kmh, clock)
+    local sp = CarRead.num(c.splinePosition)
+    local n = Lap.of(i)
+    if st.sp and sp < st.sp and wrap(sp - st.sp) > 0 and n == st.n then st.pending = n end
+    if st.pending ~= nil and n ~= st.pending then st.pending = nil end
+    st.sp, st.n = sp, n
+  end
+  function Relative.update()
+    local clock = state.ui.clock
+    if session ~= sim.currentSessionIndex or (lastT and clock - lastT > 1) then cars, lastT = {}, nil end
+    session = sim.currentSessionIndex
+    if lastT and clock - lastT < SAMPLE then return end
+    lastT = clock
+    for i = 0, (sim.carsCount or 1) - 1 do
+      local c = ac.getCar(i)
+      if c and c.position and (i == 0 or (c.isConnected and not c.isInPitlane)) then sample(i, c, clock) else cars[i] = nil end
+    end
+  end
+  function Relative.of(i)
+    local o, me = cars[i], cars[0]
+    if not o or not me or o.place < 0 or me.place < 0 then return nil end
+    local d = wrap(o.place - me.place)
+    local len = CarRead.num(sim.trackLengthM)
+    local sec
+    if not o.stopped and o.kmh > 0 and len > 0 then sec = math.abs(d) * len / (o.kmh / 3.6) end
+    local laps
+    if o.n and me.n and o.pending == nil then
+      laps = math.floor((o.n + o.sp) - (me.n + me.sp) - wrap(o.sp - me.sp) + 0.5)
+    end
+    return d, sec, laps
+  end
+end
 local function applyKMR(car, r)
   if r.penalty == 'DSQ' then
     queueCommand(string.format('/kmr player_kick %d', car.sessionID))
@@ -9248,7 +9336,7 @@ local function onPitViolation(car, r)
       rcLog(TEXTS.rc.reprimand, TEXTS.dsqWhy.pitClosed)
       showNotice(TEXTS.rcTitle, TEXTS.pit.REPRIMAND)
     elseif r.penalty == 'SG' and r.param > 0 then
-      Rules.sgAddSeconds(r.param, TEXTS.dsqWhy.pitClosed)
+      Rules.sgAddSeconds(r.param, TEXTS.dsqWhy.pitClosed, 'PC')
     else
       ac.log(string.format('race-control: pit: punishment of the key pitExit not applied: %s (parameter %d)',
         tostring(r.penalty), r.param))
@@ -9483,7 +9571,10 @@ local function sgText(it)
   return string.format(it.laps <= 0 and TEXTS.sgLastLap or TEXTS.sgPending, sgSeconds(it))
 end
 local function itemText(it)
-  if it.kind:sub(1, 2) == 'SG' then return sgText(it) end
+  if it.kind:sub(1, 2) == 'SG' then
+    local why = Rules.sgWhy(it)
+    return sgText(it) .. (why ~= '' and (' - ' .. why) or '')
+  end
   return string.format(TEXTS.dtLine, itemPriority(it), TEXTS.reason[it.cat] or it.cat)
 end
 local BORDER_RED = rgbm(1, 0.3, 0.3, 1)
@@ -9526,7 +9617,10 @@ function Panel.cellPenalties()
   local items = state.list.items
   if #items == 0 then return nil end
   local sg = config.sg and sgItem()
-  if sg then return { value = string.format(TEXTS.penSG, sgSeconds(sg), sgCount(sg)), color = 'red' } end
+  if sg then
+    local code = (sg.why or '') ~= '' and (sg.why .. ' ') or ''
+    return { value = code .. string.format(TEXTS.penSG, sgSeconds(sg), sgCount(sg)), color = 'red' }
+  end
   local parts = {}
   for i = 1, math.min(#items, 2) do parts[#parts + 1] = items[i].cat .. ' ' .. itemPriority(items[i]) end
   local text = table.concat(parts, ' · ')
@@ -11072,12 +11166,18 @@ do
     local chips = {}
     for _, wIdx in ipairs(PitBox.TYRE_CHOICES[p.tyres][2]) do chips[wIdx] = true end
     local wh = car.wheels or {}
+    local mounted = num(car.compoundIndex)
+    local byCompound = p.compound ~= mounted
+    local function compoundName(i)
+      local long = ac.getTyresLongName(0, i) or ''
+      return tostring(long ~= '' and long or names[i] or '-')
+    end
     local rows = {
       { 'fuel', TEXTS.pitFuel, PitControl.fuelLocked() and TEXTS.pitFuelLocked
         or string.format(TEXTS.pitFuelValue, p.fuel, num(car.fuel) + p.fuel, num(car.maxFuel)), p.times.fuel,
         off = PitControl.fuelLocked() },
-      { 'compound', TEXTS.pitCompound, tostring((ac.getTyresLongName(0, p.compound) or '') ~= ''
-        and ac.getTyresLongName(0, p.compound) or names[p.compound] or '-'), nil },
+      { 'compound', TEXTS.pitCompound, byCompound and (compoundName(mounted) .. ' → ' .. compoundName(p.compound))
+        or compoundName(p.compound), nil },
       { 'tyres', TEXTS.pitTyres, nil, p.times.tyres },
     }
     local presets = PitBox.presetCount()
@@ -11121,7 +11221,9 @@ do
     for _, r in ipairs(rows) do labelW = math.max(labelW, textWidth(r[2], FONT_TEXT, fs)) end
     local need = 0
     for _, r in ipairs(rows) do
-      local vw = r[1] == 'compound' and 0 or r[1] == 'tyres' and (3 * 26 * s + textWidth('RR', FONT_MONO, fs)) or textWidth(r[3] or TEXTS.pitRepairYes, FONT_MONO, fs)
+      local vw = r[1] == 'compound' and 0
+        or r[1] == 'tyres' and (byCompound and textWidth(TEXTS.pitTyresByCompound, FONT_MONO, fs) or (3 * 26 * s + textWidth('RR', FONT_MONO, fs)))
+        or textWidth(r[3] or TEXTS.pitRepairYes, FONT_MONO, fs)
       if r[1] == 'fuel' then vw = math.max(vw, textWidth(fuelWidest, FONT_MONO, fs)) end
       local tw = r[4] and (textWidth(mmss(r[4]), FONT_MONO, fs) + 12 * s) or 0
       need = math.max(need, BOX.side * s + labelW + 8 * s + vw + tw + BOX.side * s)
@@ -11197,7 +11299,10 @@ do
       local y = rowsTop + (i - 1) * ROW_H * s
       local sel = not sv and r[1] ~= nil and r[1] == chosen
       drawText(r[2], FONT_TEXT, fs, TMP.a:set(p1.x + BOX.side * s, y), (r[1] and not r.off) and COLOR_TITLE or COLOR_OFF)
-      if r[1] == 'tyres' then
+      if r[1] == 'tyres' and byCompound then
+        drawText(TEXTS.pitTyresByCompound, FONT_MONO, fs, TMP.a:set(vx, y), sel and COLOR_SEL or COLOR_SWAP)
+        if sel then cursorLine(vx, vx + textWidth(TEXTS.pitTyresByCompound, FONT_MONO, fs), y) end
+      elseif r[1] == 'tyres' then
         for wIdx = 0, 3 do
           drawText(TEXTS.wheelCode[PitBox.WHEELS[wIdx]], FONT_MONO, fs, TMP.a:set(vx + wIdx * 26 * s, y),
             chips[wIdx] and (sel and COLOR_SEL or COLOR_SWAP) or COLOR_OFF)
@@ -11684,7 +11789,7 @@ local drawRaceScreens = (function()
   local ORANGE = rgbm(1, 0.54, 0.11, 1)
   local ROW = 13
   local FS = 10
-  local PLACE = { relative = { 1572, 380, 300 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
+  local PLACE = { relative = { 1572, 380, 330 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 510 }, event = { 770, 200, 380 },
     weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 },
     calc = { 380, 110, 380 } }
@@ -11779,12 +11884,12 @@ local drawRaceScreens = (function()
   local function relativeScreen(car, w, h, s)
     local me = RaceTable.byIndex[0]
     if not me then return end
+    Relative.update()
     local list = {}
     for _, r in ipairs(RaceTable.rows) do
       if r.index ~= 0 and r.connected and (filter.relative == 'ALL' or r.class == filter.relative) then
-        local d = (r.spline - me.spline) % 1
-        if d > 0.5 then d = d - 1 end
-        list[#list + 1] = { r = r, d = d }
+        local d, sec, laps = Relative.of(r.index)
+        if d then list[#list + 1] = { r = r, d = d, sec = sec, laps = laps } end
       end
     end
     table.sort(list, function(a, b) return a.d > b.d end)
@@ -11803,14 +11908,19 @@ local drawRaceScreens = (function()
       local lapDiff = RaceTable.progress(r) - RaceTable.progress(me)
       local col = mine and YELLOW or r.inPit and COLOR_OFF or (lapDiff >= 1 and BLUE) or (lapDiff <= -1 and LAPDOWN) or COLOR_TITLE
       local pos = filter.relative == 'ALL' and ('P' .. r.pos) or ('C' .. tostring(r.classPos or '-'))
-      local gap = mine and 0 or -ac.getGapBetweenCars(0, r.index)
+      local gap, laps = '+0.0', ''
+      if not mine then
+        gap = e.sec and string.format('%+.1f', e.d > 0 and -e.sec or e.sec) or ''
+        laps = e.laps == nil and '-' or (e.laps ~= 0 and ((e.laps > 0 and '+' or '') .. string.format(TEXTS.lapsShort, e.laps))) or ''
+      end
       carClick(r.index, vec2(p1.x + 40 * s, y), vec2(p1.x + 248 * s, y + ROW * s))
       row(p1, y, s, {
         { pos, 36, mine and YELLOW or COLOR_DIM, true },
         { '#' .. r.number, 42, col },
         { r.name .. (r.inPit and TEXTS.relPit or ''), 76, col, false, mine and FONT_TITLE or FONT_TEXT },
         { r.class or '', 250, COLOR_OFF, true },
-        { string.format('%+.1f', gap), 286, col, true },
+        { laps, 282, col, true },
+        { gap, 316, col, true },
       })
       y = y + ROW * s
     end
@@ -15138,13 +15248,15 @@ local drawDesktopUI = (function()
       if not rec or not Record.sameSession(rec.key, Record.key()) then return TEXTS.dirPenUnknown, COLOR_OFF end
       local d, list = rec.body:match('^%d+|%d+|%-?%d+|%d+|(%d)|%d|%d+|%d+|%d+|(.*)$')
       dsq, items = tonumber(d) or 0, {}
-      for cat, kind, laps in (list or ''):gmatch('(%w+),(%w+),(%-?%d+),[^;]*') do
-        items[#items + 1] = { cat = cat, kind = kind, laps = tonumber(laps) }
+      for text in (list or ''):gmatch('[^;]+') do
+        local it = Rules.itemDecode(text)
+        if it then items[#items + 1] = it end
       end
     end
     local parts = {}
     for _, it in ipairs(items) do
-      parts[#parts + 1] = it.cat:match('^SG%d+$') and string.format(TEXTS.dirPenSg, sgSeconds(it))
+      parts[#parts + 1] = it.cat:match('^SG%d+$')
+        and (((it.why or '') ~= '' and (it.why .. ' ') or '') .. string.format(TEXTS.dirPenSg, sgSeconds(it)))
         or string.format(TEXTS.dirPenDt, it.cat, math.max(it.laps or 0, 0))
     end
     if (dsq or 0) > 0 then parts[#parts + 1] = TEXTS.dirPenDsq end
