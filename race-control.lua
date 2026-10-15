@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V183 - 2026.10.15'
+local RC_VERSION = 'V184 - 2026.10.15'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -9661,7 +9661,7 @@ local PANEL_CELLS = {
   { title = TEXTS.cellPit, fn = Panel.cellPit, center = true, widest = string.format(TEXTS.pitOpen, '00:00') },
   { title = TEXTS.cellSwap, fn = Panel.cellSwap, center = true, widest = string.format(TEXTS.swapCount, 88, 88) },
   { title = TEXTS.cellTrack, fn = Panel.cellTrack, center = true, widest = 'CODE-80' },
-  { title = TEXTS.cellPenalties, fn = Panel.cellPenalties },
+  { title = TEXTS.cellPenalties, fn = Panel.cellPenalties, fit = true },
 }
 Lang.hooks[#Lang.hooks + 1] = function()
   local c = PANEL_CELLS
@@ -15989,7 +15989,10 @@ function script.drawUI(exclusive)
       end
       if c.title and showItems then
         put(c.title, FONT_TITLE, 10 * s, p1.y + 5 * s, (cell or bulb) and PANEL_COLORS.dim or COLOR_CELL_OFF)
-        if cell then put(cell.value, FONT_TITLE, 13 * s, p1.y + 17 * s, PANEL_COLORS[cell.color]) end
+        if cell then
+          put(c.fit and fitText(cell.value, FONT_TITLE, 13 * s, cw - 16 * s) or cell.value, FONT_TITLE, 13 * s, p1.y + 17 * s,
+            PANEL_COLORS[cell.color])
+        end
       elseif cell then
         put(cell.value, FONT_TITLE, 15 * s, p1.y + 10 * s, PANEL_COLORS[cell.color])
       end
