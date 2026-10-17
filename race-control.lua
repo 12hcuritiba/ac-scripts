@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V188 - 2026.10.17'
+local RC_VERSION = 'V189 - 2026.10.17'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -604,18 +604,29 @@ local TEXTS = {
   dirStanding = 'STANDING RESTART', dirStandingOff = 'CANCEL RESTART',
   flagRestart = 'Restart P%d - behind %s', flagRestartFirst = 'Restart P%d - first car',
   flagRestartSwap = 'Restart P%d - driver swap: back of the field, behind %s',
-  sessionWaitTitle = 'Preparing session',
+  sessionWaitTitle = 'PREPARING THE SESSION',
   sessionWaitIdentity = 'Waiting for the session ID from the event database',
   sessionWaitTransition = 'Waiting for the game to update the session',
   sessionWaitInitializing = 'Initializing session data',
-  sessionWaitConfiguration = 'Event database not configured — contact race control',
   sessionWaitLocked = 'Controls locked. Please wait.',
-  sessionEndTitle = 'End of the session',
+  sessionConfigTitle = 'EVENT DATABASE NOT CONFIGURED',
+  sessionWaitConfiguration = 'Contact race control',
+  sessionLockedShort = 'Controls locked.',
+  serverUnavailableTitle = 'SERVER UNAVAILABLE',
+  serverUnavailableLine = 'The car does not go on track until the server answers',
+  serverUnavailableOpen = 'The game stays open. Controls locked.',
   serverUnavailable = 'Server unavailable - the car does not go on track until it answers; the game stays open',
-  sessionExtraRace = 'Extra time: the race ends at the line of the leader, then the time for the others to finish',
-  sessionExtraLap = 'Extra time: the session ends when the cars on track close their lap',
+  sessionOtherTitle = 'NOT THE SERVER OF THE EVENT',
+  sessionOther = 'The game closes in %d s',
+  sessionExtraTitle = 'EXTRA TIME',
+  sessionExtraRace = 'The race ends at the line of the leader',
+  sessionExtraRace2 = 'Then, the time for the others to finish',
+  sessionExtraLap = 'The session ends when the cars on track close their lap',
+  sessionNotComeTitle = 'WAITING FOR THE NEW SESSION',
   sessionNotCome = 'The new session has not come from the server yet',
-  sessionOther = 'Not the server of the event - the game closes in %d s',
+  sessionReadyTitle = 'SESSION RECOGNIZED',
+  sessionReady = '%s · ID %d of the event database',
+  sessionReadyFree = 'Controls released.',
   baseDownStaff = 'Base of the event not answering for %s - the cars keep the data',
   baseDownWarn = 'Base of the event not answering - the data are kept in the car',
   appMissing = 'Racing Control app not running - install it from the event page - the game closes in %d s',
@@ -11194,7 +11205,9 @@ local function drawFlagBox(p1, p2, s, border, disc, title, titleColor, line1, li
   local FILL = { red = rgbm(0.88, 0.09, 0.09, 1), yellow = rgbm(1, 0.83, 0, 1), blue = rgbm(0.12, 0.37, 1, 1),
     green = rgbm(0.12, 0.77, 0.23, 1), white = rgbm(0.95, 0.95, 0.95, 1) }
   local kind = type(flag) == 'string' and flag or nil
-  if FILL[kind] or kind == 'slippery' or kind == 'checkered' then
+  if kind == 'none' then
+    f2 = vec2(f1.x - 12 * s, f2.y)
+  elseif FILL[kind] or kind == 'slippery' or kind == 'checkered' then
     local a, b = vec2(px(f1.x), px(f1.y)), vec2(px(f2.x), px(f2.y))
     if kind == 'slippery' then
       local sw = (b.x - a.x) / 7
@@ -14247,38 +14260,48 @@ local KmrEvents = (function()
 end)()
 local drawSessionWait
 do
-  local LOCKED = { transition = true, identity = true, configuration = true, initializing = true, unavailable = true }
-  local TEXT = { transition = 'sessionWaitTransition', identity = 'sessionWaitIdentity', configuration = 'sessionWaitConfiguration',
-    initializing = 'sessionWaitInitializing', unavailable = 'serverUnavailable', extraRace = 'sessionExtraRace', extraLap = 'sessionExtraLap',
-    notCome = 'sessionNotCome' }
+  local BOX = {
+    transition = { 'yellow', 'sessionWaitTitle', 'sessionWaitTransition', 'sessionWaitLocked' },
+    identity = { 'yellow', 'sessionWaitTitle', 'sessionWaitIdentity', 'sessionWaitLocked' },
+    initializing = { 'yellow', 'sessionWaitTitle', 'sessionWaitInitializing', 'sessionWaitLocked' },
+    unavailable = { 'red', 'serverUnavailableTitle', 'serverUnavailableLine', 'serverUnavailableOpen' },
+    configuration = { 'red', 'sessionConfigTitle', 'sessionWaitConfiguration', 'sessionLockedShort' },
+    other = { 'red', 'sessionOtherTitle', 'sessionOther' },
+    extraRace = { 'base', 'sessionExtraTitle', 'sessionExtraRace', 'sessionExtraRace2', 'checkered' },
+    extraLap = { 'base', 'sessionExtraTitle', 'sessionExtraLap', nil, 'checkered' },
+    notCome = { 'base', 'sessionNotComeTitle', 'sessionNotCome', nil, 'checkered' },
+    ready = { 'green', 'sessionReadyTitle', 'sessionReady', 'sessionReadyFree' },
+  }
+  local BORDERS = { yellow = BORDER_YELLOW, red = BORDER_RED, base = BORDER_BASE, green = BORDER_GREEN }
+  local TITLES = { yellow = BORDER_YELLOW, red = BORDER_RED, base = COLOR_TITLE, green = PANEL_COLORS.green }
   function drawSessionWait()
-    local reason = Session.waitReason()
-    if not reason or not TEXT[reason] then return end
-    local w = ac.getUI().windowSize.x
-    local s = math.min(math.max(ac.getUI().windowSize.y / 1080, 0.7), 1.5)
-    local locked = LOCKED[reason]
-    local lines = { { locked and TEXTS.sessionWaitTitle or TEXTS.sessionEndTitle, 'Segoe UI;Weight=Bold', 18, rgbm(1, 1, 1, 1) },
-      { TEXTS[TEXT[reason]], 'Segoe UI;Weight=SemiBold', 16, rgbm(0.95, 0.78, 0.45, 1) } }
-    if locked then lines[#lines + 1] = { TEXTS.sessionWaitLocked, 'Segoe UI', 14, rgbm(0.8, 0.84, 0.9, 1) } end
-    local bw, top = math.min(760 * s, w - 40), 60 * s
-    local bh = (#lines * 26 + 16) * s
-    local x0 = (w - bw) / 2
-    ui.drawRectFilled(vec2(x0, top), vec2(x0 + bw, top + bh), rgbm(0.06, 0.08, 0.11, 0.9), 6 * s)
-    ui.drawRectFilled(vec2(x0, top), vec2(x0 + bw, top + 3 * s), rgbm(0.95, 0.65, 0.2, 1))
-    local y = top + 10 * s
-    for _, l in ipairs(lines) do
-      ui.pushDWriteFont(l[2])
-      local px = l[3] * s
-      local tw = ui.measureDWriteText(l[1], px).x
-      if tw > bw - 24 * s then
-        px = px * (bw - 24 * s) / tw
-        tw = ui.measureDWriteText(l[1], px).x
-      end
-      ui.dwriteDrawText(l[1], px, vec2(x0 + (bw - tw) / 2, y), l[4])
-      ui.popDWriteFont()
-      y = y + 26 * s
-    end
+    local b = BOX[Session.waitReason() or '']
+    if not b then return end
+    local size = ac.getUI().windowSize
+    local w, h = size.x, size.y
+    local s = math.min(math.max((h / 1080) ^ 0.3, 1), 1.3)
+    local po = Drag.offset('panel', h)
+    local bw, bh = math.floor(PANEL_WIDTH * s), math.floor(56 * s)
+    local x = math.floor(w * 0.5 - bw * 0.5 + po.x)
+    local y = math.floor(h * 0.18 + 10 * s + po.y) - bh - math.floor(6 * s)
+    local line = TEXTS[b[3]]
+    if b[3] == 'sessionOther' then line = string.format(line, Session.closeLeft())
+    elseif b[3] == 'sessionReady' then line = string.format(line, TEXTS.sessionName[sim.raceSessionType] or '-', Session.id or 0) end
+    Drag.group = nil
+    drawFlagBox(vec2(x, y), vec2(x + bw, y + bh), s, BORDERS[b[1]], nil, TEXTS[b[2]], TITLES[b[1]], line, b[4] and TEXTS[b[4]] or '',
+      b[5] or 'none')
   end
+  local finale = false
+  function Desktop.sessionFinale()
+    if not Session.waitReason() then return nil end
+    finale = true
+    return 'finalize'
+  end
+  ui.onUIFinale(function()
+    if not finale or not ServerGuard.ok() then return end
+    finale = false
+    ui.transparentWindow('rcSessionBox', vec2(0, 0), ac.getUI().windowSize, true, false, drawSessionWait)
+  end)
 end
 local drawDesktopUI = (function()
   local W = 780
@@ -15964,11 +15987,11 @@ local drawDesktopUI = (function()
           local sm = math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3)
           Desktop.text.minPx = Desktop.text.min * sm
           lobby(size.x, size.y, sm)
-          drawSessionWait()
-          return
+          return Desktop.sessionFinale()
         end
         local free = state.menuFreeUntil and state.ui.clock < state.menuFreeUntil
-        if mode ~= 'game' or config.gameHud == 'show' or free then return end
+        if mode ~= 'game' then return Desktop.sessionFinale() end
+        if config.gameHud == 'show' or free then return end
         script.drawUI(true)
         Desktop.hudDrawn = true
         return config.gameHud == 'hideall' and true or 'apps'
@@ -16510,13 +16533,14 @@ function CarControls.update(dt)
 end
 Session = { id = nil, key = nil, index = -1, restarted = false, phase = 'troca', ready = false, event = nil, leaving = nil, askT = -1e9, busy = false,
   g = nil, pending = nil, gen = 0, loading = false, waitSince = nil, unavailable = false, failed = false, init = nil, reading = false, closeAt = nil,
-  closeShown = nil, closed = false }
+  closed = false, readyUntil = nil }
 ac.onSessionStart(function(index, restarted)
   Session.event = { index = index, restarted = restarted == true }
   ac.log(string.format('race-control: session start event (index %d, restarted %s)', index, tostring(restarted)))
 end)
 Session.event = { load = true }
 function Session.waitReason()
+  if Session.closeAt then return 'other' end
   if Session.pending or (Session.event and not Session.event.load) then return 'transition' end
   if not Session.id then
     if config.baseUrl == '' then return 'configuration' end
@@ -16527,8 +16551,10 @@ function Session.waitReason()
   if Session.phase == 'esgotado' or Session.phase == 'terminou' then
     return sim.raceSessionType == ac.SessionType.Race and 'extraRace' or 'extraLap'
   end
+  if Session.readyUntil and state.ui.clock < Session.readyUntil then return 'ready' end
   return nil
 end
+function Session.closeLeft() return math.max(math.ceil((Session.closeAt or 0) - state.ui.clock), 0) end
 function Session.beforeStart()
   return CarRead.num(sim.timeToSessionStart) > 0 or CarRead.num(sim.currentSessionTime) < 0
 end
@@ -16582,7 +16608,7 @@ do
     Session.leaving = Session.id or Session.leaving
     Session.id, Session.key, Session.ready, Session.init = nil, nil, false, nil
     Session.gen, Session.busy, Session.askT = Session.gen + 1, false, -1e9
-    Session.waitSince, Session.unavailable, Session.failed, Session.reading = nil, false, false, false
+    Session.waitSince, Session.unavailable, Session.failed, Session.reading, Session.readyUntil = nil, false, false, false, nil
     Session.pending = { index = ev.index, restarted = ev.restarted, from = Session.index }
     Lock.want('base')
     ac.log(string.format('race-control: turn to the session %d told by the game (restarted %s)', ev.index, tostring(ev.restarted)))
@@ -16678,6 +16704,7 @@ do
     state.ui.lastSeq = l.seq
     Session.g = g
     Session.ready = true
+    Session.readyUntil = state.ui.clock + config.screens.noticeSeconds
     if not transition then
       RecordSync.base.outLoad()
       RecordSync.askLater()
@@ -16689,12 +16716,7 @@ do
   end
   function Session.update(car)
     if Session.closeAt then
-      local left = math.max(math.ceil(Session.closeAt - state.ui.clock), 0)
-      if left ~= Session.closeShown then
-        Session.closeShown = left
-        ac.setMessage(TEXTS.rcTitle, string.format(TEXTS.sessionOther, left), 'illegal', 1.5)
-      end
-      if left <= 0 and not Session.closed then
+      if Session.closeLeft() <= 0 and not Session.closed then
         Session.closed = true
         ac.shutdownAssettoCorsa()
       end
