@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V187 - 2026.10.16'
+local RC_VERSION = 'V188 - 2026.10.17'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -604,9 +604,19 @@ local TEXTS = {
   dirStanding = 'STANDING RESTART', dirStandingOff = 'CANCEL RESTART',
   flagRestart = 'Restart P%d - behind %s', flagRestartFirst = 'Restart P%d - first car',
   flagRestartSwap = 'Restart P%d - driver swap: back of the field, behind %s',
-  sessionNoBase = 'No session: the base of the event is not answering - controls locked until it answers',
+  sessionWaitTitle = 'Preparing session',
+  sessionWaitIdentity = 'Waiting for the session ID from the event database',
+  sessionWaitTransition = 'Waiting for the game to update the session',
+  sessionWaitInitializing = 'Initializing session data',
+  sessionWaitConfiguration = 'Event database not configured — contact race control',
+  sessionWaitLocked = 'Controls locked. Please wait.',
+  sessionEndTitle = 'End of the session',
+  serverUnavailable = 'Server unavailable - the car does not go on track until it answers; the game stays open',
+  sessionExtraRace = 'Extra time: the race ends at the line of the leader, then the time for the others to finish',
+  sessionExtraLap = 'Extra time: the session ends when the cars on track close their lap',
+  sessionNotCome = 'The new session has not come from the server yet',
+  sessionOther = 'Not the server of the event - the game closes in %d s',
   baseDownStaff = 'Base of the event not answering for %s - the cars keep the data',
-  baseDownDrop = 'Base of the event not answering - session interrupted, controls locked until it answers',
   baseDownWarn = 'Base of the event not answering - the data are kept in the car',
   appMissing = 'Racing Control app not running - install it from the event page - the game closes in %d s',
   cspOld = 'CSP 4130 required - install it with the 12h app - the game closes in %d s',
@@ -1630,32 +1640,23 @@ end
 local WebQueue = { items = {}, running = {} }
 do
   local MAX = 2
-  local STALL = 45
   local function count()
     local n = 0
     for _ in pairs(WebQueue.running) do n = n + 1 end
     return n
   end
+  local function finish(q, err, res)
+    if q.done then return end
+    q.done = true
+    WebQueue.running[q] = nil
+    if q.cb then q.cb(err, res) end
+  end
   local function pump()
-    local now = state.ui.clock
-    for item, t in pairs(WebQueue.running) do
-      if now - t > STALL then
-        WebQueue.running[item] = nil
-        ac.log('race-control: web request without answer for ' .. STALL .. ' s, place freed: ' .. tostring(item.url))
-      end
-    end
     while count() < MAX and #WebQueue.items > 0 do
       local q = table.remove(WebQueue.items, 1)
-      WebQueue.running[q] = now
-      local done = false
-      local function finish(err, res)
-        if done then return end
-        done = true
-        WebQueue.running[q] = nil
-        if q.cb then q.cb(err, res) end
-      end
-      local ok, err = pcall(web.request, q.method, q.url, q.headers, q.body, finish)
-      if not ok then finish(tostring(err), nil) end
+      WebQueue.running[q] = state.ui.clock
+      local ok, err = pcall(web.request, q.method, q.url, q.headers, q.body, function(err, res) finish(q, err, res) end)
+      if not ok then finish(q, tostring(err), nil) end
     end
   end
   function WebQueue.request(method, url, headers, body, cb, first)
@@ -2159,13 +2160,13 @@ do
     if CarRead.isStaff(0) then showNotice(TEXTS.rcTitle, string.format(TEXTS.baseDownStaff, mmss(secs)), nil, 1) end
     local max = config.baseDownMax
     if max <= 0 or secs < max then return end
-    if sim.raceSessionType ~= ac.SessionType.Practice or config.baseDownPractice == 'drop' then
+    if (sim.raceSessionType ~= ac.SessionType.Practice or config.baseDownPractice == 'drop') and ac.getCar(0).isInPit then
       if not Lock.on('baseDown') then
-        ac.log(string.format('race-control: base online away for %.0f s (limit %d s): the session interrupted for this car', secs, max))
-        rcLog(TEXTS.rc.baseOff, string.format('base of the event away for %s - session interrupted for this car', mmss(secs)))
+        ac.log(string.format('race-control: base online away for %.0f s (limit %d s): the car held at its pit place', secs, max))
+        rcLog(TEXTS.rc.baseOff, string.format('base of the event away for %s - car held at its pit place until it answers', mmss(secs)))
       end
       Lock.want('baseDown')
-      showNotice(TEXTS.rcTitle, TEXTS.baseDownDrop, nil, 1)
+      showNotice(TEXTS.rcTitle, TEXTS.serverUnavailable, nil, 1)
     else
       showNotice(TEXTS.rcTitle, TEXTS.baseDownWarn, nil, 1)
     end
@@ -2232,35 +2233,46 @@ do
         end
       end)
   end
-  function B.askOwn()
-    if not on() then return end
-    local key = Record.key()
-    local function ask(path, apply)
-      WebQueue.request('GET', config.baseUrl .. path .. '?key=' .. urlEncode(key), nil, nil, function(err, res)
-        if err or not res or tonumber(res.status) ~= 200 then
-          ac.log('race-control: base online ' .. path .. ' not read (' .. tostring(err or (res and res.status)) .. ')')
-          return
-        end
-        for line in tostring(res.body or ''):gmatch('[^\r\n]+') do
-          local rec = Record.decode(line)
-          if rec then apply(rec) end
-        end
-      end)
+  local OWN_GAP = 20
+  B.own = { record = false, track = false, busy = {}, nextT = {}, answerT = nil }
+  local function keep(rec, from)
+    local p = RecordSync.pending[rec.list]
+    if from == 'own car' then RecordSync.baseGaveOwn = true end
+    if not p or rec.seq >= p.seq then
+      RecordSync.pending[rec.list] = { body = rec.body, seq = rec.seq, key = rec.key }
+      ac.log('race-control: record ' .. rec.list .. ' ' .. rec.seq .. ' from the base online (' .. from .. ')')
     end
-    local function keep(rec, from)
-      local p = RecordSync.pending[rec.list]
-      if from == 'own car' then RecordSync.baseGaveOwn = true end
-      if not p or rec.seq >= p.seq then
-        RecordSync.pending[rec.list] = { body = rec.body, seq = rec.seq, key = rec.key }
-        ac.log('race-control: record ' .. rec.list .. ' ' .. rec.seq .. ' from the base online (' .. from .. ')')
+  end
+  local OWN_ASKS = {
+    record = { path = '/v1/record', take = function(rec, key) if rec.list ~= 'track' and Record.sameRace(rec.key, key) then keep(rec, 'own car') end end },
+    track = { path = '/v1/track', take = function(rec, key) if rec.list == 'track' and Record.sameSession(rec.key, key) then keep(rec, 'track of the session') end end },
+  }
+  function B.ownNew()
+    B.own = { record = false, track = false, busy = {}, nextT = {}, answerT = nil }
+  end
+  function B.ownDone() return B.own.record and B.own.track end
+  function B.ownUpdate()
+    local O = B.own
+    if not on() then return end
+    for name, a in pairs(OWN_ASKS) do
+      if not O[name] and not O.busy[name] and state.ui.clock >= (O.nextT[name] or 0) then
+        O.busy[name], O.nextT[name] = true, state.ui.clock + OWN_GAP
+        local key = Record.key()
+        WebQueue.request('GET', config.baseUrl .. a.path .. '?key=' .. urlEncode(key), nil, nil, function(err, res)
+          if B.own ~= O then return end
+          O.busy[name] = false
+          if err or not res or tonumber(res.status) ~= 200 then
+            ac.log('race-control: base online ' .. a.path .. ' not read (' .. tostring(err or (res and res.status)) .. ')')
+            return
+          end
+          O[name], O.answerT = true, state.ui.clock
+          for line in tostring(res.body or ''):gmatch('[^\r\n]+') do
+            local rec = Record.decode(line)
+            if rec then a.take(rec, key) end
+          end
+        end)
       end
     end
-    ask('/v1/record', function(rec)
-      if rec.list ~= 'track' and Record.sameRace(rec.key, key) then keep(rec, 'own car') end
-    end)
-    ask('/v1/track', function(rec)
-      if rec.list == 'track' and Record.sameSession(rec.key, key) then keep(rec, 'track of the session') end
-    end)
   end
   local NAME_GAP = 30
   B.name = { status = nil, nextT = 0, busy = false, told = nil, failLogged = false, offline = false, alertDue = nil }
@@ -2358,8 +2370,8 @@ do
         W.value = { ms = tonumber(ms), s = sec }
       end)
   end
-  local SERVER_RETRY = 60
-  B.server = { nextT = 0, busy = false, done = false, ask = 0 }
+  local SERVER_RETRY = 20
+  B.server = { nextT = 0, busy = false, done = false, ask = 0, answerT = nil }
   function B.serverNew()
     local V = B.server
     V.nextT, V.done, V.ask = 0, false, V.ask + 1
@@ -2372,6 +2384,7 @@ do
     WebQueue.request('GET', config.baseUrl .. '/v1/server', nil, nil, function(err, res)
       V.busy = false
       if err or not res or tonumber(res.status) ~= 200 then return end
+      V.answerT = state.ui.clock
       local body = tostring(res.body or '')
       if not body:match('^OK|') then return end
       if V.ask == ask then V.done = true end
@@ -14232,6 +14245,41 @@ local KmrEvents = (function()
   M._test = { packets = packets, enc = enc, posAt = posAt, io = io, rows = rows }
   return M
 end)()
+local drawSessionWait
+do
+  local LOCKED = { transition = true, identity = true, configuration = true, initializing = true, unavailable = true }
+  local TEXT = { transition = 'sessionWaitTransition', identity = 'sessionWaitIdentity', configuration = 'sessionWaitConfiguration',
+    initializing = 'sessionWaitInitializing', unavailable = 'serverUnavailable', extraRace = 'sessionExtraRace', extraLap = 'sessionExtraLap',
+    notCome = 'sessionNotCome' }
+  function drawSessionWait()
+    local reason = Session.waitReason()
+    if not reason or not TEXT[reason] then return end
+    local w = ac.getUI().windowSize.x
+    local s = math.min(math.max(ac.getUI().windowSize.y / 1080, 0.7), 1.5)
+    local locked = LOCKED[reason]
+    local lines = { { locked and TEXTS.sessionWaitTitle or TEXTS.sessionEndTitle, 'Segoe UI;Weight=Bold', 18, rgbm(1, 1, 1, 1) },
+      { TEXTS[TEXT[reason]], 'Segoe UI;Weight=SemiBold', 16, rgbm(0.95, 0.78, 0.45, 1) } }
+    if locked then lines[#lines + 1] = { TEXTS.sessionWaitLocked, 'Segoe UI', 14, rgbm(0.8, 0.84, 0.9, 1) } end
+    local bw, top = math.min(760 * s, w - 40), 60 * s
+    local bh = (#lines * 26 + 16) * s
+    local x0 = (w - bw) / 2
+    ui.drawRectFilled(vec2(x0, top), vec2(x0 + bw, top + bh), rgbm(0.06, 0.08, 0.11, 0.9), 6 * s)
+    ui.drawRectFilled(vec2(x0, top), vec2(x0 + bw, top + 3 * s), rgbm(0.95, 0.65, 0.2, 1))
+    local y = top + 10 * s
+    for _, l in ipairs(lines) do
+      ui.pushDWriteFont(l[2])
+      local px = l[3] * s
+      local tw = ui.measureDWriteText(l[1], px).x
+      if tw > bw - 24 * s then
+        px = px * (bw - 24 * s) / tw
+        tw = ui.measureDWriteText(l[1], px).x
+      end
+      ui.dwriteDrawText(l[1], px, vec2(x0 + (bw - tw) / 2, y), l[4])
+      ui.popDWriteFont()
+      y = y + 26 * s
+    end
+  end
+end
 local drawDesktopUI = (function()
   local W = 780
   local CANVAS_W = 422
@@ -15916,6 +15964,7 @@ local drawDesktopUI = (function()
           local sm = math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3)
           Desktop.text.minPx = Desktop.text.min * sm
           lobby(size.x, size.y, sm)
+          drawSessionWait()
           return
         end
         local free = state.menuFreeUntil and state.ui.clock < state.menuFreeUntil
@@ -16042,6 +16091,7 @@ function script.drawUI(exclusive)
     end
     return
   end
+  drawSessionWait()
   Desktop.fontCheck()
   local size = ac.getUI().windowSize
   local w = size.x
@@ -16459,12 +16509,26 @@ function CarControls.update(dt)
   ac.setCurrentCamera(CarControls.mode)
 end
 Session = { id = nil, key = nil, index = -1, restarted = false, phase = 'troca', ready = false, event = nil, leaving = nil, askT = -1e9, busy = false,
-  g = nil, askSince = nil }
+  g = nil, pending = nil, gen = 0, loading = false, waitSince = nil, unavailable = false, failed = false, init = nil, reading = false, closeAt = nil,
+  closeShown = nil, closed = false }
 ac.onSessionStart(function(index, restarted)
   Session.event = { index = index, restarted = restarted == true }
   ac.log(string.format('race-control: session start event (index %d, restarted %s)', index, tostring(restarted)))
 end)
 Session.event = { load = true }
+function Session.waitReason()
+  if Session.pending or (Session.event and not Session.event.load) then return 'transition' end
+  if not Session.id then
+    if config.baseUrl == '' then return 'configuration' end
+    return Session.unavailable and 'unavailable' or 'identity'
+  end
+  if not Session.ready then return Session.unavailable and 'unavailable' or 'initializing' end
+  if Session.phase == 'resultados' then return 'notCome' end
+  if Session.phase == 'esgotado' or Session.phase == 'terminou' then
+    return sim.raceSessionType == ac.SessionType.Race and 'extraRace' or 'extraLap'
+  end
+  return nil
+end
 function Session.beforeStart()
   return CarRead.num(sim.timeToSessionStart) > 0 or CarRead.num(sim.currentSessionTime) < 0
 end
@@ -16473,59 +16537,114 @@ function Session.carFinished(car)
   return Flags.ending == 'finished'
 end
 do
+  local ASK_GAP, UNAVAILABLE, CLOSE_SECONDS = 20, 120, 10
+  local function extraTime()
+    local s = ac.getSession(Session.index)
+    if not s then return false end
+    if (s.durationMinutes or 0) > 0 and (s.type ~= ac.SessionType.Race or s.isTimedRace) then
+      return Flags.timeSeen == true and CarRead.num(sim.sessionTimeLeft) <= 0
+    end
+    return Flags.ending == 'raceOver' or Flags.ending == 'finished'
+  end
   local function phaseNow(car)
-    if sim.isLookingAtSessionResults == true then return 'resultados' end
+    if sim.isLookingAtSessionResults == true then Session.reading = true end
+    if Session.reading then return 'resultados' end
     if Session.carFinished(car) then return 'terminou' end
     if Session.beforeStart() then return 'espera' end
-    if Flags.ending == 'timeOver' or Flags.ending == 'raceOver' then return 'esgotado' end
+    if extraTime() then return 'esgotado' end
     return 'correndo'
   end
-  local function turn(ev)
+  local function answered()
+    Session.waitSince = state.ui.clock
+    if Session.unavailable then
+      Session.unavailable = false
+      ac.log('race-control: the server of the event answered again')
+    end
+  end
+  local function unavailableCheck()
+    if Session.unavailable or not Session.waitSince or state.ui.clock - Session.waitSince < UNAVAILABLE then return end
+    Session.unavailable = true
+    ac.log(string.format('race-control: no answer of the server for %d s: unavailable, the car stays in the pits, the game stays open', UNAVAILABLE))
+  end
+  local function fail(why)
+    ac.log('race-control: id of the session not given by the base (' .. tostring(why) .. ')')
+    if Session.failed then return end
+    Session.failed = true
+    rcLog(TEXTS.rc.baseOff, 'session id not given by the base (' .. tostring(why) .. ') - car locked, asking again')
+  end
+  local function leave(ev)
     if Session.id and Session.key then
       ac.log(string.format('race-control: session %d (id %d) turned by the game: its history to the base', Session.index, Session.id))
       rcLog(TEXTS.rc.sessionEnd, 'session turned by the game - history sent')
       RecordSync.base.closeSession(Session.key)
     end
     if state.hold and ac.getCar(0).currentPenaltyType ~= BLACK_FLAG then physics.setCarPenalty(NONE, 0) end
-    Session.leaving = Session.id
-    Session.id, Session.key, Session.ready = nil, nil, false
-    Session.index, Session.restarted = ev.index, ev.restarted
-    Session.askT, Session.askSince = -1e9, nil
+    Session.leaving = Session.id or Session.leaving
+    Session.id, Session.key, Session.ready, Session.init = nil, nil, false, nil
+    Session.gen, Session.busy, Session.askT = Session.gen + 1, false, -1e9
+    Session.waitSince, Session.unavailable, Session.failed, Session.reading = nil, false, false, false
+    Session.pending = { index = ev.index, restarted = ev.restarted, from = Session.index }
+    Lock.want('base')
+    ac.log(string.format('race-control: turn to the session %d told by the game (restarted %s)', ev.index, tostring(ev.restarted)))
+  end
+  local function given(p)
+    local index = CarRead.num(sim.currentSessionIndex)
+    return p.restarted or index == p.index or index ~= p.from
+  end
+  local function apply(p)
+    Session.pending = nil
+    Session.index, Session.restarted = CarRead.num(sim.currentSessionIndex), p.restarted
     sessionReset()
     state.tow.sessionDue = true
+    ac.log(string.format('race-control: session %d given by the game (type %s)', Session.index, tostring(sim.raceSessionType)))
   end
-  local ASK_GAP = 5
   local function ask()
-    Session.askSince = Session.askSince or state.ui.clock
-    if Session.busy or state.ui.clock - Session.askT < ASK_GAP or config.baseUrl == '' then return end
+    if Session.busy or config.baseUrl == '' or state.ui.clock - Session.askT < ASK_GAP then return end
     Session.busy, Session.askT = true, state.ui.clock
-    local index = Session.index
+    Session.waitSince = Session.waitSince or state.ui.clock
+    local index, gen = Session.index, Session.gen
     local body = string.format('{"server":"%s:%s","index":%d,"type":%d%s}', tostring(ac.getServerIP() or ''), tostring(ac.getServerPortTCP() or ''), index,
       CarRead.num(sim.raceSessionType), Session.leaving and string.format(',"leaving":%d', Session.leaving) or '')
     WebQueue.request('POST', config.baseUrl .. '/v1/session', { ['Content-Type'] = 'application/json' }, body, function(err, res)
+      if gen ~= Session.gen then return end
       Session.busy = false
-      local id = not err and res and tonumber(res.status) == 200 and tonumber(tostring(res.body or ''):match('"id"%s*:%s*(%d+)'))
-      if not id or Session.index ~= index or Session.id then
-        if not id then ac.log('race-control: id of the session not given by the base (' .. tostring(err or (res and res.status)) .. ')') end
+      local status = not err and res and tonumber(res.status) or 0
+      if status == 403 then
+        answered()
+        if not Session.closeAt then
+          Session.closeAt = state.ui.clock + CLOSE_SECONDS
+          ac.log('race-control: the base says this is not the server of the event: the game closes in ' .. CLOSE_SECONDS .. ' s')
+        end
         return
       end
+      local id = status == 200 and tonumber(tostring(res.body or ''):match('"id"%s*:%s*(%d+)'))
+      if not id then fail(err or status) return end
+      answered()
+      if Session.index ~= index or Session.id or Session.pending then return end
       Session.id, Session.leaving = id, nil
       ac.log(string.format('race-control: session %d: id %d of the base', index, id))
     end)
   end
-  local function noBase()
-    Lock.want('base')
-    if state.ui.clock - Session.askSince >= ASK_GAP then showNotice(TEXTS.rcTitle, TEXTS.sessionNoBase, nil, 1) end
+  local function started()
+    local B = RecordSync.base
+    if not Session.init then
+      Session.init = { load = Session.loading }
+      B.serverNew()
+      if Session.loading then B.ownNew() end
+      answered()
+    end
+    B.serverUpdate()
+    if Session.init.load then B.ownUpdate() end
+    if math.max(B.server.answerT or -1e9, B.own.answerT or -1e9) > Session.waitSince then answered() end
+    return B.server.done and (not Session.init.load or B.ownDone())
   end
   function Session.begin(car, transition)
     local l = state.list
     local g = { t = car.currentPenaltyType, p = car.currentPenaltyParameter }
     local inPit = car.isInPitlane
-    Session.ready = true
     Session.key = Record.key()
     ac.log(string.format('race-control: session start (index %d, id %d%s)', Session.index, Session.id, transition and '' or ', script start'))
     RecordSync.base.forecastNew()
-    RecordSync.base.serverNew()
     Lap.sessionStart(transition)
     local lapCount = Lap.count
     l.curLap = lapCount
@@ -16554,17 +16673,34 @@ do
     state.pit.stopDone = stopWindow == 'done'
     state.pit.stopMissed = stopWindow == 'missed'
     SwapRecord.apply(Record.load('swap'))
-    if not transition then
-      RecordSync.base.outLoad()
-      RecordSync.base.askOwn()
-      RecordSync.askLater()
-    end
     ac.log(string.format('race-control: laps of the Racing Control %d (lap %d), of the game %d, server time %d ms', lapCount, Lap.number(),
       CarRead.num(car.lapCount), serverTimeMs()))
     state.ui.lastSeq = l.seq
     Session.g = g
+    Session.ready = true
+    if not transition then
+      RecordSync.base.outLoad()
+      RecordSync.askLater()
+    end
+    if Session.failed then
+      Session.failed = false
+      rcLog(TEXTS.rc.baseOff, 'base of the event back - session id ' .. Session.id)
+    end
   end
   function Session.update(car)
+    if Session.closeAt then
+      local left = math.max(math.ceil(Session.closeAt - state.ui.clock), 0)
+      if left ~= Session.closeShown then
+        Session.closeShown = left
+        ac.setMessage(TEXTS.rcTitle, string.format(TEXTS.sessionOther, left), 'illegal', 1.5)
+      end
+      if left <= 0 and not Session.closed then
+        Session.closed = true
+        ac.shutdownAssettoCorsa()
+      end
+      Lock.want('base')
+      return false
+    end
     local ev = Session.event
     if ev then
       Session.event = nil
@@ -16573,19 +16709,30 @@ do
         Session.loading = true
       else
         Session.loading = false
-        turn(ev)
+        leave(ev)
       end
     end
+    if Session.pending and given(Session.pending) then apply(Session.pending) end
     if state.tow.sessionDue and car.isInPitlane then state.tow.sessionDue = false end
-    if not Session.id then
+    if Session.pending or not Session.id then
       Session.phase = 'troca'
-      ask()
-      noBase()
+      Lock.want('base')
+      if not Session.pending then ask() end
+      unavailableCheck()
       return false
     end
+    if not Session.ready then
+      Session.phase = 'troca'
+      Lock.want('base')
+      if not started() then
+        unavailableCheck()
+        return false
+      end
+      Lock.update()
+      Session.begin(car, not Session.loading)
+    end
     Lock.release('base')
-    Session.askSince = nil
-    if not Session.ready then Session.begin(car, not Session.loading) end
+    Session.waitSince, Session.unavailable = nil, false
     Session.phase = phaseNow(car)
     return true
   end
