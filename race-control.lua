@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V190 - 2026.10.17'
+local RC_VERSION = 'V191 - 2026.10.17'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -14298,7 +14298,7 @@ do
   function Desktop.sessionFinale()
     local r = Session.waitReason()
     if not r then return nil end
-    if r == 'ended' then drawSessionWait() return nil end
+    if r == 'ended' and state.ui.clock >= (Session.endedUntil or 0) then drawSessionWait() return nil end
     finale = true
     return 'finalize'
   end
@@ -16538,7 +16538,7 @@ function CarControls.update(dt)
 end
 Session = { id = nil, key = nil, index = -1, restarted = false, phase = 'troca', ready = false, event = nil, leaving = nil, askT = -1e9, busy = false,
   g = nil, pending = nil, gen = 0, loading = false, waitSince = nil, unavailable = false, failed = false, init = nil, reading = false, closeAt = nil,
-  closed = false, readyUntil = nil, ended = false }
+  closed = false, readyUntil = nil, ended = false, endedUntil = nil }
 ac.onSessionStart(function(index, restarted)
   Session.event = { index = index, restarted = restarted == true }
   ac.log(string.format('race-control: session start event (index %d, restarted %s)', index, tostring(restarted)))
@@ -16665,7 +16665,10 @@ do
     infoBusy, infoT = true, state.ui.clock
     WebQueue.request('GET', string.format('http://%s:%d/INFO', ip, port), nil, nil, function(err, res)
       infoBusy = false
-      if err or not res or tonumber(res.status) ~= 200 then Session.ended = true end
+      if err or not res or tonumber(res.status) ~= 200 then
+        if not Session.ended then Session.endedUntil = state.ui.clock + config.screens.noticeSeconds end
+        Session.ended = true
+      end
     end)
   end
   local function started()
