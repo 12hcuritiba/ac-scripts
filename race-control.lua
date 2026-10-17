@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V189 - 2026.10.17'
+local RC_VERSION = 'V190 - 2026.10.17'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -627,6 +627,8 @@ local TEXTS = {
   sessionReadyTitle = 'SESSION RECOGNIZED',
   sessionReady = '%s · ID %d of the event database',
   sessionReadyFree = 'Controls released.',
+  sessionEndedTitle = 'END OF SESSION',
+  sessionEndedLine = 'The server is not on',
   baseDownStaff = 'Base of the event not answering for %s - the cars keep the data',
   baseDownWarn = 'Base of the event not answering - the data are kept in the car',
   appMissing = 'Racing Control app not running - install it from the event page - the game closes in %d s',
@@ -14271,6 +14273,7 @@ do
     extraLap = { 'base', 'sessionExtraTitle', 'sessionExtraLap', nil, 'checkered' },
     notCome = { 'base', 'sessionNotComeTitle', 'sessionNotCome', nil, 'checkered' },
     ready = { 'green', 'sessionReadyTitle', 'sessionReady', 'sessionReadyFree' },
+    ended = { 'base', 'sessionEndedTitle', 'sessionEndedLine', 'sessionReadyFree', 'checkered' },
   }
   local BORDERS = { yellow = BORDER_YELLOW, red = BORDER_RED, base = BORDER_BASE, green = BORDER_GREEN }
   local TITLES = { yellow = BORDER_YELLOW, red = BORDER_RED, base = COLOR_TITLE, green = PANEL_COLORS.green }
@@ -14293,7 +14296,9 @@ do
   end
   local finale = false
   function Desktop.sessionFinale()
-    if not Session.waitReason() then return nil end
+    local r = Session.waitReason()
+    if not r then return nil end
+    if r == 'ended' then drawSessionWait() return nil end
     finale = true
     return 'finalize'
   end
@@ -16533,7 +16538,7 @@ function CarControls.update(dt)
 end
 Session = { id = nil, key = nil, index = -1, restarted = false, phase = 'troca', ready = false, event = nil, leaving = nil, askT = -1e9, busy = false,
   g = nil, pending = nil, gen = 0, loading = false, waitSince = nil, unavailable = false, failed = false, init = nil, reading = false, closeAt = nil,
-  closed = false, readyUntil = nil }
+  closed = false, readyUntil = nil, ended = false }
 ac.onSessionStart(function(index, restarted)
   Session.event = { index = index, restarted = restarted == true }
   ac.log(string.format('race-control: session start event (index %d, restarted %s)', index, tostring(restarted)))
@@ -16541,6 +16546,7 @@ end)
 Session.event = { load = true }
 function Session.waitReason()
   if Session.closeAt then return 'other' end
+  if Session.ended then return 'ended' end
   if Session.pending or (Session.event and not Session.event.load) then return 'transition' end
   if not Session.id then
     if config.baseUrl == '' then return 'configuration' end
@@ -16609,6 +16615,7 @@ do
     Session.id, Session.key, Session.ready, Session.init = nil, nil, false, nil
     Session.gen, Session.busy, Session.askT = Session.gen + 1, false, -1e9
     Session.waitSince, Session.unavailable, Session.failed, Session.reading, Session.readyUntil = nil, false, false, false, nil
+    Session.ended = false
     Session.pending = { index = ev.index, restarted = ev.restarted, from = Session.index }
     Lock.want('base')
     ac.log(string.format('race-control: turn to the session %d told by the game (restarted %s)', ev.index, tostring(ev.restarted)))
@@ -16649,6 +16656,16 @@ do
       if Session.index ~= index or Session.id or Session.pending then return end
       Session.id, Session.leaving = id, nil
       ac.log(string.format('race-control: session %d: id %d of the base', index, id))
+    end)
+  end
+  local infoT, infoBusy = -1e9, false
+  local function serverOn()
+    local ip, port = ac.getServerIP(), CarRead.num(ac.getServerPortHTTP())
+    if infoBusy or not ip or port <= 0 or state.ui.clock - infoT < ASK_GAP then return end
+    infoBusy, infoT = true, state.ui.clock
+    WebQueue.request('GET', string.format('http://%s:%d/INFO', ip, port), nil, nil, function(err, res)
+      infoBusy = false
+      if err or not res or tonumber(res.status) ~= 200 then Session.ended = true end
     end)
   end
   local function started()
@@ -16756,6 +16773,8 @@ do
     Lock.release('base')
     Session.waitSince, Session.unavailable = nil, false
     Session.phase = phaseNow(car)
+    serverOn()
+    if Session.ended then Lock.releaseAll() end
     return true
   end
 end
