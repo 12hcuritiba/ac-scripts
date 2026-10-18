@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V194 - 2026.10.18'
+local RC_VERSION = 'V195 - 2026.10.18'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -4336,6 +4336,8 @@ local function fromServer(sender)
 end
 do
   local LOG_ONLY = { 'SERVER', 'ABS', 'TC', 'TC2', 'Engine Map', 'Pit limiter' }
+  local REPEAT_GAP = 1
+  local lastText, lastT = nil, -1e9
   if ac.onMessage then
     ac.onMessage(function(title, description)
       if not ServerGuard.ok() then return end
@@ -4354,7 +4356,11 @@ do
           return
         end
       end
-      Audit.add('GAME', text, true, DICT.area(text:lower()) or 'server')
+      local area = DICT.area(text:lower()) or 'server'
+      local now = state.ui.clock
+      if area ~= 'rc' and text == lastText and now - lastT < REPEAT_GAP then lastT = now return end
+      lastText, lastT = text, now
+      Audit.add('GAME', text, true, area)
     end)
   end
 end
