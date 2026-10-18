@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V193 - 2026.10.18'
+local RC_VERSION = 'V194 - 2026.10.18'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -822,7 +822,8 @@ local config = (function()
   }
   local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, staffPits = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
     pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
-  local FIELDS = { kmr = { points = 1, ratingDsq = 1, pitSpeed = 1 }, base = { realName = 1, offline = 1, downMax = 1, downPractice = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
+  local FIELDS = { kmr = { points = 1, ratingDsq = 1, pitSpeed = 1 }, base = { realName = 1, offline = 1, downMax = 1, downPractice = 1, persist = 1 },
+    driverSwap = { unconfirmedSeconds = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
     stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
   for _, m in pairs(OLD) do
     if THEMES[m[1]] then FIELDS[m[1]] = FIELDS[m[1]] or {}; FIELDS[m[1]][m[2]] = 1 end
@@ -993,8 +994,8 @@ local config = (function()
     realNameOffline = tostring((theme('base') or {}).offline or ''):lower():match('lock') and 'lock' or 'free',
     baseDownMax = math.max(math.floor(tonumber((theme('base') or {}).downMax or '') or 120), 0),
     baseDownPractice = tostring((theme('base') or {}).downPractice or ''):lower():match('drop') and 'drop' or 'warn',
-    persist = structKey('persist', { seconds = 0.5 }),
-    swapUnconfirmed = structKey('swapUnconfirmed', { seconds = 300 }),
+    persist = { seconds = tonumber((theme('base') or {}).persist or '') or 0.5 },
+    swapUnconfirmed = { seconds = tonumber((theme('driverSwap') or {}).unconfirmedSeconds or '') or 300 },
     sendHz = 18,
     gameHud = (function()
       local v = tostring(K('gameHud') or ''):lower():gsub('%s', '')
