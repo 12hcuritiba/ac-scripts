@@ -1055,8 +1055,8 @@ end)
 local SETUP_VALUES = 'amxracing.race-control.setupvalues'
 local KEY_REQUEST = 'amxracing.race-control.key'
 local keyDown = nil
-ac.onSharedEvent(KEY_REQUEST, function(data)
-  if not active then return end
+ac.onSharedEvent(KEY_REQUEST, function(data, senderName, senderType)
+  if not active or senderType ~= 'server_script' then return end
   local code = tonumber(data)
   if not code or code < 1 or code > 254 or keyDown then return end
   ac.sendKeyboardButtonEvent(code, true)
