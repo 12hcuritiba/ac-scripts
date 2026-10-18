@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V192 - 2026.10.17'
+local RC_VERSION = 'V193 - 2026.10.18'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -533,8 +533,15 @@ local TEXTS = {
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
     weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit', perf = 'Performance',
-    calc = 'Strategy calculator' },
+    calc = 'Strategy calculator', report = 'Session report' },
   scrTelemetry = 'TELEMETRY',
+  scrReport = 'SESSION REPORT',
+  rep = { all = 'ALL', me = 'Me', types = { 'Practice', 'Qualifying', 'Race' }, driver = 'Driver', car = 'Car', track = 'Track', type = 'Type', lap = 'Lap',
+    pages = { search = 'SESSIONS', session = 'DRIVERS', laps = 'LAPS', lap = 'LAP' }, mark = 'MARK', over = 'OVERLAID', alone = 'ALONE',
+    hdrDate = 'DATE', hdrType = 'TYPE', hdrDrivers = 'DRV', hdrLaps = 'LAPS', hdrBest = 'BEST', hdrTime = 'TIME', hdrValid = 'V', hdrPit = 'PIT', hdrFuel = 'FUEL',
+    hdrTyre = 'TYRE', hdrTel = 'TEL', bestSess = 'Best of the session', bestAll = 'Best of all times', delta = 'A-B', airRoad = 'AIR/TRACK', life = 'LIFE %',
+    km = 'KM', press = 'PRESSURE', noTrace = 'This lap has no telemetry in the base', loading = 'Reading the base...',
+    down = 'The base did not answer - click to ask again', none = 'Nothing in the base with these filters' },
   teleChannels = { thr = 'THR', brk = 'BRK', clu = 'CLU', str = 'STR', spd = 'SPD', gear = 'GEAR', glat = 'G LAT', glon = 'G LON' },
   teleShort = { thr = 'T', brk = 'B', clu = 'C', str = 'S', spd = 'V', gear = 'G', glat = 'X', glon = 'Z' },
   scrClassSel = '< CLASS: %s >', scrLapsCar = 'LAPS - CAR #%s', scrLapsMore = 'MORE', scrLapsLess = 'LESS',
@@ -674,6 +681,7 @@ local TEXTS = {
   wheelCode = { FL = 'FL', FR = 'FR', RL = 'RL', RR = 'RR', F = 'F', R = 'R' },
   wheelNames = { [0] = 'front left', 'front right', 'rear left', 'rear right' }, bodySides = { [0] = 'front', 'rear', 'left', 'right' },
   side = { front = 'F', back = 'B', left = 'L', right = 'R' },
+  holdSwapExit = 'Tow %s + %s', swapExitTitle = 'PREVIOUS EXIT NOT CONFIRMED',
   dtLine = '%s - Drive-through - %s', holdTowRepair = 'Tow %s + Repair %s', holdRepair = 'Repair %s', dirDsqNotice = 'Disqualified - %s',
   dsqWhy = { repairNotDone = 'Mandatory repair not done', sgInterrupted = 'Stop & go interrupted', swapPending = 'Driver swap with pending penalties',
     pitClosed = 'Pit lane left with the pit closed', slowdown = '%s - slowdown not served' },
@@ -985,6 +993,9 @@ local config = (function()
     realNameOffline = tostring((theme('base') or {}).offline or ''):lower():match('lock') and 'lock' or 'free',
     baseDownMax = math.max(math.floor(tonumber((theme('base') or {}).downMax or '') or 120), 0),
     baseDownPractice = tostring((theme('base') or {}).downPractice or ''):lower():match('drop') and 'drop' or 'warn',
+    persist = structKey('persist', { seconds = 0.5 }),
+    swapUnconfirmed = structKey('swapUnconfirmed', { seconds = 300 }),
+    sendHz = 18,
     gameHud = (function()
       local v = tostring(K('gameHud') or ''):lower():gsub('%s', '')
       return (v == 'show' or v == 'hideall') and v or 'hide'
@@ -1310,6 +1321,9 @@ function state.chat.stamp()
   return os.preciseClock(), state.chat.seq
 end
 local function queueCommand(msg)
+  for _, x in ipairs(state.chat.queue) do
+    if x.text == msg then return end
+  end
   local t, n = state.chat.stamp()
   state.chat.queue[#state.chat.queue + 1] = { text = msg, t = t, n = n }
 end
@@ -1388,6 +1402,14 @@ function CarRead.gripName(pct)
   if pct >= 95 then return 'GREEN' end
   if pct >= 89 then return 'DIRTY' end
   return 'DUSTY'
+end
+do
+  local spinFrame, spinList = nil, {}
+  function CarRead.pitSpinners()
+    local f = sim.frame
+    if spinFrame ~= f or f == nil then spinFrame, spinList = f, (ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) end
+    return spinList
+  end
 end
 function CarRead.setupValues()
   local out = setmetatable({}, { __index = function() return '-' end })
@@ -1535,7 +1557,6 @@ local function driverTag()
 end
 local function rcLog(what, reason)
   local msg = string.format('%s%s - %s - %s', TEXTS.rcPrefix, what, driverTag(), reason)
-  queueCommand(msg)
   if config.baseUrl ~= '' then
     state.rcOut[#state.rcOut + 1] = string.format('%d|%s', math.floor(serverTimeMs()), msg)
     if #state.rcOut > 400 then table.remove(state.rcOut, 1) end
@@ -1549,9 +1570,73 @@ local function showNotice(title, text, item, seconds, flag)
   state.ui.notice = { title = title, text = text, item = item, flag = flag,
     untilT = state.ui.clock + (seconds or NOTICE_SECONDS) }
 end
+CarsTick = { rows = {}, byIndex = {}, frame = false, nextT = 0, seq = 0 }
+do
+  local stale = {}
+  ac.onClientConnected(function(i) stale[i] = true end)
+  ac.onClientDisconnected(function(i) stale[i] = true end)
+  local function driver(r)
+    local i = r.i
+    r.name = tostring(ac.getDriverName(i) or '')
+    r.number = ac.getDriverNumber(i) or i
+    r.team = tostring(ac.getDriverTeam(i) or '')
+    r.staff = CarRead.isStaff(i)
+  end
+  local ring, ringN = {}, 0
+  local function bySp(a, b)
+    if a.sp ~= b.sp then return a.sp < b.sp end
+    return a.i < b.i
+  end
+  function CarsTick.update()
+    local now = state.ui.clock
+    if now < CarsTick.nextT then
+      CarsTick.frame = false
+      return
+    end
+    CarsTick.nextT = now + 1 / math.max(tonumber(config.sendHz) or 18, 1)
+    CarsTick.frame = true
+    CarsTick.seq = CarsTick.seq + 1
+    local rows, byIndex, n = CarsTick.rows, CarsTick.byIndex, 0
+    ringN = 0
+    for i = 0, (sim.carsCount or 1) - 1 do
+      local c = ac.getCar(i)
+      if c then
+        local r = byIndex[i]
+        if not r then
+          r = { i = i }
+          byIndex[i] = r
+          stale[i] = true
+        end
+        local on = i == 0 or c.isConnected == true
+        if on ~= r.on then stale[i] = true end
+        r.c, r.on, r.sp = c, on, CarRead.num(c.splinePosition)
+        if stale[i] or (on and r.name == '') then
+          stale[i] = nil
+          driver(r)
+        end
+        n = n + 1
+        rows[n] = r
+        if i > 0 and on and not r.staff and not c.isInPitlane then
+          ringN = ringN + 1
+          ring[ringN] = r
+        end
+      end
+    end
+    for k = #rows, n + 1, -1 do rows[k] = nil end
+    for k = #ring, ringN + 1, -1 do ring[k] = nil end
+    table.sort(ring, bySp)
+    for k = 1, ringN do ring[k].ringK = k end
+  end
+  function CarsTick.aheadM(r)
+    local k = r.ringK
+    if ringN < 2 or not k or ring[k] ~= r then return math.huge end
+    local o = ring[k % ringN + 1]
+    return ((o.sp - r.sp) % 1) * (tonumber(sim.trackLengthM) or 0)
+  end
+end
 local Record = {}
 local RECORD_VERSION = 'RC1'
-local RECORD_PREFIX = 'race-control.rec.'
+local RECORD_PREFIX = '.race-control.rec.'
 local STORAGE_PREFIX = 'rc.'
 local function sessionStartMinutes()
   return math.floor(((sim.systemTime or 0) - (sim.currentSessionTime or 0) / 1000) / 60 + 0.5)
@@ -1593,34 +1678,70 @@ function Record.decode(text)
 end
 Record.onSave = nil
 Record.onTampered = nil
-function Record.save(list, seq, body)
-  local text = Record.encode(list, seq, body)
-  ac.store(RECORD_PREFIX .. list, text)
-  ac.storage[STORAGE_PREFIX .. list] = text
-  if Record.onSave then Record.onSave(list, seq, text) end
-  return seq
-end
-local function valid(rec, list)
-  if not rec or rec.list ~= list or not Record.sameRace(rec.key, Record.key()) then return nil end
-  return rec
-end
-function Record.load(list)
-  local rec = valid(Record.decode(ac.load(RECORD_PREFIX .. list)), list)
-  if rec then return rec.body, rec.seq, 'store' end
-  local fileRec, err = Record.decode(ac.storage[STORAGE_PREFIX .. list])
-  if err == 'checksum' and Record.onTampered then Record.onTampered(list) end
-  rec = valid(fileRec, list)
-  if rec then return rec.body, rec.seq, 'storage' end
-  return nil
+do
+  local function valid(rec, list)
+    if not rec or rec.list ~= list or not Record.sameRace(rec.key, Record.key()) then return nil end
+    return rec
+  end
+  local GROUP, GROUP_LIST = { window = 1, stopwindow = 2 }, 'janelas'
+  local lastSaved = {}
+  local function groupFields(body)
+    local a, b = tostring(body or ''):match('^([^;]*);?(.*)$')
+    return { a or '', b or '' }
+  end
+  local function groupNow()
+    local cur = lastSaved[GROUP_LIST]
+    if cur and cur.key == Record.key() then return groupFields(cur.body) end
+    local rec = valid(Record.decode(ac.storage[STORAGE_PREFIX .. GROUP_LIST]), GROUP_LIST)
+    return groupFields(rec and rec.body)
+  end
+  function Record.save(list, seq, body)
+    local g = GROUP[list]
+    if g then
+      local f = groupNow()
+      f[g] = tostring(body or '')
+      return Record.save(GROUP_LIST, seq, f[1] .. ';' .. f[2])
+    end
+    local key = Record.key()
+    local before = lastSaved[list]
+    if before and before.key == key and before.body == body then return before.seq end
+    local text = Record.encode(list, seq, body)
+    ac.storage[STORAGE_PREFIX .. list] = text
+    ac.store(RECORD_PREFIX .. list, key .. '|' .. seq)
+    lastSaved[list] = { key = key, body = body, seq = seq }
+    if Record.onSave then Record.onSave(list, seq, text) end
+    return seq
+  end
+  function Record.load(list)
+    local g = GROUP[list]
+    if g then
+      local body, seq, source = Record.load(GROUP_LIST)
+      local v = body and groupFields(body)[g] or ''
+      if v == '' then return nil end
+      return v, seq, source
+    end
+    local fileRec, err = Record.decode(ac.storage[STORAGE_PREFIX .. list])
+    if err == 'checksum' and Record.onTampered then Record.onTampered(list) end
+    local rec = valid(fileRec, list)
+    if not rec then return nil end
+    local mark = ac.load(RECORD_PREFIX .. list)
+    return rec.body, rec.seq, mark == rec.key .. '|' .. rec.seq and 'store' or 'storage'
+  end
 end
 local OnlineQueue = { lastT = -1e9, chatT = -1e9 }
 sessionPart('onlineQueue', OnlineQueue, function() return { items = {} } end, { 'lastT', 'chatT', 'web' })
 do
   local GAP_ONLINE = 0.25
   local GAP_CHAT = 1
-  function OnlineQueue.push(send, msg, target)
+  function OnlineQueue.push(send, msg, target, again)
+    for _, x in ipairs(OnlineQueue.items) do
+      if x.send == send and x.target == target then
+        x.msg, x.again = msg, again == true
+        return
+      end
+    end
     local t, n = state.chat.stamp()
-    OnlineQueue.items[#OnlineQueue.items + 1] = { send = send, msg = msg, target = target, t = t, n = n }
+    OnlineQueue.items[#OnlineQueue.items + 1] = { send = send, msg = msg, target = target, again = again == true, t = t, n = n }
   end
   local function oldest(list)
     local best, at = nil, nil
@@ -1636,7 +1757,7 @@ do
       if e then
         OnlineQueue.lastT = now
         table.remove(OnlineQueue.items, i)
-        if not e.send(e.msg, false, e.target) then
+        if not e.send(e.msg, e.again, e.target) then
           ac.log(string.format('race-control: online message refused by the game, left out (stamp %.3f #%d)', e.t, e.n))
         end
       end
@@ -1744,6 +1865,7 @@ do
   local function ownMenu(code)
     if code == ownOpen then return end
     ownOpen = code
+    Connection.ownOpen = code
     local open = code > 0
     local msg = { mnOpen = code }
     if not sendMenu(msg) then OnlineQueue.push(sendMenu, msg, nil) end
@@ -1752,7 +1874,7 @@ do
   local function car(i)
     local e = Connection.cars[i]
     if not e then
-      e = { pings = {}, pingT = -1e9, last = nil, stillT = nil, moving = false, parkedT = nil, name = '' }
+      e = { pings = {}, pingT = -1e9, lastX = nil, lastZ = nil, stillT = nil, moving = false, parkedT = nil, name = '' }
       Connection.cars[i] = e
     end
     return e
@@ -1824,7 +1946,7 @@ do
       e.inT = state.ui.clock
       e.sameDriver = name == e.name
     end
-    e.name, e.pings, e.ping, e.stillT, e.moving, e.last = name, {}, nil, nil, false, nil
+    e.name, e.pings, e.ping, e.stillT, e.moving, e.lastX, e.lastZ = name, {}, nil, nil, false, nil, nil
     Connection.menu[i] = nil
     ac.log(string.format('race-control: connection: car %d (%s) connected%s', i, name,
       e.leftT and (e.sameDriver and ' - same driver back' or ' - another driver (driver swap)') or ''))
@@ -1833,11 +1955,12 @@ do
     local mode = Connection.hudMode
     ownMenu((sim.isInMainMenu == true or mode == 'menu') and 2 or (mode == 'pause' or ac.isKeyDown(27) == true) and 1 or 0)
     local now = state.ui.clock
-    for i = 1, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and c.isConnected then
+    if not CarsTick.frame then return end
+    for _, r in ipairs(CarsTick.rows) do
+      local i, c = r.i, r.c
+      if i > 0 and r.on then
         local e = car(i)
-        e.name = tostring(ac.getDriverName(i) or e.name)
+        if r.name ~= '' then e.name = r.name end
         e.ping = CarRead.num(c.ping)
         if now - e.pingT >= CHECK_SECONDS and e.ping > 0 then
           e.pingT = now
@@ -1845,13 +1968,13 @@ do
           while #e.pings > 4 do table.remove(e.pings, 1) end
         end
         local p = c.position
-        if p and e.last and (p.x ~= e.last.x or p.z ~= e.last.z) then
+        if p and e.lastX and (p.x ~= e.lastX or p.z ~= e.lastZ) then
           e.stillT = nil
           e.moving = CarRead.num(c.speedKmh) > 5
         elseif p and not e.stillT then
           e.stillT = now
         end
-        if p then e.last = vec2(p.x, p.z) end
+        if p then e.lastX, e.lastZ = p.x, p.z end
         local parked = CarRead.parked(c)
         if parked and not e.parked then e.parkedT = now end
         if not c.isInPitlane then e.parkedT = nil end
@@ -1900,13 +2023,6 @@ do
     end
     return false
   end
-  function Trust.record(sender, car, ownAnswer)
-    if not Trust.on() then return true end
-    if not sender then return refuse('record', sender, 'no sender') end
-    if sender.sessionID == car then return true end
-    if ownAnswer then return true end
-    return refuse('record', sender, 'about car ' .. tostring(car))
-  end
   function Trust.incident(sender, kind, pos)
     if not Trust.on() or kind == 0 then return true end
     local c = sender and ac.getCar(sender.index)
@@ -1920,182 +2036,14 @@ do
     end
     return true
   end
-  function Trust.list(sender, car)
-    if not Trust.on() then return true end
-    if sender and sender.sessionID == car then return true end
-    return refuse('penalty list', sender, 'about car ' .. tostring(car))
-  end
-  local TRUST_SETTLE = 3
-  local V = {}
-  sessionPart('trust', V, function() return { votes = {}, firstT = {}, answered = {} } end)
-  local function othersConnected()
-    local n = 0
-    for i = 1, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and c.isConnected then n = n + 1 end
-    end
-    return n
-  end
-  function Trust.vote(list, seq, text, sender)
-    local byText = V.votes[list] or {}
-    V.votes[list] = byText
-    V.firstT[list] = V.firstT[list] or state.ui.clock
-    V.answered[list] = V.answered[list] or {}
-    V.answered[list][sender and sender.sessionID or -1] = true
-    local v = byText[text] or { seq = seq, senders = {}, count = 0 }
-    byText[text] = v
-    local who = sender and sender.sessionID or -1
-    if not v.senders[who] then
-      v.senders[who] = true
-      v.count = v.count + 1
-    end
-  end
-  function Trust.settled()
-    local out = {}
-    local others = othersConnected()
-    for list, byText in pairs(V.votes) do
-      local n = 0
-      for _ in pairs(V.answered[list]) do n = n + 1 end
-      if n >= others or state.ui.clock - V.firstT[list] >= TRUST_SETTLE then
-        local best
-        for text, v in pairs(byText) do
-          if not best or v.count > best.count or (v.count == best.count and v.seq > best.seq) then
-            best = { text = text, seq = v.seq, count = v.count }
-          end
-        end
-        if best then
-          out[list] = best
-          if next(byText, next(byText)) then
-            ac.log(string.format('race-control: data check: %s V.answered in different versions; %d driver(s) agree',
-              list, best.count))
-          end
-        end
-        V.votes[list], V.firstT[list], V.answered[list] = nil, nil, nil
-      end
-    end
-    return out
-  end
 end
 local RecordSync = {
-  peers = {},
-  parts = {},
   restorers = {},
   pending = {},
-  askedT = nil,
-  ownTrack = nil,
 }
 do
-  local SYNC_PART = 120
-  local SYNC_ANSWER_WINDOW = 30
-  local SYNC_REQUEST = 255
-  local SYNC_LISTS = { 'penalties', 'window', 'swap', 'track', 'car', 'gain', 'pit', 'stint', 'pass', 'kmr', 'stopwindow', 'lap', 'boxsel' }
-  local SYNC_CODES = { penalties = 1, window = 2, swap = 3, track = 4, car = 5, gain = 6, pit = 7, stint = 8, pass = 9, kmr = 10,
-    stopwindow = 11, lap = 12, boxsel = 13 }
-  local sendRecordEvent = ac.OnlineEvent({
-    ac.StructItem.key('amxracing.race-control.rec'),
-    rcCar = ac.StructItem.uint8(),
-    rcList = ac.StructItem.uint8(),
-    rcSeq = ac.StructItem.uint16(),
-    rcPart = ac.StructItem.uint8(),
-    rcParts = ac.StructItem.uint8(),
-    rcText = ac.StructItem.string(SYNC_PART),
-  }, function(sender, msg) RecordSync.receive(sender, msg) end, nil, nil, { processPostponed = true })
-  local function ownSlot() return ac.getCar(0).sessionID end
-  local function queueRecord(car, list, seq, text, target)
-    local parts = math.max(1, math.ceil(#text / SYNC_PART))
-    for i = 1, parts do
-      OnlineQueue.push(sendRecordEvent, { rcCar = car, rcList = SYNC_CODES[list], rcSeq = seq % 65536, rcPart = i,
-        rcParts = parts, rcText = text:sub((i - 1) * SYNC_PART + 1, i * SYNC_PART) }, target)
-    end
-  end
-  function RecordSync.publish(list, seq, text)
-    if not SYNC_CODES[list] then return end
-    if list == 'track' then
-      RecordSync.ownTrack = { seq = seq, text = text }
-      return
-    end
-    queueRecord(ownSlot(), list, seq, text, nil)
-  end
-  function RecordSync.askOwn()
-    RecordSync.askedT = state.ui.clock
-    OnlineQueue.push(sendRecordEvent, { rcCar = ownSlot(), rcList = SYNC_REQUEST }, nil)
-  end
-  local ASK_BASE_WAIT = 2
-  function RecordSync.askLater()
-    RecordSync.askLaterT = state.ui.clock + ASK_BASE_WAIT
-    RecordSync.baseGaveOwn = false
-  end
-  local function keepPeer(car, list, seq, text, key)
-    if not Record.sameSession(key, Record.key()) then return end
-    local byCar = RecordSync.peers[car] or {}
-    RecordSync.peers[car] = byCar
-    local old = byCar[list]
-    if not old or seq >= old.seq then byCar[list] = { seq = seq, text = text } end
-  end
-  local function onRecordText(car, list, text, sender)
-    local rec = Record.decode(text)
-    if not rec or rec.list ~= list then return end
-    if list == 'track' then
-      if not RecordSync.askedT or state.ui.clock - RecordSync.askedT > SYNC_ANSWER_WINDOW then return end
-      if not Record.sameSession(rec.key, Record.key()) then return end
-      local p = RecordSync.pending.track
-      if not p or rec.seq >= p.seq then RecordSync.pending.track = { body = rec.body, seq = rec.seq, key = rec.key } end
-      return
-    end
-    keepPeer(car, list, rec.seq, text, rec.key)
-    if car ~= ownSlot() or not RecordSync.askedT then return end
-    if state.ui.clock - RecordSync.askedT > SYNC_ANSWER_WINDOW then return end
-    if not Record.sameRace(rec.key, Record.key()) then return end
-    if Trust.on() then
-      Trust.vote(list, rec.seq, text, sender)
-      return
-    end
-    local p = RecordSync.pending[list]
-    if not p or rec.seq >= p.seq then RecordSync.pending[list] = { body = rec.body, seq = rec.seq, key = rec.key } end
-  end
-  function RecordSync.receive(sender, msg)
-    if sender and sender.index == 0 then return end
-    if msg.rcList == SYNC_REQUEST then
-      if not sender then return end
-      local own = RecordSync.ownTrack
-      if own then queueRecord(ownSlot(), 'track', own.seq, own.text, sender.sessionID) end
-      local byCar = RecordSync.peers[msg.rcCar]
-      if not byCar then return end
-      for _, list in ipairs(SYNC_LISTS) do
-        local r = byCar[list]
-        if r then queueRecord(msg.rcCar, list, r.seq, r.text, sender.sessionID) end
-      end
-      return
-    end
-    local list = SYNC_LISTS[msg.rcList]
-    if not list or msg.rcParts < 1 then return end
-    if not Trust.record(sender, msg.rcCar, msg.rcCar == ownSlot() and RecordSync.askedT ~= nil) then return end
-    local id = msg.rcCar .. '/' .. list .. '/' .. msg.rcSeq
-    local p = RecordSync.parts[id] or { count = 0 }
-    RecordSync.parts[id] = p
-    if not p[msg.rcPart] then
-      p[msg.rcPart] = msg.rcText
-      p.count = p.count + 1
-    end
-    if p.count < msg.rcParts then return end
-    RecordSync.parts[id] = nil
-    local chunks = {}
-    for i = 1, msg.rcParts do chunks[i] = p[i] or '' end
-    onRecordText(msg.rcCar, list, table.concat(chunks), sender)
-  end
+  function RecordSync.askLater() end
   function RecordSync.update()
-    if RecordSync.askLaterT and state.ui.clock >= RecordSync.askLaterT then
-      RecordSync.askLaterT = nil
-      if RecordSync.baseGaveOwn then
-        ac.log('race-control: records of this car from the base online: the other drivers not asked')
-      else
-        RecordSync.askOwn()
-      end
-    end
-    for list, best in pairs(Trust.settled()) do
-      local rec = Record.decode(best.text)
-      if rec then RecordSync.pending[list] = { body = rec.body, seq = rec.seq, key = rec.key } end
-    end
     local key = Record.key()
     for list, p in pairs(RecordSync.pending) do
       RecordSync.pending[list] = nil
@@ -2103,17 +2051,13 @@ do
       local here = p.key and (list == 'track' and Record.sameSession(p.key, key) or (list ~= 'track' and Record.sameRace(p.key, key)))
       if not here then
         ac.log('race-control: record ' .. list .. ' ' .. tostring(p.seq) .. ' of another session not applied (' .. tostring(p.key) .. ')')
-      elseif restore then restore(p.body, p.seq, 'peers') end
+      elseif restore then restore(p.body, p.seq, 'base') end
     end
   end
-  Record.onSave = RecordSync.publish
-  sessionPart('recordSync', RecordSync, function()
-    return { peers = {}, parts = {}, pending = {}, askedT = SESSION_NONE, askLaterT = SESSION_NONE, baseGaveOwn = SESSION_NONE, ownTrack = SESSION_NONE }
-  end, { 'restorers', 'base' })
+  sessionPart('recordSync', RecordSync, function() return { pending = {} } end, { 'restorers', 'base' })
 end
-RecordSync.base = { queue = {}, nextT = 0, busy = false, failLogged = false }
+RecordSync.base = { nextT = 0, busy = false, failLogged = false }
 do
-  local BASE_GAP = 5
   local B = RecordSync.base
   local function on() return config.baseUrl ~= '' and web ~= nil and web.request ~= nil end
   local function jsonStr(s)
@@ -2125,30 +2069,43 @@ do
   local function urlEncode(s)
     return (tostring(s):gsub('[^%w%-%._~]', function(c) return string.format('%%%02X', c:byte()) end))
   end
+  B.parts, B.track, B.traceOut = {}, nil, {}
+  B.beat = {}
   function B.push(list, seq, text)
-    if on() then B.queue[list] = text end
+    if not on() or list == 'laps' then return end
+    local p = { t = math.floor(serverTimeMs()), x = text }
+    if list == 'track' then B.track = p else B.parts[list] = p end
+  end
+  function B.traceAdd(lap, data, n, dt)
+    if not on() or not data then return end
+    B.traceOut[#B.traceOut + 1] = { lap = lap, data = data, n = n, dt = dt }
+    while #B.traceOut > 20 do table.remove(B.traceOut, 1) end
+    state.outDirty = true
   end
   local LINES_MAX = 30
   B.old = {}
   function B.closeSession(key)
-    if next(B.queue) == nil and #state.rcOut == 0 and #state.lapOut == 0 then return end
-    B.old[#B.old + 1] = { key = key, queue = B.queue, rc = state.rcOut, laps = state.lapOut }
-    B.queue, state.rcOut, state.lapOut = {}, {}, {}
+    if next(B.parts) == nil and not B.track and #state.rcOut == 0 and #state.lapOut == 0 and #B.traceOut == 0 then return end
+    B.old[#B.old + 1] = { key = key, parts = B.parts, track = B.track, rc = state.rcOut, laps = state.lapOut, traces = B.traceOut }
+    B.parts, B.track, B.traceOut = {}, nil, {}
+    state.rcOut, state.lapOut = {}, {}
     state.outDirty = true
   end
   local OUT_KEY, OUT_SAVE_GAP = 'rc.baseOut', 2
   B.outT, B.flight = -1e9, nil
   local function outSave()
     local lines = {}
-    local function put(key, rc, laps)
-      if not key or (#rc == 0 and #laps == 0) then return end
+    local function put(key, rc, laps, traces)
+      traces = traces or {}
+      if not key or (#rc == 0 and #laps == 0 and #traces == 0) then return end
       lines[#lines + 1] = 'K|' .. key
       for _, l in ipairs(rc) do lines[#lines + 1] = 'R|' .. l end
       for _, l in ipairs(laps) do lines[#lines + 1] = 'L|' .. l end
+      for _, t in ipairs(traces) do lines[#lines + 1] = string.format('T|%d|%d|%d|%s', t.lap, t.n or 0, t.dt or 0, t.data) end
     end
-    for _, o in ipairs(B.old) do put(o.key, o.rc, o.laps) end
-    if B.flight then put(B.flight.key, B.flight.rc, B.flight.laps) end
-    put(Session.key, state.rcOut, state.lapOut)
+    for _, o in ipairs(B.old) do put(o.key, o.rc, o.laps, o.traces) end
+    if B.flight then put(B.flight.key, B.flight.rc, B.flight.laps, B.flight.traces) end
+    put(Session.key, state.rcOut, state.lapOut, B.traceOut)
     ac.storage[OUT_KEY] = table.concat(lines, '\n')
   end
   function B.outLoad()
@@ -2157,16 +2114,20 @@ do
       local kind, text = line:sub(1, 1), line:sub(3)
       if kind == 'K' then
         if Record.sameSession(text, Session.key) then
-          entry = { rc = state.rcOut, laps = state.lapOut }
+          entry = { rc = state.rcOut, laps = state.lapOut, traces = B.traceOut }
         else
-          entry = { key = text, queue = {}, rc = {}, laps = {} }
+          entry = { key = text, parts = {}, rc = {}, laps = {}, traces = {} }
           B.old[#B.old + 1] = entry
         end
       elseif entry and kind == 'R' then entry.rc[#entry.rc + 1] = text
-      elseif entry and kind == 'L' then entry.laps[#entry.laps + 1] = text end
+      elseif entry and kind == 'L' then entry.laps[#entry.laps + 1] = text
+      elseif entry and kind == 'T' then
+        local lap, n, dt, data = text:match('^(%d+)|(%d+)|(%d+)|(.+)$')
+        if lap then entry.traces[#entry.traces + 1] = { lap = tonumber(lap), n = tonumber(n), dt = tonumber(dt), data = data } end
+      end
     end
-    ac.log(string.format('race-control: base online: %d [RC] lines and %d laps of this session kept on this computer, %d sessions before to send',
-      #state.rcOut, #state.lapOut, #B.old))
+    ac.log(string.format('race-control: base online: %d [RC] lines, %d laps and %d telemetries of this session kept on this computer, %d sessions before to send',
+      #state.rcOut, #state.lapOut, #B.traceOut, #B.old))
   end
   B.downSince, B.downTold = nil, false
   local function downCheck()
@@ -2187,45 +2148,104 @@ do
       showNotice(TEXTS.rcTitle, TEXTS.baseDownWarn, nil, 1)
     end
   end
+  B.exit = { sig = nil, parked = false, menu = false, left = false, win = false, t = nil, due = false }
+  local function exitRead(car)
+    local e = B.exit
+    local parked = car ~= nil and car.isInPit == true and (tonumber(car.speedKmh) or 0) < 1
+    local menu = (Connection.ownOpen or 0) > 0
+    local sig = (parked and '1' or '0') .. (menu and '1' or '0') .. (e.left and '1' or '0') .. (e.win and '1' or '0')
+    if sig ~= e.sig then e.sig, e.parked, e.menu, e.t, e.due = sig, parked, menu, math.floor(serverTimeMs()), true end
+  end
+  B.plan = { done = tostring(ac.storage['rc.pitplan'] or ''), due = nil }
+  local planApply
+  local PLAN_PIT_GAP, PLAN_GAP = 2, 10
+  B.idleT = 0
   function B.update()
     if state.outDirty and state.ui.clock - B.outT >= OUT_SAVE_GAP then
       state.outDirty, B.outT = false, state.ui.clock
       outSave()
     end
     downCheck()
-    if not on() or B.busy or state.ui.clock < B.nextT then return end
-    local src = B.old[1] or (Session.id and { key = Record.key(), queue = B.queue, rc = state.rcOut, laps = state.lapOut, now = true })
+    if not on() then return end
+    local car = ac.getCar(0)
+    exitRead(car)
+    LapTrace.tick(car)
+    if B.busy then return end
+    local now = state.ui.clock
+    local gap = config.persist.seconds
+    if now < B.nextT and not B.exit.due then return end
+    B.nextT = now + gap
+    for _, f in ipairs(B.beat) do f() end
+    B.stratUpdate()
+    B.boxUpdate()
+    B.statusUpdate()
+    B.elecUpdate()
+    local src = B.old[1] or (Session.id and { key = Record.key(), parts = B.parts, track = B.track, rc = state.rcOut, laps = state.lapOut, traces = B.traceOut, now = true })
     if not src then return end
-    if next(src.queue) == nil and #src.rc == 0 and #src.laps == 0 then
-      if not src.now then table.remove(B.old, 1) end
-      return
+    local exitDue = src.now and B.exit.due
+    local askRr, askName, askPush = src.now and B.rrDue(false), src.now and B.nameDue(false), src.now and B.pushDue(false)
+    local quiet = next(src.parts) == nil and not src.track and #src.rc == 0 and #src.laps == 0 and #src.traces == 0 and not exitDue and not B.plan.due
+      and not askRr and not askName and not askPush
+    if quiet then
+      if not src.now then table.remove(B.old, 1) return end
+      if now < B.idleT then return end
     end
-    local sent, parts = src.queue, {}
-    if src.now then B.queue = {} else src.queue = {} end
-    for _, text in pairs(sent) do parts[#parts + 1] = jsonStr(text) end
+    B.idleT = now + ((car and car.isInPitlane) and PLAN_PIT_GAP or PLAN_GAP)
+    local parts, track = src.parts, src.track
+    src.parts, src.track = {}, nil
+    if src.now then B.parts, B.track = src.parts, nil end
+    local partTexts = {}
+    for list, p in pairs(parts) do partTexts[#partTexts + 1] = jsonStr(list) .. ':{"t":' .. p.t .. ',"x":' .. jsonStr(p.x) .. '}' end
     local lines, lineParts = {}, {}
     while #lines < LINES_MAX and #src.rc > 0 do lines[#lines + 1] = table.remove(src.rc, 1) end
     for _, l in ipairs(lines) do lineParts[#lineParts + 1] = jsonStr(l) end
     local lapLines, lapParts = {}, {}
     while #lapLines < LINES_MAX and #src.laps > 0 do lapLines[#lapLines + 1] = table.remove(src.laps, 1) end
     for _, l in ipairs(lapLines) do lapParts[#lapParts + 1] = jsonStr(l) end
-    B.busy, B.nextT = true, state.ui.clock + BASE_GAP
-    B.flight = { key = src.key, rc = lines, laps = lapLines }
-    local body = '{"key":' .. jsonStr(src.key) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '')
-      .. ',"records":[' .. table.concat(parts, ',') .. '],"lines":[' .. table.concat(lineParts, ',') .. '],"laps":['
-      .. table.concat(lapParts, ',') .. ']}'
-    WebQueue.request('POST', config.baseUrl .. '/v1/batch', { ['Content-Type'] = 'application/json' }, body,
+    local traces, traceParts = {}, {}
+    local pendingLaps = {}
+    for _, l in ipairs(lapLines) do local n = tonumber(l:match('^L%d|(%d+)|')) if n then pendingLaps[n] = true end end
+    for _, l in ipairs(src.laps) do local n = tonumber(l:match('^L%d|(%d+)|')) if n then pendingLaps[n] = true end end
+    local keep = {}
+    for _, t in ipairs(src.traces) do
+      if #traces < 4 and not pendingLaps[t.lap] then traces[#traces + 1] = t else keep[#keep + 1] = t end
+    end
+    for i = #src.traces, 1, -1 do src.traces[i] = nil end
+    for _, t in ipairs(keep) do src.traces[#src.traces + 1] = t end
+    for _, t in ipairs(traces) do traceParts[#traceParts + 1] = string.format('{"lap":%d,"n":%d,"dt":%d,"data":%s}', t.lap, t.n or 0, t.dt or 0, jsonStr(t.data)) end
+    local e = B.exit
+    local exitJson = exitDue and string.format(',"exit":{"t":%d,"parked":%d,"menu":%d,"left":%d,"win":%d}', e.t or 0, e.parked and 1 or 0, e.menu and 1 or 0,
+      e.left and 1 or 0, e.win and 1 or 0) or ''
+    if exitDue then e.due = false end
+    local planDone = src.now and B.plan.due or nil
+    local asks = {}
+    if askRr then B.rrDue(true); asks[#asks + 1] = '"rr":' .. jsonStr(askRr) end
+    if askName then B.nameDue(true); asks[#asks + 1] = '"name":' .. jsonStr(askName) end
+    if askPush then B.pushDue(true); asks[#asks + 1] = '"push":' .. jsonStr(askPush) end
+    B.busy = true
+    B.flight = { key = src.key, rc = lines, laps = lapLines, traces = traces }
+    local body = '{"key":' .. jsonStr(src.key) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"car":' .. jsonStr(B.carKey()) .. ',"parts":{' .. table.concat(partTexts, ',') .. '}'
+      .. (track and (',"track":{"t":' .. track.t .. ',"x":' .. jsonStr(track.x) .. '}') or '') .. exitJson
+      .. ',"lines":[' .. table.concat(lineParts, ',') .. '],"laps":[' .. table.concat(lapParts, ',') .. '],"traces":[' .. table.concat(traceParts, ',') .. ']'
+      .. (planDone and (',"planDone":' .. jsonStr(planDone)) or '') .. (#asks > 0 and (',"ask":{' .. table.concat(asks, ',') .. '}') or '') .. '}'
+    WebQueue.request('POST', config.baseUrl .. '/v1/persist', { ['Content-Type'] = 'application/json' }, body,
       function(err, res)
         B.busy, B.flight = false, nil
         local status = tonumber(res and res.status) or 0
         if err or not res or status >= 300 then
-          local q = src.now and B.queue or src.queue
-          for list, text in pairs(sent) do if q[list] == nil then q[list] = text end end
+          for list, p in pairs(parts) do if src.parts[list] == nil then src.parts[list] = p end end
+          if track then
+            if src.now then if not B.track then B.track = track end elseif not src.track then src.track = track end
+          end
           for i = #lines, 1, -1 do table.insert(src.rc, 1, lines[i]) end
           for i = #lapLines, 1, -1 do table.insert(src.laps, 1, lapLines[i]) end
+          for i = #traces, 1, -1 do table.insert(src.traces, 1, traces[i]) end
+          if exitDue then e.due = true end
+          if askRr then B.rrRead(false) end
+          if askName then B.nameRead(false, nil, err or status) end
           if not B.failLogged then
             B.failLogged = true
-            ac.log('race-control: base online not reached (' .. tostring(err or (res and res.status)) .. '): kept to send again')
+            ac.log('race-control: base online not reached (' .. tostring(err or status) .. '): kept to send again')
           end
           if (err or not res or status == 0 or status >= 500) and not B.downSince then
             B.downSince = state.ui.clock
@@ -2234,26 +2254,48 @@ do
               rcLog(TEXTS.rc.baseOff, 'base of the event not taking the data of the session - kept in the car')
             end
           end
-        else
+          return
+        end
+        if #lines > 0 or #lapLines > 0 or #traces > 0 then
           state.outDirty, B.outT = false, state.ui.clock
           outSave()
-          if B.failLogged then
-            B.failLogged = false
-            ac.log('race-control: base online reached again')
-          end
-          if B.downSince then
-            ac.log(string.format('race-control: base online back after %.0f s', state.ui.clock - B.downSince))
-            B.downSince, B.downTold = nil, false
-            Lock.release('baseDown')
-          end
+        end
+        if planDone and B.plan.due == planDone then B.plan.due = nil end
+        if B.failLogged then
+          B.failLogged = false
+          ac.log('race-control: base online reached again')
+        end
+        if B.downSince then
+          ac.log(string.format('race-control: base online back after %.0f s', state.ui.clock - B.downSince))
+          B.downSince, B.downTold = nil, false
+          Lock.release('baseDown')
+        end
+        local plan = tostring(res.body or ''):match('"plan":"(OK|[^"]*)"')
+        if plan and src.now then planApply((plan:gsub('\\u003b', ';'):gsub('\\/', '/'))) end
+        if askRr or askName or askPush then
+          local okJ, data = pcall(JSON.parse, tostring(res.body or ''))
+          if not okJ or type(data) ~= 'table' then data = {} end
+          if askRr then B.rrRead(true, type(data.rr) == 'string' and data.rr or nil) end
+          if askName then B.nameRead(true, type(data.name) == 'string' and data.name or nil) end
+          if askPush and type(data.push) == 'string' then B.pushRead(data.push) end
         end
       end)
   end
+  if ac.onRelease then
+    ac.onRelease(function()
+      if not on() or not Session.id then return end
+      local e = B.exit
+      e.left, e.t = true, math.floor(serverTimeMs())
+      local body = '{"key":' .. jsonStr(Record.key()) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"parts":{}'
+        .. string.format(',"exit":{"t":%d,"parked":%d,"menu":%d,"left":1,"win":%d}', e.t, e.parked and 1 or 0, e.menu and 1 or 0, e.win and 1 or 0) .. '}'
+      WebQueue.request('POST', config.baseUrl .. '/v1/persist', { ['Content-Type'] = 'application/json' }, body, function() end, true)
+    end)
+  end
   local OWN_GAP = 20
   B.own = { record = false, track = false, busy = {}, nextT = {}, answerT = nil }
+  B.swapLine = nil
   local function keep(rec, from)
     local p = RecordSync.pending[rec.list]
-    if from == 'own car' then RecordSync.baseGaveOwn = true end
     if not p or rec.seq >= p.seq then
       RecordSync.pending[rec.list] = { body = rec.body, seq = rec.seq, key = rec.key }
       ac.log('race-control: record ' .. rec.list .. ' ' .. rec.seq .. ' from the base online (' .. from .. ')')
@@ -2265,6 +2307,7 @@ do
   }
   function B.ownNew()
     B.own = { record = false, track = false, busy = {}, nextT = {}, answerT = nil }
+    B.swapLine, B.lapsBase = nil, nil
   end
   function B.ownDone() return B.own.record and B.own.track end
   function B.ownUpdate()
@@ -2274,7 +2317,7 @@ do
       if not O[name] and not O.busy[name] and state.ui.clock >= (O.nextT[name] or 0) then
         O.busy[name], O.nextT[name] = true, state.ui.clock + OWN_GAP
         local key = Record.key()
-        WebQueue.request('GET', config.baseUrl .. a.path .. '?key=' .. urlEncode(key), nil, nil, function(err, res)
+        WebQueue.request('GET', config.baseUrl .. a.path .. '?key=' .. urlEncode(key) .. '&s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
           if B.own ~= O then return end
           O.busy[name] = false
           if err or not res or tonumber(res.status) ~= 200 then
@@ -2283,12 +2326,46 @@ do
           end
           O[name], O.answerT = true, state.ui.clock
           for line in tostring(res.body or ''):gmatch('[^\r\n]+') do
-            local rec = Record.decode(line)
-            if rec then a.take(rec, key) end
+            local steam, since, parked, written, win = line:match('^SWAP|(%d*)|(%d+)|(%d)|(%d)|?(%d?)$')
+            local lapsBody = line:match('^LAPS|(.*)$')
+            if lapsBody then
+              B.lapsBase = lapsBody
+            elseif steam then
+              B.swapLine = { steam = steam, since = tonumber(since), parked = parked == '1', written = written == '1', win = win == '1' }
+              ac.log(string.format('race-control: base online: the line of this car was of %s, %s s ago (%s, exit %s)', steam, since,
+                parked == '1' and 'stopped at its pit place' or 'not stopped at its pit place', written == '1' and 'written' or 'not written'))
+            else
+              local rec = Record.decode(line)
+              if rec then a.take(rec, key) end
+            end
           end
         end)
       end
     end
+  end
+  local DIR_GAP = 5
+  B.dirPen = { bySlot = {}, nextT = 0, busy = false }
+  function B.dirPenAsk()
+    local D = B.dirPen
+    if not on() or not Session.id or D.busy or state.ui.clock < D.nextT then return end
+    D.busy, D.nextT = true, state.ui.clock + DIR_GAP
+    WebQueue.request('GET', config.baseUrl .. '/v1/report/penalties?sid=' .. Session.id, nil, nil, function(err, res)
+      D.busy = false
+      if err or not res or tonumber(res.status) ~= 200 then return end
+      local by = {}
+      for slot, x in tostring(res.body or ''):gmatch('(%d+)|([^\r\n]+)') do by[tonumber(slot)] = x end
+      D.bySlot = by
+    end)
+  end
+  function B.reportGet(path, params, cb)
+    if not on() then cb(nil) return end
+    local q = {}
+    for k, v in pairs(params or {}) do q[#q + 1] = k .. '=' .. urlEncode(v) end
+    WebQueue.request('GET', config.baseUrl .. '/v1/report/' .. path .. (#q > 0 and ('?' .. table.concat(q, '&')) or ''), nil, nil, function(err, res)
+      local ok, data = false, nil
+      if not err and res and tonumber(res.status) == 200 then ok, data = pcall(JSON.parse, res.body) end
+      cb(ok and type(data) == 'table' and data or nil)
+    end)
   end
   local NAME_GAP = 30
   B.name = { status = nil, nextT = 0, busy = false, told = nil, failLogged = false, offline = false, alertDue = nil }
@@ -2303,52 +2380,57 @@ do
     for w in tostring(list or ''):gmatch('[^,]+') do out[#out + 1] = TEXTS.realNameWhat[w] or w end
     return table.concat(out, ', ')
   end
+  function B.nameDue(mark)
+    local N = B.name
+    if not config.realName or not on() or N.status == 'ok' or state.ui.clock < N.nextT then return nil end
+    if mark then N.nextT = state.ui.clock + NAME_GAP end
+    return N.last or ''
+  end
+  function B.nameRead(ok, text, err)
+    local N = B.name
+    if not ok then
+      N.offline = true
+      if not N.failLogged then
+        N.failLogged = true
+        local started = not Session.beforeStart()
+        local lock = config.realNameOffline == 'lock' and not started
+        ac.log('race-control: real name not read from the base (' .. tostring(err) .. '): '
+          .. (lock and 'controls locked until it answers' or 'nothing locked'))
+        local what = string.format('base of the event not answering - real name not confirmed - %s',
+          lock and 'controls locked (session not started)' or (started and 'session started, driving' or 'not locked'))
+        rcLog(TEXTS.rc.baseOff, what)
+        N.alertDue = what
+      end
+      return
+    end
+    if N.offline then
+      N.offline = false
+      if N.told == TEXTS.realNameOffline then
+        Lock.release('name')
+        N.told = nil
+      end
+    end
+    if N.alertDue then sendAlert(N.alertDue) end
+    if not text then return end
+    N.last = text
+    local kind, rest = tostring(text):match('^(%u+)|([^\r\n]*)')
+    if kind == 'OK' and rest:match('%S') then
+      N.status, N.missing = 'ok', nil
+      if N.told then Lock.release('name') end
+      local was = tostring(ac.getDriverName(0) or '')
+      if was ~= rest and physics.setDriverName then physics.setDriverName(rest) end
+      ac.log('race-control: real name ' .. rest .. ' (name of the AC: ' .. was .. ')')
+    elseif kind == 'MISSING' then
+      N.status, N.missing = 'missing', missingText(rest)
+      if N.told ~= N.missing then
+        N.told = N.missing
+        rcLog(TEXTS.rc.regIncomplete, 'missing: ' .. N.missing)
+      end
+    end
+  end
   function B.nameUpdate()
     if not config.realName or not on() then return end
     local N = B.name
-    if not N.busy and N.status ~= 'ok' and state.ui.clock >= N.nextT then
-      N.busy, N.nextT = true, state.ui.clock + NAME_GAP
-      WebQueue.request('GET', config.baseUrl .. '/v1/name?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
-        N.busy = false
-        if err or not res or tonumber(res.status) ~= 200 then
-          N.offline = true
-          if not N.failLogged then
-            N.failLogged = true
-            local started = not Session.beforeStart()
-            local lock = config.realNameOffline == 'lock' and not started
-            ac.log('race-control: real name not read from the base (' .. tostring(err or (res and res.status)) .. '): '
-              .. (lock and 'controls locked until it answers' or 'nothing locked'))
-            local what = string.format('base of the event not answering - real name not confirmed - %s',
-              lock and 'controls locked (session not started)' or (started and 'session started, driving' or 'not locked'))
-            rcLog(TEXTS.rc.baseOff, what)
-            N.alertDue = what
-          end
-          return
-        end
-        if N.offline then
-          N.offline = false
-          if N.told == TEXTS.realNameOffline then
-            Lock.release('name')
-            N.told = nil
-          end
-        end
-        if N.alertDue then sendAlert(N.alertDue) end
-        local kind, rest = tostring(res.body or ''):match('^(%u+)|([^\r\n]*)')
-        if kind == 'OK' and rest:match('%S') then
-          N.status, N.missing = 'ok', nil
-          if N.told then Lock.release('name') end
-          local was = tostring(ac.getDriverName(0) or '')
-          if was ~= rest and physics.setDriverName then physics.setDriverName(rest) end
-          ac.log('race-control: real name ' .. rest .. ' (name of the AC: ' .. was .. ')')
-        elseif kind == 'MISSING' then
-          N.status, N.missing = 'missing', missingText(rest)
-          if N.told ~= N.missing then
-            N.told = N.missing
-            rcLog(TEXTS.rc.regIncomplete, 'missing: ' .. N.missing)
-          end
-        end
-      end)
-    end
     if N.status == 'missing' then
       Lock.want('name')
       showNotice(TEXTS.rcTitle, string.format(TEXTS.realNameMissing, N.missing), nil, 1)
@@ -2404,6 +2486,11 @@ do
       local body = tostring(res.body or '')
       if not body:match('^OK|') then return end
       if V.ask == ask then V.done = true end
+      local hz = tonumber(body:match('sendHz=(%d+)'))
+      if hz and hz > 0 and hz ~= config.sendHz then
+        ac.log(string.format('race-control: packets of the server %d a second (from the base)', hz))
+        config.sendHz = hz
+      end
       local url = body:match('kmrStatsUrl=([^|%s]*)')
       if url and url ~= '' and url ~= config.kmrStatsUrl then
         ac.log('race-control: KMR web stats from the base: ' .. url .. ' (before: ' .. (config.kmrStatsUrl ~= '' and config.kmrStatsUrl or 'none') .. ')')
@@ -2481,15 +2568,19 @@ do
     if layout then R.layout = layout; ac.storage['rc.share.layout'] = layout end
     if scope then R.scope = scope; ac.storage['rc.share.scope'] = scope end
   end
-  function B.rrUpdate()
+  function B.rrDue(mark)
     local R = B.rr
-    if not on() or R.busy or state.ui.clock < R.nextT then return end
-    R.busy, R.nextT = true, state.ui.clock + RR_GAP
-    WebQueue.request('GET', config.baseUrl .. '/v1/rr?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
-      R.busy = false
-      if err or not res or tonumber(res.status) ~= 200 then R.state = 'offline'
-      else
-        local body = tostring(res.body or '')
+    if not on() or state.ui.clock < R.nextT then return nil end
+    if mark then R.nextT = state.ui.clock + RR_GAP end
+    return R.last or ''
+  end
+  function B.rrRead(ok, text)
+    local R = B.rr
+    do
+      if not ok then R.state, R.last = 'offline', nil
+      elseif text then
+        local body = tostring(text)
+        R.last = body
         local garage, area, screen, game = body:match('^OK|([^|]*)|([^|]*)|(%d)|(%d)')
         if garage then
           R.state, R.garage, R.area, R.screen, R.game = 'on', garage, area, screen == '1', game == '1'
@@ -2509,7 +2600,7 @@ do
         ac.log('race-control: Racing Room ' .. R.state .. (R.state == 'on' and (' - ' .. R.garage .. ' / ' .. R.area .. (R.game and ' - game screen shared' or '')
           .. (R.err ~= '' and (' - game screen failed: ' .. R.err) or '')) or ''))
       end
-    end)
+    end
   end
   function B.rrRoom()
     local R = B.rr
@@ -2563,19 +2654,17 @@ do
     if R.asked ~= R.game then return TEXTS.shareNoAnswer, 'warn' end
     return nil
   end
-  local STRAT_GAP, PLAN_GAP = 5, 10
   local SETUP_STORE = '.amxracing.race-control.setup'
   local clean = function(s) return (tostring(s or ''):gsub('[|;,/=\r\n]', ' ')) end
   B.strat = { sig = nil, nextT = 0, setupSig = nil }
   function B.stratUpdate()
     local T = B.strat
-    if not on() or state.ui.clock < T.nextT then return end
-    T.nextT = state.ui.clock + STRAT_GAP
+    if not on() then return end
     local parts = {}
     local box = B.pitBox
     local cur = math.floor(tonumber(sim.currentQuickPitPreset) or 0)
     local function value(sp, i, live) return math.floor(tonumber(box and box.baseValue(sp, i) or live) or 0) end
-    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+    for _, sp in ipairs(CarRead.pitSpinners()) do
       local vals = {}
       if type(sp.values) == 'table' then for k = 1, #sp.values do vals[#vals + 1] = tostring(value(sp, k - 1, sp.values[k])) end end
       parts[#parts + 1] = table.concat({ clean(sp.name), clean(sp.type), tostring(math.floor(tonumber(sp.min) or 0)), tostring(math.floor(tonumber(sp.max) or 0)),
@@ -2597,34 +2686,26 @@ do
     local def = ac.load and ac.load('.amxracing.race-control.setupdef')
     if type(def) == 'string' and def ~= '' and def ~= T.defSig then T.defSig = def; Record.save('setupdef', math.floor(serverTimeMs() / 1000), def) end
   end
-  local BOX_GAP = 2
-  B.box = { sig = nil, nextT = 0 }
+  B.boxWrite = nil
   function B.boxUpdate()
-    local T = B.box
-    if not on() or not B.pitBox or state.ui.clock < T.nextT then return end
-    T.nextT = state.ui.clock + BOX_GAP
+    if not on() or not B.boxWrite then return end
     local car = ac.getCar(0)
-    if not car then return end
-    local ok, body = pcall(B.pitBox.stateBody, car)
-    if ok and body and body ~= T.sig then T.sig = body; Record.save('box', math.floor(serverTimeMs() / 1000), body) end
+    if car then B.boxWrite(car) end
   end
-  local STATUS_GAP = 5
   B.status = { sig = nil, nextT = 0 }
   function B.statusUpdate()
     local T = B.status
-    if not on() or not B.statusBody or state.ui.clock < T.nextT then return end
-    T.nextT = state.ui.clock + STATUS_GAP
+    if not on() or not B.statusBody then return end
     local car = ac.getCar(0)
     if not car then return end
     local ok, body = pcall(B.statusBody, car)
     if ok and body and body ~= T.sig then T.sig = body; Record.save('status', math.floor(serverTimeMs() / 1000), body) end
   end
-  local ELEC_GAP, ELEC_ERS_GAP = 2, 60
+  local ELEC_ERS_GAP = 60
   B.elec = { sig = nil, nextT = 0, ersT = 0 }
   function B.elecUpdate()
     local T = B.elec
-    if not on() or state.ui.clock < T.nextT then return end
-    T.nextT = state.ui.clock + ELEC_GAP
+    if not on() then return end
     local car = ac.getCar(0)
     if not car then return end
     local n = function(v) return math.floor(tonumber(v) or 0) end
@@ -2659,45 +2740,34 @@ do
     table.sort(parts)
     if #parts > 0 then T.done = key; Record.save('setuptab', math.floor(serverTimeMs() / 1000), table.concat(parts, ';')) end
   end
-  B.plan = { nextT = 0, busy = false, done = tostring(ac.storage['rc.pitplan'] or '') }
-  local PLAN_PIT_GAP = 2
-  function B.planUpdate()
+  planApply = function(text)
     local P = B.plan
-    if not on() or P.busy or state.ui.clock < P.nextT then return end
-    local car = ac.getCar(0)
-    P.busy, P.nextT = true, state.ui.clock + ((car and car.isInPitlane) and PLAN_PIT_GAP or PLAN_GAP)
-    WebQueue.request('GET', config.baseUrl .. '/v1/pitplan?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
-      P.busy = false
-      if err or not res or tonumber(res.status) ~= 200 then return end
-      local id, preset, list, box = tostring(res.body or ''):match('^OK|([%w%-]+)|(%d+)|([^|\r\n]*)|?([^\r\n]*)')
-      if not id or id == P.done then return end
-      local changes = {}
-      for name, value in list:gmatch('([^;=]+)=(%-?%d+)') do changes[#changes + 1] = { name = name, value = tonumber(value) } end
-      P.done = id
-      ac.storage['rc.pitplan'] = id
-      if box ~= '' and B.pitBox then
-        local f = {}
-        for k, v in box:gmatch('(%a+)=([^;]*)') do f[k] = v end
-        for _, c in ipairs(changes) do
-          for _, sp in ipairs(B.pitBox.presetSpinners()) do
-            if sp.name == c.name then B.pitBox.preset[sp.key] = math.max(sp.min, math.min(c.value, sp.max)) break end
-          end
+    local id, preset, list, box = tostring(text or ''):match('^OK|([%w%-]+)|(%d+)|([^|\r\n]*)|?([^\r\n]*)')
+    if not id or id == P.done then return end
+    local changes = {}
+    for name, value in list:gmatch('([^;=]+)=(%-?%d+)') do changes[#changes + 1] = { name = name, value = tonumber(value) } end
+    P.done = id
+    ac.storage['rc.pitplan'] = id
+    if box ~= '' and B.pitBox then
+      local f = {}
+      for k, v in box:gmatch('(%a+)=([^;]*)') do f[k] = v end
+      for _, c in ipairs(changes) do
+        for _, sp in ipairs(B.pitBox.presetSpinners()) do
+          if sp.name == c.name then B.pitBox.preset[sp.key] = math.max(sp.min, math.min(c.value, sp.max)) break end
         end
-        B.pitBox.remote({ fuel = tonumber(f.fuel), compound = tonumber(f.compound), tyres = tonumber(f.tyres), repair = f.repair,
-          preset = tonumber(f.preset), auto = (f.mode == 'auto' and 1 or f.mode == 'manual' and 0 or nil), start = f.start == '1', press = f.press,
-          rows = #changes > 0 })
-        B.box.nextT, B.box.sig = state.ui.clock + 1, nil
-        rcLog(TEXTS.rc.pitPlan, 'box from the Racing Room: ' .. box .. (list ~= '' and ('; ' .. list) or ''))
-        if f.start == '1' then showNotice(TEXTS.rcTitle, TEXTS.remotePitStart, nil, 6) end
-      else
-        if #changes == 0 then return end
-        PitControl.planPreset(changes, tonumber(preset) or 0)
-        B.strat.nextT, B.strat.sig = state.ui.clock + 2, nil
-        rcLog(TEXTS.rc.pitPlan, string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
       end
-      WebQueue.request('POST', config.baseUrl .. '/v1/pitplan/done', { ['Content-Type'] = 'application/json' },
-        '{"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"id":' .. jsonStr(id) .. '}', function() end)
-    end)
+      B.pitBox.remote({ fuel = tonumber(f.fuel), compound = tonumber(f.compound), tyres = tonumber(f.tyres), repair = f.repair,
+        preset = tonumber(f.preset), auto = (f.mode == 'auto' and 1 or f.mode == 'manual' and 0 or nil), start = f.start == '1', press = f.press,
+        rows = #changes > 0 })
+      rcLog(TEXTS.rc.pitPlan, 'box from the Racing Room: ' .. box .. (list ~= '' and ('; ' .. list) or ''))
+      if f.start == '1' then showNotice(TEXTS.rcTitle, TEXTS.remotePitStart, nil, 6) end
+    else
+      if #changes == 0 then P.due = id return end
+      PitControl.planPreset(changes, tonumber(preset) or 0)
+      B.strat.nextT, B.strat.sig = state.ui.clock + 2, nil
+      rcLog(TEXTS.rc.pitPlan, string.format('from the Racing Room, preset %d: %s', (tonumber(preset) or 0) + 1, list))
+    end
+    P.due = id
   end
   local PUSH_STORE, PUSH_DONE, PUSH_EVENT = '.amxracing.race-control.setuppush', '.amxracing.race-control.setuppush.done', 'amxracing.race-control.setuppush'
   B.spush = { nextT = 0, busy = false, id = nil, answered = nil }
@@ -2718,26 +2788,25 @@ do
         pushDone(id, st, why)
       end
     end
-    if P.busy or state.ui.clock < P.nextT then return end
-    P.busy, P.nextT = true, state.ui.clock + PLAN_GAP
-    WebQueue.request('GET', config.baseUrl .. '/v1/setuppush?s=' .. urlEncode(ac.getUserSteamID() or ''), nil, nil, function(err, res)
-      P.busy = false
-      if err or not res or tonumber(res.status) ~= 200 then return end
-      local id, name, ini = tostring(res.body or ''):match('^OK|([%w%-]+)|([^\r\n]*)\r?\n(.*)$')
-      if not id or id == P.id then return end
-      P.id = id
-      ac.store(PUSH_STORE, id .. '|' .. name .. '\n' .. ini)
-      ac.broadcastSharedEvent(PUSH_EVENT, id)
-      rcLog(TEXTS.rc.teamSetup, string.format('from the Racing Room: %s - apply it in the setup menu', name))
-      showNotice(TEXTS.rcTitle, string.format(TEXTS.teamSetup, name), nil, 8)
-      pushDone(id, 'entregue', '')
-    end)
   end
-  local publish = Record.onSave
-  Record.onSave = function(list, seq, text)
-    if publish then publish(list, seq, text) end
-    B.push(list, seq, text)
+  function B.pushDue(mark)
+    local P = B.spush
+    if not on() or not (B.app and B.app.alive) or state.ui.clock < P.nextT then return nil end
+    if mark then P.nextT = state.ui.clock + PLAN_GAP end
+    return P.id or ''
   end
+  function B.pushRead(text)
+    local P = B.spush
+    local id, name, ini = tostring(text or ''):match('^OK|([%w%-]+)|([^\r\n]*)\r?\n(.*)$')
+    if not id or id == P.id then return end
+    P.id = id
+    ac.store(PUSH_STORE, id .. '|' .. name .. '\n' .. ini)
+    ac.broadcastSharedEvent(PUSH_EVENT, id)
+    rcLog(TEXTS.rc.teamSetup, string.format('from the Racing Room: %s - apply it in the setup menu', name))
+    showNotice(TEXTS.rcTitle, string.format(TEXTS.teamSetup, name), nil, 8)
+    pushDone(id, 'entregue', '')
+  end
+  Record.onSave = function(list, seq, text) B.push(list, seq, text) end
 end
 local AppLink = { alive = false }
 RecordSync.base.app = AppLink
@@ -2962,6 +3031,8 @@ function PitRecord.holdText()
   if c == 'dt2long' then return TEXTS.holdTwoDTLong end
   local tow, repair = c:match('^tow/(%d+)/(%d+)$')
   if tow then return string.format(TEXTS.holdTowRepair, mmss(tonumber(tow)), mmss(tonumber(repair))) end
+  local stow, sextra = c:match('^swapexit/(%d+)/(%d+)$')
+  if stow then return string.format(TEXTS.holdSwapExit, mmss(tonumber(stow)), mmss(tonumber(sextra))) end
   local only = c:match('^repair/(%d+)$')
   if only then return string.format(TEXTS.holdRepair, mmss(tonumber(only))) end
   local why = c:match('^quali/(.*)$')
@@ -3303,8 +3374,6 @@ local function onDriverSwapMessage(message)
   end
   return false
 end
-local MSG_SWAP_INFO = 1
-local SWAP_RELAY_DELAYS = { 1, 4, 10 }
 local function nameCode(name)
   local h = 5381
   name = tostring(name or '')
@@ -3334,71 +3403,47 @@ function SwapRecord.apply(body)
   sw.valid = math.max(sw.valid, tonumber(valid) or count)
   sw.voids = math.max(sw.voids, tonumber(voids) or 0)
 end
-local function onSwapInfo(msg)
-  local sw = state.swap
+function SwapRecord.baseLine()
+  local L = RecordSync.base.swapLine
+  if not L or L.done then return end
+  L.done = true
   if not config.swapOn() then return end
-  if msg.pcType ~= MSG_SWAP_INFO or msg.pcCar ~= ac.getCar(0).sessionID then return end
-  if msg.pcDriver == nameCode(ac.getDriverName(0)) then
-    ac.log('race-control: swap relay: same driver reconnected, no countdown')
+  if L.steam == '' or L.steam == tostring(ac.getUserSteamID() or '') then
+    ac.log('race-control: swap: the line of this car was of this driver, a reconnection: no swap, no countdown')
     return
   end
-  if not sw.swapInfo then
-    sw.swapInfo = { inWindow = msg.pcInWindow == 1 }
-    sw.entered = true
-    sw.count = math.max(sw.count, msg.pcSwaps or 0)
-    sw.valid = math.max(sw.valid, msg.pcValid or 0)
-    ac.log(string.format('race-control: driver swap %d, %s', sw.count,
-      sw.swapInfo.inWindow and 'valid' or 'pit entry outside the pit window: not valid'))
-  end
-  if sw.remaining or sw.clearUntil then return end
-  local left = config.swapMinSeconds - msg.pcElapsed / 10
-  ac.log(string.format('race-control: swap relay: previous driver left %.1f s ago, wait %.1f s',
-    msg.pcElapsed / 10, math.max(left, 0)))
-  if left <= 0 then
-    sw.clearUntil = state.ui.clock + SERVER_NOTICE_SECONDS
-    sw.clearElapsed = msg.pcElapsed / 10
-    return
-  end
-  sw.remaining = left
-  sw.remainingT = state.ui.clock
-  sw.fromPeers = true
-end
-local sendSwapInfo = ac.OnlineEvent({
-  ac.StructItem.key('amxracing.race-control.swap'),
-  pcType = ac.StructItem.uint8(),
-  pcCar = ac.StructItem.uint8(),
-  pcDriver = ac.StructItem.uint32(),
-  pcElapsed = ac.StructItem.uint16(),
-  pcSwaps = ac.StructItem.uint8(),
-  pcValid = ac.StructItem.uint8(),
-  pcInWindow = ac.StructItem.uint8(),
-}, function(sender, msg)
-  if sender and sender.index == 0 then return end
-  onSwapInfo(msg)
-end, nil, nil, { processPostponed = true })
-ac.onClientDisconnected(function(carIndex, sessionID)
-  if not config.swapOn() or carIndex == 0 then return end
-  local name = state.swap.lastNames[carIndex] or ac.getDriverName(carIndex)
-  state.swap.left[carIndex] = { sessionID = sessionID, driver = nameCode(name), t = state.ui.clock }
-end)
-ac.onClientConnected(function(carIndex, sessionID)
   local sw = state.swap
-  local rec = sw.left[carIndex]
-  if not rec or carIndex == 0 then return end
-  sw.left[carIndex] = nil
-  if nameCode(ac.getDriverName(carIndex)) == rec.driver then
-    sw.carLists[carIndex] = nil
-    return
+  if not sw.swapInfo then
+    sw.swapInfo = { inWindow = L.win }
+    sw.entered = true
+    sw.count = sw.count + 1
+    if L.win then sw.valid = sw.valid + 1 end
+    ac.log(string.format('race-control: driver swap %d, %s', sw.count, L.win and 'valid' or 'pit entry outside the pit window: not valid'))
   end
-  sw.carSwaps[carIndex] = (sw.carSwaps[carIndex] or 0) + 1
-  local inWindow = sw.pitEntryValid[carIndex] ~= false
-  if inWindow then sw.carValid[carIndex] = (sw.carValid[carIndex] or 0) + 1 end
-  for _, delay in ipairs(SWAP_RELAY_DELAYS) do
-    sw.relay[#sw.relay + 1] = { target = sessionID, car = sessionID, driver = rec.driver, leftT = rec.t,
-      swaps = sw.carSwaps[carIndex] or 0, valid = sw.carValid[carIndex] or 0, inWindow = inWindow,
-      list = sw.carLists[carIndex], dueT = state.ui.clock + delay }
+  if not (sw.remaining or sw.clearUntil) then
+    local since = L.since or 0
+    local left = config.swapMinSeconds - since
+    ac.log(string.format('race-control: swap: the driver before left %d s ago, wait %.0f s', since, math.max(left, 0)))
+    if left <= 0 then
+      sw.clearUntil = state.ui.clock + SERVER_NOTICE_SECONDS
+      sw.clearElapsed = since
+    else
+      sw.remaining, sw.remainingT, sw.fromPeers = left, state.ui.clock, true
+    end
   end
-end)
+  if not L.parked then
+    local rule = config.tow[sim.raceSessionType] or {}
+    local tow = math.max(math.floor(tonumber(rule.towSeconds) or 0), 0)
+    local extra = math.max(math.floor(tonumber(config.swapUnconfirmed.seconds) or 0), 0)
+    if tow + extra > 0 then
+      local text = string.format(TEXTS.holdSwapExit, mmss(tow), mmss(extra))
+      startHold(tow + extra, text, string.format('swapexit/%d/%d', tow, extra))
+      showNotice(TEXTS.swapExitTitle, text, nil, 10)
+      ac.log(string.format('race-control: swap with the exit before not confirmed: hold %d s (tow %d + %d)', tow + extra, tow, extra))
+      rcLog(string.format(TEXTS.rc.hold, tow + extra), string.format('previous exit not confirmed (the car was not stopped at its pit place) - tow %d s + %d s', tow, extra))
+    end
+  end
+end
 local Lap = { splits = nil }
 do
   local HALF = 0.5
@@ -3406,7 +3451,6 @@ do
   local BINS = 200
   local CRASH_GAP = 1
   local SPIN_SETTLE = 1
-  local SEND_GAP = 15
   local function newInfo() return { crash = 0, cut = 0, spin = 0, pen = {} } end
   sessionPart('lap', Lap, function()
     return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false }, last = SESSION_NONE, others = {}, passT = {},
@@ -3695,20 +3739,20 @@ do
     for v in tostring(msg.lapSec or ''):gmatch('%d+') do s[k], k = tonumber(v), k + 1 end
     Lap.others[sender.index] = { n = tonumber(msg.lapN) or 0, best = tonumber(msg.lapBest) or 0, s = s, t = state.ui.clock }
   end, nil, nil, { processPostponed = true })
+  local noBest = { ms = 0, lapS = {} }
   function Lap.tell()
-    local all = Lap.ownBestAll and Lap.ownBestAll() or { ms = 0, lapS = {} }
-    local best = all.ms or 0
+    local all = Lap.ownBestAll and Lap.ownBestAll() or noBest
+    local best, n, s = all.ms or 0, Lap.number(), Lap.sentBest
+    if s and s.n == n and s.ms == best and s.lap == all.lap then return end
     local parts = {}
     for k = 0, 15 do
       local v = all.lapS and all.lapS[k]
       if not v then break end
       parts[#parts + 1] = tostring(math.floor(v))
     end
-    local sec = table.concat(parts, '/')
-    local sig = Lap.number() .. '|' .. best .. '|' .. sec
-    if sig == Lap.sentBest and state.ui.clock - Lap.sentT < SEND_GAP then return end
-    Lap.sentBest, Lap.sentT = sig, state.ui.clock
-    OnlineQueue.push(sendLap, { lapN = math.min(Lap.number(), 65535), lapBest = math.floor(best), lapSec = sec }, nil)
+    local msg = { lapN = math.min(n, 65535), lapBest = math.floor(best), lapSec = table.concat(parts, '/') }
+    Lap.sentBest, Lap.sentT = { n = n, ms = best, lap = all.lap, msg = msg }, state.ui.clock
+    OnlineQueue.push(sendLap, msg, nil, true)
   end
   function Lap.of(i)
     if i == 0 then return Lap.number(), Lap.ownBest and Lap.ownBest() or 0 end
@@ -3725,91 +3769,136 @@ do
     return best, who
   end
 end
-local sendPenaltyList, publishOwnList
+LapTrace = {}
+sessionPart('lapTrace', LapTrace, function() return { cols = SESSION_NONE, n = 0, nextT = 0, last = SESSION_NONE } end)
 do
-  local PENALTY_LIST_MAX = 4
-  local CAT_CODES = { PSE = 1, SD1 = 2, SD2 = 3 }
-  local CAT_NAMES = { 'PSE', 'SD1', 'SD2' }
-  local function applyPenaltyList(msg)
-    local sw = state.swap
-    if not config.swapOn() then return end
-    if msg.pcCar ~= ac.getCar(0).sessionID or sw.listApplied then return end
-    sw.listApplied = true
-    local items = {}
-    for i = 1, math.min(msg.pcCount, PENALTY_LIST_MAX) do
-      local cat = CAT_NAMES[msg['pcCat' .. i]]
-      if cat then items[#items + 1] = { cat = cat, laps = msg['pcLaps' .. i] } end
-    end
-    if #items > 0 then sw.pendingList = items end
+  local CHANNELS = { 'time', 'dist', 'x', 'y', 'z', 'speed', 'gas', 'brake', 'clutch', 'steer', 'gear' }
+  local SMOOTH = { time = true, dist = true, x = true, y = true, z = true, speed = true }
+  local MAX_KMH, JUMP_M, MAX_SAMPLES = 500, 20, 4000
+  local function fresh()
+    local cols = {}
+    for _, c in ipairs(CHANNELS) do cols[c] = {} end
+    LapTrace.cols, LapTrace.n, LapTrace.last = cols, 0, nil
   end
-  local penaltyListLayout = {
-    ac.StructItem.key('amxracing.race-control.list'),
-    pcCar = ac.StructItem.uint8(),
-    pcCount = ac.StructItem.uint8(),
-    pcTarget = ac.StructItem.uint8(),
-  }
-  for i = 1, PENALTY_LIST_MAX do
-    penaltyListLayout['pcCat' .. i] = ac.StructItem.uint8()
-    penaltyListLayout['pcLaps' .. i] = ac.StructItem.uint8()
-  end
-  local sendPenaltyListEvent = ac.OnlineEvent(penaltyListLayout, function(sender, msg)
-    if sender and sender.index == 0 then return end
-    if msg.pcTarget == 255 then
-      if sender and config.swapOn() and Trust.list(sender, msg.pcCar) then
-        local list = { count = math.min(msg.pcCount, PENALTY_LIST_MAX) }
-        for i = 1, list.count do list[i] = { cat = msg['pcCat' .. i], laps = msg['pcLaps' .. i] } end
-        state.swap.carLists[sender.index] = list
+  function LapTrace.tick(car)
+    if not car or state.ui.clock < LapTrace.nextT then return end
+    LapTrace.nextT = state.ui.clock + config.persist.seconds
+    if not LapTrace.cols then fresh() end
+    local kmh = tonumber(car.speedKmh) or 0
+    if kmh > MAX_KMH then return end
+    local p, v = car.position, car.velocity
+    local t = math.floor(serverTimeMs())
+    local last = LapTrace.last
+    if last then
+      if kmh < 1 and math.abs(p.x - last.px) < 0.01 and math.abs(p.z - last.pz) < 0.01 then return end
+      local dt = math.max((t - last.t) / 1000, 0)
+      local d = 0
+      for _, a in ipairs({ 'x', 'y', 'z' }) do
+        d = math.max(d, math.abs(p[a] - v[a] * dt - last['p' .. a]), math.abs(last['p' .. a] + last['v' .. a] * dt - p[a]))
       end
-    else
-      applyPenaltyList(msg)
+      if d > JUMP_M then fresh() end
     end
-  end, nil, nil, { processPostponed = true })
-  sendPenaltyList = function(list, car, target)
-    local msg = { pcCar = car, pcCount = list.count, pcTarget = target and 0 or 255 }
-    for i = 1, list.count do
-      msg['pcCat' .. i] = list[i].cat
-      msg['pcLaps' .. i] = list[i].laps
-    end
-    OnlineQueue.push(sendPenaltyListEvent, msg, target)
+    if LapTrace.n >= MAX_SAMPLES then return end
+    local len = tonumber(sim.trackLengthM) or 0
+    local cols = LapTrace.cols
+    local spline = tonumber(car.splinePosition) or 0
+    local dist = math.floor(spline * len * 100 + 0.5)
+    if LapTrace.n > 0 and dist < cols.dist[LapTrace.n] and spline > 0.05 then dist = cols.dist[LapTrace.n] end
+    local n = LapTrace.n + 1
+    cols.time[n], cols.dist[n] = t, dist
+    cols.x[n], cols.y[n], cols.z[n] = math.floor(p.x * 100 + 0.5), math.floor(p.y * 100 + 0.5), math.floor(p.z * 100 + 0.5)
+    cols.speed[n] = math.floor(kmh * 10 + 0.5)
+    cols.gas[n] = math.floor((tonumber(car.gas) or 0) * 1000 + 0.5)
+    cols.brake[n] = math.floor((tonumber(car.brake) or 0) * 1000 + 0.5)
+    cols.clutch[n] = math.floor((tonumber(car.clutch) or 0) * 1000 + 0.5)
+    cols.steer[n] = math.floor((tonumber(car.steer) or 0) * 10 + 0.5)
+    cols.gear[n] = math.floor(tonumber(car.gear) or 0)
+    LapTrace.n = n
+    LapTrace.last = { t = t, px = p.x, py = p.y, pz = p.z, vx = v.x, vy = v.y, vz = v.z }
   end
-  publishOwnList = function(car)
-    local sw = state.swap
-    if not config.swapOn() or not car.isInPit then
-      sw.listSent = nil
-      return
+  local function varint(out, v)
+    v = v >= 0 and v * 2 or -v * 2 - 1
+    while v >= 128 do
+      out[#out + 1] = string.char(v % 128 + 128)
+      v = math.floor(v / 128)
     end
-    local list = { count = 0 }
-    local sig = {}
-    for _, it in ipairs(state.list.items) do
-      if list.count < PENALTY_LIST_MAX and CAT_CODES[it.cat] then
-        list.count = list.count + 1
-        list[list.count] = { cat = CAT_CODES[it.cat], laps = math.max(it.laps, 0) }
-        sig[#sig + 1] = it.cat .. it.laps
+    out[#out + 1] = string.char(v)
+  end
+  function LapTrace.close(lapMs)
+    local cols, n = LapTrace.cols, LapTrace.n
+    fresh()
+    if not cols or n < 4 or not lapMs or lapMs <= 0 or not ac.compress or not ac.encodeBase64 then return nil end
+    while n > 1 and cols.dist[n] < cols.dist[n - 1] do n = n - 1 end
+    local start = math.floor(serverTimeMs()) - lapMs
+    local first = 1
+    while first <= n and cols.time[first] < start - 1000 do first = first + 1 end
+    if n - first + 1 < 4 then return nil end
+    for _, c in ipairs(CHANNELS) do
+      local col, k = cols[c], {}
+      for i = first, n do k[#k + 1] = c == 'time' and math.max(col[i] - start, 0) or col[i] end
+      cols[c] = k
+    end
+    n = n - first + 1
+    for i = 2, n do
+      if cols.time[i] < cols.time[i - 1] or cols.dist[i] < cols.dist[i - 1] then return nil end
+    end
+    local len = (tonumber(sim.trackLengthM) or 0) * 100
+    if cols.time[1] > 3000 or cols.time[n] < lapMs - 3000 or (len > 0 and (cols.dist[1] > len * 0.2 or cols.dist[n] < len * 0.5)) then
+      return nil
+    end
+    local out = { string.char(1) }
+    local dtMs = math.floor(config.persist.seconds * 1000 + 0.5)
+    varint(out, n)
+    varint(out, dtMs)
+    varint(out, #CHANNELS)
+    for _, c in ipairs(CHANNELS) do
+      local col = cols[c]
+      local smooth = SMOOTH[c]
+      out[#out + 1] = string.char(smooth and 2 or 1)
+      varint(out, col[1])
+      if n >= 2 then varint(out, col[2] - col[1]) end
+      for i = 3, n do
+        if smooth then varint(out, (col[i] - col[i - 1]) - (col[i - 1] - col[i - 2])) else varint(out, col[i] - col[i - 1]) end
       end
     end
-    local signature = table.concat(sig, ',')
-    if sw.listSent == signature then return end
-    sw.listSent = signature
-    sendPenaltyList(list, car.sessionID, nil)
+    local raw = table.concat(out)
+    local ok, packed = pcall(ac.compress, raw, ac.CompressionType.Deflate, 12)
+    if not ok or not packed then return nil end
+    return ac.encodeBase64(packed), n, dtMs
   end
-end
-local function updateSwapRelay()
-  local sw = state.swap
-  if not config.swapOn() then return end
-  for i = 1, sim.carsCount - 1 do
-    local c = ac.getCar(i)
-    if c and c.isConnected then sw.lastNames[i] = ac.getDriverName(i) end
-  end
-  local clock = state.ui.clock
-  for i = #sw.relay, 1, -1 do
-    local r = sw.relay[i]
-    if clock >= r.dueT then
-      table.remove(sw.relay, i)
-      local elapsed = math.min(math.floor((clock - r.leftT) * 10 + 0.5), 65535)
-      OnlineQueue.push(sendSwapInfo, { pcType = MSG_SWAP_INFO, pcCar = r.car, pcDriver = r.driver, pcElapsed = elapsed,
-        pcSwaps = math.min(r.swaps, 255), pcValid = math.min(r.valid, 255), pcInWindow = r.inWindow and 1 or 0 }, r.target)
-      if r.list and r.list.count > 0 then sendPenaltyList(r.list, r.car, r.target) end
+  function LapTrace.decode(b64)
+    local packed = ac.decodeBase64 and ac.decodeBase64(b64)
+    local raw = packed and ac.decompress and ac.decompress(packed)
+    if not raw or raw:byte(1) ~= 1 then return nil end
+    local pos = 2
+    local function read()
+      local v, mul = 0, 1
+      while pos <= #raw do
+        local b = raw:byte(pos)
+        pos = pos + 1
+        v = v + (b % 128) * mul
+        if b < 128 then return v % 2 == 0 and v / 2 or -(v + 1) / 2 end
+        mul = mul * 128
+      end
+      return nil
     end
+    local n, dt, k = read(), read(), read()
+    if not n or not k or k ~= #CHANNELS then return nil end
+    local cols = {}
+    for _, c in ipairs(CHANNELS) do
+      local mode = raw:byte(pos)
+      pos = pos + 1
+      local col = {}
+      col[1] = read()
+      if n >= 2 then col[2] = col[1] + read() end
+      for i = 3, n do
+        local d = read()
+        if not d then return nil end
+        col[i] = mode == 2 and (col[i - 1] + (col[i - 1] - col[i - 2]) + d) or (col[i - 1] + d)
+      end
+      cols[c] = col
+    end
+    return cols, n, dt
   end
 end
 local Audit = { open = false, points = nil, pointsDriver = nil, rating = nil, ratingSeq = 0 }
@@ -3963,9 +4052,8 @@ do
     queueCommand('kmr stats')
     queueCommand('kmr money')
   end
-  local KMR_RESEND = 20
   Audit.others = {}
-  local sentText, sentT = nil, -1e9
+  local sent = {}
   local sendKmr = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.kmrstats'),
     kPoints = ac.StructItem.int16(), kRating = ac.StructItem.int32(), kCrashes = ac.StructItem.int16(),
@@ -3977,24 +4065,31 @@ do
       and tonumber(msg.kRating) or nil, crashes = v(msg.kCrashes), noStats = tonumber(msg.kCrashes) == -2, crashRate = v(msg.kCrashRate) and v(msg.kCrashRate) / 100,
       infractions = v(msg.kInfr), infractionRate = v(msg.kInfrRate) and v(msg.kInfrRate) / 100, t = state.ui.clock }
   end, nil, nil, { processPostponed = true })
+  local own = {}
   function Audit.kmrOf(i)
     if i == 0 then
-      return { points = Audit.points, rating = Audit.rating, crashes = Audit.crashes, crashRate = Audit.crashRate,
-        infractions = Audit.infractions, infractionRate = Audit.infractionRate, noStats = Audit.noStats }
+      own.points, own.rating, own.crashes, own.crashRate = Audit.points, Audit.rating, Audit.crashes, Audit.crashRate
+      own.infractions, own.infractionRate, own.noStats = Audit.infractions, Audit.infractionRate, Audit.noStats
+      return own
     end
     return Audit.others[i]
   end
-  function Audit.kmrSend()
-    if Audit.points == nil and Audit.rating == nil and Audit.crashes == nil and Audit.infractions == nil
-      and not Audit.noStats then return end
-    local function n(x, k) return x and math.floor(x * (k or 1) + 0.5) or -1 end
-    local data = { kPoints = n(Audit.points), kRating = Audit.rating and math.floor(Audit.rating) or -2147483647,
+  local function n(x, k) return x and math.floor(x * (k or 1) + 0.5) or -1 end
+  local function kmrData()
+    return { kPoints = n(Audit.points), kRating = Audit.rating and math.floor(Audit.rating) or -2147483647,
       kCrashes = Audit.noStats and -2 or n(Audit.crashes), kCrashRate = n(Audit.crashRate, 100), kInfr = n(Audit.infractions),
       kInfrRate = n(Audit.infractionRate, 100) }
-    local text = table.concat({ data.kPoints, data.kRating, data.kCrashes, data.kCrashRate, data.kInfr, data.kInfrRate }, '|')
-    if text == sentText and state.ui.clock - sentT < KMR_RESEND then return end
-    sentText, sentT = text, state.ui.clock
-    OnlineQueue.push(sendKmr, data, nil)
+  end
+  local function known()
+    return not (Audit.points == nil and Audit.rating == nil and Audit.crashes == nil and Audit.infractions == nil and not Audit.noStats)
+  end
+  function Audit.kmrSend()
+    if not known() then return end
+    if sent[1] == Audit.points and sent[2] == Audit.rating and sent[3] == Audit.crashes and sent[4] == Audit.crashRate
+      and sent[5] == Audit.infractions and sent[6] == Audit.infractionRate and sent[7] == Audit.noStats and sent.done then return end
+    sent[1], sent[2], sent[3], sent[4], sent[5], sent[6], sent[7], sent.done = Audit.points, Audit.rating, Audit.crashes, Audit.crashRate,
+      Audit.infractions, Audit.infractionRate, Audit.noStats, true
+    OnlineQueue.push(sendKmr, kmrData(), nil, true)
   end
 end
 local Diag = { inputs = {}, acts = {}, last = nil,
@@ -4277,15 +4372,7 @@ ac.onChatMessage(function(message, senderCarIndex)
       or hasAny(low, DICT.kmr.penalty)) then
     rcLog(TEXTS.rc.chatSeen, string.format('sender %s - %s', tostring(senderCarIndex), Lang.letters.head(message, 90)))
   end
-  if message:sub(1, #TEXTS.rcPrefix) == TEXTS.rcPrefix then
-    local car = config.isDirector and message:find(TEXTS.editedFile, 1, true)
-      and message:match('car (%d+) %- ban pending')
-    if car then
-      queueCommand('/ban ' .. car)
-      ac.log('race-control: ban sent for car ' .. car .. ' (edited file)')
-    end
-    return true
-  end
+  if message:sub(1, #TEXTS.rcPrefix) == TEXTS.rcPrefix then return true end
   if message:lower():match('^%s*kmr%s+stats%s*$') or message:lower():match('^%s*kmr%s+money%s*$')
       or (server and message:lower():find('is not recognized as a server command', 1, true)
         and message:lower():find('kmr', 1, true)) then
@@ -5106,6 +5193,34 @@ do
     parts[#parts + 1] = string.format('%.0f|%.3f', num(car.engineLifeLeft), num(car.gearboxDamage))
     return table.concat(parts, ',')
   end
+  local snap = { wheels = { [0] = {}, {}, {}, {} }, suspensionDamage = {}, damage = {} }
+  local function snapTake(car)
+    snap.fuel, snap.compoundIndex, snap.engineLifeLeft, snap.gearboxDamage = num(car.fuel), num(car.compoundIndex), num(car.engineLifeLeft),
+      num(car.gearboxDamage)
+    for i = 0, 3 do
+      local w, s = car.wheels and car.wheels[i], snap.wheels[i]
+      s.tyreVirtualKM, s.toeIn, s.camber = num(w and w.tyreVirtualKM), num(w and w.toeIn), num(w and w.camber)
+      snap.suspensionDamage[i] = num(car.suspensionDamage[i])
+    end
+    for i = 0, 4 do snap.damage[i] = num(car.damage[i]) end
+    return snap
+  end
+  local dmgSeen = {}
+  local function damageMoved(car)
+    local moved = false
+    for i = 0, 4 do
+      local v = num(car.damage[i])
+      if v ~= dmgSeen[i + 1] then dmgSeen[i + 1], moved = v, true end
+    end
+    for i = 0, 3 do
+      local v = num(car.suspensionDamage[i])
+      if v ~= dmgSeen[i + 6] then dmgSeen[i + 6], moved = v, true end
+    end
+    local e, g = num(car.engineLifeLeft), num(car.gearboxDamage)
+    if e ~= dmgSeen[10] then dmgSeen[10], moved = e, true end
+    if g ~= dmgSeen[11] then dmgSeen[11], moved = g, true end
+    return moved
+  end
   local function saveBody(body)
     CarState.seq = CarState.seq + 1
     Record.save('car', CarState.seq, body)
@@ -5115,15 +5230,20 @@ do
     saveBody(carBody(car))
     CarState.damageSig = damageSig(car)
   end
+  RecordSync.base.beat[#RecordSync.base.beat + 1] = function()
+    if CarState.restoring or state.hold then return end
+    local car = ac.getCar(0)
+    if car then carSave(car) end
+  end
   state.onJumped[#state.onJumped + 1] = function(tow)
     if not tow or CarState.restoring or not CarState.lastBody then return end
-    saveBody(CarState.lastBody)
+    saveBody(carBody(CarState.lastBody))
     ac.log('race-control: car state saved before the teleport')
   end
   function CarState.teleportBack()
     if CarState.restoring or not CarState.lastBody then return end
     CarState.restoring, CarState.startT, CarState.teleport = true, state.ui.clock, true
-    CarState.pending = { body = CarState.lastBody, seq = CarState.seq, source = 'teleport' }
+    CarState.pending = { body = carBody(CarState.lastBody), seq = CarState.seq, source = 'teleport' }
   end
   local function suspSearch(car)
     local open = false
@@ -5241,7 +5361,7 @@ do
   RecordSync.restorers.car = function(body, seq)
     if not CarState.restoring then return end
     if CarState.pending and seq < CarState.pending.seq then return end
-    CarState.pending = { body = body, seq = seq, source = 'other drivers' }
+    CarState.pending = { body = body, seq = seq, source = 'base' }
     CarState.seq = math.max(CarState.seq, seq)
     local r = carParse(body)
     if r then PitControl.carKnown(r.pw, true) end
@@ -5252,7 +5372,8 @@ do
       local w = car.wheels and car.wheels[i]
       local searching = CarState.search and CarState.search[i]
       if w and num(car.suspensionDamage[i]) == 0 and not searching then
-        CarState.orig[i] = { toe = num(w.toeIn), camber = num(w.camber) }
+        local o = CarState.orig[i]
+        if o then o.toe, o.camber = num(w.toeIn), num(w.camber) else CarState.orig[i] = { toe = num(w.toeIn), camber = num(w.camber) } end
         CarState.peak[i] = nil
         CarState.held[i] = nil
       elseif w and CarState.orig[i] and not searching then
@@ -5309,13 +5430,16 @@ do
       CarState.teleport = false
       CarState.prevParked = parked
       CarState.damageSig = damageSig(car)
-      CarState.lastBody = carBody(car)
+      damageMoved(car)
+      CarState.lastBody = snapTake(car)
       return
     end
-    local sig = damageSig(car)
-    if sig ~= CarState.damageSig then
-      CarState.damageSig = sig
-      CarState.dirtyT = state.ui.clock
+    if damageMoved(car) or CarState.damageSig == nil then
+      local sig = damageSig(car)
+      if sig ~= CarState.damageSig then
+        CarState.damageSig = sig
+        CarState.dirtyT = state.ui.clock
+      end
     end
     if state.hold then
       if parked then CarState.dirtyT = CarState.dirtyT or state.ui.clock end
@@ -5327,7 +5451,7 @@ do
       carSave(car)
     end
     CarState.prevParked = parked
-    CarState.lastBody = carBody(car)
+    CarState.lastBody = snapTake(car)
   end
 end
 local DamageClass = {}
@@ -5475,7 +5599,7 @@ do
   PitControl.settling = settling
   local function presetCount()
     local n = 1
-    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+    for _, sp in ipairs(CarRead.pitSpinners()) do
       if type(sp.values) == 'table' then n = math.max(n, #sp.values) end
     end
     return n
@@ -5507,7 +5631,7 @@ do
     setupSig = raw
     local vals, got = {}, {}
     for name, v in raw:gmatch('([^;=]+)=(%-?%d+)') do vals[name] = tonumber(v) end
-    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+    for _, sp in ipairs(CarRead.pitSpinners()) do
       if (sp.type == 'pressure' or sp.type == 'wing') and sp.name and vals[sp.name] then got[sp.name] = vals[sp.name] end
     end
     if next(got) == nil then return end
@@ -5575,7 +5699,7 @@ do
     ac.log('race-control: pit stop: the data of the presets back from the record of the box')
   end
   local function baseLoad()
-    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    local all = CarRead.pitSpinners()
     local key = tostring(#all)
     if key == baseKey then return end
     baseKey, base = key, {}
@@ -5623,7 +5747,7 @@ do
     local compound = box.compound or mounted
     local tyres = compound ~= mounted and #box.TYRE_CHOICES or box.tyres
     local changes = {}
-    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+    for _, sp in ipairs(CarRead.pitSpinners()) do
       if sp.name and not sp.readOnly then
         if sp.type == 'fuel' then changes[#changes + 1] = { name = sp.name, value = box.fuel }
         elseif sp.type == 'compound' and tyres == #box.TYRE_CHOICES then changes[#changes + 1] = { name = sp.name, value = compound }
@@ -5637,7 +5761,7 @@ do
   end
   local bodyCache, bodyVer = '', -1
   function PitControl.presetsBody()
-    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    local all = CarRead.pitSpinners()
     if #all == 0 then return '' end
     baseLoad()
     if bodyVer == baseVer then return bodyCache end
@@ -5664,7 +5788,7 @@ do
     baseLoad()
     local b = base[idx] or {}
     box.fuel, box.compound, box.tyres, box.repair = 0, nil, 1, {}
-    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+    for _, sp in ipairs(CarRead.pitSpinners()) do
       local v = math.floor(num(b[sp.name]))
       if sp.type == 'fuel' then box.fuel = math.max(v, 0)
       elseif sp.type == 'compound' and v >= 0 and box.compounds()[v] then box.compound, box.tyres = v, #box.TYRE_CHOICES
@@ -5682,7 +5806,7 @@ do
     if not PitControl.presetsDue and state.ui.clock - presetsT < PRESETS_GAP then return end
     presetsT, PitControl.presetsDue = state.ui.clock, false
     carFromSetup()
-    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    local all = CarRead.pitSpinners()
     if #all == 0 then return end
     baseLoad()
     local wrote = false
@@ -5725,14 +5849,15 @@ do
     local box = PitControl.box
     p.all4 = p.tyres == #box.TYRE_CHOICES
     local gameTyres = false
-    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do if sp.type == 'compound' and not sp.readOnly then gameTyres = true end end
+    for _, sp in ipairs(CarRead.pitSpinners()) do if sp.type == 'compound' and not sp.readOnly then gameTyres = true end end
     p.all4game = p.all4 and gameTyres
     p.game = p.all4game or p.wing
     p.chosen = box.touched and (p.fuel > 0 or #box.TYRE_CHOICES[p.tyres][2] > 0 or p.repair.suspension or p.repair.powertrain
       or p.repair.body or #p.preset > 0 or p.switch or p.pressRows > 0) or false
     return p
   end
-  local selSeq, selSig = 0, nil
+  local selSeq, selSig, boxSig = 0, nil, nil
+  local function choicesOf(body) return tostring(body or ''):match('|S:([^|]*)$') end
   local function selBody()
     local box = PitControl.box
     local rows, press = {}, {}
@@ -5771,20 +5896,62 @@ do
     ac.log('race-control: pit stop: the box back from the car record (' .. from .. '): ' .. selSig)
   end
   function PitControl.boxLoad(transition)
-    selSeq, selSig = 0, nil
+    selSeq, selSig, boxSig = 0, nil, nil
     if transition then return end
-    local body, seq, source = Record.load('boxsel')
-    if body then selApply(body, seq, source == 'store' and 'reload' or 'this computer') end
+    local body, seq, source = Record.load('box')
+    local choices = choicesOf(body)
+    if choices then selApply(choices, seq, source == 'store' and 'reload' or 'this computer') end
   end
-  RecordSync.restorers.boxsel = function(body, seq, from)
+  RecordSync.restorers.box = function(body, seq, from)
+    local choices = choicesOf(body)
+    if not choices then return end
     local resumed = state.pitService and PitControl.resumed and PitControl.box.imported ~= 'record'
-    if (seq or 0) > selSeq and (not state.pitService or resumed) then selApply(body, seq, from or 'other drivers') end
+    if (seq or 0) > selSeq and (not state.pitService or resumed) then selApply(choices, seq, from or 'base') end
   end
-  local function boxSave()
+  function PitControl.boxWrite(car)
+    if not car then return end
+    local ok, view = pcall(PitControl.box.stateBody, car)
+    if not ok or not view then return end
+    local body = view .. '|S:' .. selBody()
+    if body == boxSig then return end
+    boxSig = body
+    selSeq = Record.save('box', selSeq + 1, body)
+  end
+  RecordSync.base.boxWrite = PitControl.boxWrite
+  local SEL_N, selNow, selThen = 11, {}, {}
+  local shPreset, shPresetN, shPress, shPressN = {}, 0, {}, 0
+  local function sameMap(m, sh, shn)
+    local n = 0
+    for k, v in pairs(m) do
+      n = n + 1
+      if sh[k] ~= v then return false end
+    end
+    return n == shn
+  end
+  local function copyMap(m)
+    local c, n = {}, 0
+    for k, v in pairs(m) do c[k], n = v, n + 1 end
+    return c, n
+  end
+  local function selMoved()
+    local box = PitControl.box
+    local r = box.repair
+    selNow[1], selNow[2], selNow[3], selNow[4], selNow[5], selNow[6] = box.auto, box.touched, box.presetIdx, box.fuel, box.compound, box.tyres
+    selNow[7], selNow[8], selNow[9], selNow[10], selNow[11] = r.suspension, r.powertrain, r.body, PitControl.presetsBody(), box.lastPreset
+    local moved = false
+    for k = 1, SEL_N do
+      if selNow[k] ~= selThen[k] then selThen[k], moved = selNow[k], true end
+    end
+    if not sameMap(box.preset, shPreset, shPresetN) then shPreset, shPresetN = copyMap(box.preset); moved = true end
+    if not sameMap(box.setupPress, shPress, shPressN) then shPress, shPressN = copyMap(box.setupPress); moved = true end
+    return moved
+  end
+  local function boxSave(car)
+    if not selMoved() and selSig ~= nil then return end
     local sig = selBody()
     if sig == selSig then return end
-    selSig, selSeq = sig, selSeq + 1
-    selSeq = Record.save('boxsel', selSeq, sig)
+    selSig = sig
+    PitControl.boxWrite(car)
   end
   local function newPresence(origin, settle)
     PitControl.origin, PitControl.settleUntil = origin, settle and state.ui.clock + SETTLE_SECONDS or 0
@@ -5848,7 +6015,7 @@ do
   end
   local function gameRequest(values, compound)
     local req = {}
-    for _, sp in ipairs(ac.getPitstopSpinners() or {}) do
+    for _, sp in ipairs(CarRead.pitSpinners()) do
       if not sp.readOnly and sp.name then
         local v
         if sp.type == 'wing' then v = values[sp.name] or PitControl.carPW[sp.name]
@@ -5875,7 +6042,7 @@ do
   end
   local function gameFromMark(text)
     local kind, values, compound = {}, {}, nil
-    for _, sp in ipairs(ac.getPitstopSpinners() or {}) do if sp.name then kind[sp.name] = sp.type end end
+    for _, sp in ipairs(CarRead.pitSpinners()) do if sp.name then kind[sp.name] = sp.type end end
     for name, v in tostring(text or ''):gmatch('([%w_]+)=(%-?%d+)') do
       if kind[name] == 'compound' then compound = tonumber(v) else values[name] = tonumber(v) end
     end
@@ -6082,13 +6249,13 @@ do
   function PitControl.update(car)
     local box = PitControl.box
     gameApply()
-    boxSave()
+    boxSave(car)
     presetsKeep()
     if setupDue and AppLink.alive then
       AppLink.setSetup(setupDue)
       setupDue = nil
     end
-    if box.imported == nil and #(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) > 0 and not state.pitService then
+    if box.imported == nil and #CarRead.pitSpinners() > 0 and not state.pitService then
       PitControl.importPreset(box.presetIndex())
     end
     local hold = state.hold
@@ -6114,7 +6281,7 @@ do
     if PitControl.lobbyDue and not menu then
       if not car.isInPit then
         PitControl.lobbyDue = false
-      elseif not state.pitService and #(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) > 0 then
+      elseif not state.pitService and #CarRead.pitSpinners() > 0 then
         PitControl.lobbyDue = false
         PitControl.baseNew()
         if PitControl.carPWHold then PitControl.carPWHold = nil else PitControl.carPWFrom, setupSig = nil, nil end
@@ -6415,12 +6582,6 @@ do
     if not Rules.dsqOn() then carDsq(1, why) end
   end
   function PitStops.update(car)
-    for i = 1, sim.carsCount - 1 do
-      local c = ac.getCar(i)
-      local inP = c and c.isInPitlane or false
-      if inP and not PitStops.otherInPitlane[i] then state.swap.pitEntryValid[i] = swapValidNow() end
-      PitStops.otherInPitlane[i] = inP
-    end
     local inPit = car.isInPitlane
     local dist = -1
     if car.position and car.pitTransform and car.pitTransform.position then
@@ -6450,6 +6611,7 @@ do
     if inPit and not PitStops.wasInPitlane then
       PitStops.passInWindow = PitStops.windowOpen()
       PitStops.passInStopWindow = PitStops.stopWindowOpen()
+      RecordSync.base.exit.win = swapValidNow()
       openPass(state.list.jumped, sessionElapsedMs())
       if wrongWayNow() and not state.pitPassReverse then
         state.pitPassReverse = nameCode(ac.getDriverName(0))
@@ -6521,16 +6683,15 @@ do
     if not Rules.dsqOn() then carDsq(1, TEXTS.pitWindowDsq) end
   end
 end
-RecordSync.restorers.stopwindow = function(body)
-  if body == 'done' then state.pit.stopDone = true elseif body == 'missed' then state.pit.stopMissed = true end
-end
-RecordSync.restorers.window = function(body)
-  if body == 'done' and not state.pit.done then
+RecordSync.restorers.janelas = function(body)
+  local w, s = tostring(body or ''):match('^([^;]*);?(.*)$')
+  if w == 'done' and not state.pit.done then
     state.pit.done = true
-    ac.log('race-control: mandatory pit window done (from the other drivers)')
-  elseif body == 'missed' then
+    ac.log('race-control: mandatory pit window done (from the base)')
+  elseif w == 'missed' then
     state.pit.missed = true
   end
+  if s == 'done' then state.pit.stopDone = true elseif s == 'missed' then state.pit.stopMissed = true end
 end
 local DriverTable = {}
 sessionPart('driverTable', DriverTable, function() return { done = false, swapDone = false, startT = SESSION_NONE, swapMs = SESSION_NONE } end)
@@ -6600,7 +6761,7 @@ do
   local function presetSpinners()
     local out = {}
     local idx = PitBox.presetIndex()
-    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    local all = CarRead.pitSpinners()
     local pressures, seen = 0, 0
     for _, sp in ipairs(all) do
       if sp.type == 'pressure' and not sp.readOnly then pressures = pressures + 1 end
@@ -6622,7 +6783,8 @@ do
   PitBox.presetSpinners = presetSpinners
   local WHEEL_WORDS = { { 'FL', { 'LF', 'FL', 'FRONTLEFT', 'LEFTFRONT' } }, { 'FR', { 'RF', 'FR', 'FRONTRIGHT', 'RIGHTFRONT' } },
     { 'RL', { 'LR', 'RL', 'REARLEFT', 'LEFTREAR' } }, { 'RR', { 'RR', 'REARRIGHT', 'RIGHTREAR' } } }
-  function PitBox.spinnerWheel(name)
+  local wheelOf = {}
+  local function wheelOfName(name)
     local up = tostring(name or ''):upper()
     local flat = up:gsub('[^A-Z]', '')
     for _, w in ipairs(WHEEL_WORDS) do
@@ -6633,8 +6795,17 @@ do
     end
     return nil
   end
+  function PitBox.spinnerWheel(name)
+    local k = tostring(name or '')
+    local w = wheelOf[k]
+    if w == nil then
+      w = wheelOfName(k) or false
+      wheelOf[k] = w
+    end
+    return w or nil
+  end
   function PitBox.pressureReadOnly()
-    local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+    local all = CarRead.pitSpinners()
     local out, pressures, seen = {}, 0, 0
     for _, sp in ipairs(all) do
       if sp.type == 'pressure' then pressures = pressures + 1 end
@@ -6649,14 +6820,14 @@ do
     return out
   end
   function PitBox.wingReadOnly()
-    for _, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+    for _, sp in ipairs(CarRead.pitSpinners()) do
       if sp.type == 'wing' and sp.readOnly then return true end
     end
     return false
   end
   function PitBox.logSpinners(why)
     local parts = {}
-    for i, sp in ipairs(ac.getPitstopSpinners and ac.getPitstopSpinners() or {}) do
+    for i, sp in ipairs(CarRead.pitSpinners()) do
       local vals = {}
       if type(sp.values) == 'table' then for k = 1, #sp.values do vals[#vals + 1] = tostring(sp.values[k]) end end
       parts[#parts + 1] = string.format('%d:%s/%s=%s[%s..%s]%s{%s:%s}', i, tostring(sp.name), tostring(sp.type), tostring(sp.value),
@@ -6666,11 +6837,12 @@ do
       .. string.format('; presets %d, preset of the game %s', presetCount(), tostring(sim.currentQuickPitPreset)))
   end
   function PitBox.logSpinnersOnce()
-    local n = #(ac.getPitstopSpinners and ac.getPitstopSpinners() or {})
+    local n = #CarRead.pitSpinners()
     if PitBox.loggedN == n then return end
     PitBox.loggedN = n
     PitBox.logSpinners('session')
   end
+  local rowsTab, rowsPresets, rowsSpin = nil, nil, nil
   local function buildRows()
     if PitBox.tab == 'strategy' then
       local rows = {}
@@ -6893,7 +7065,15 @@ do
   function PitBox.update(car)
     PitBox.logSpinnersOnce()
     if state.pitService then return end
-    ROWS = buildRows()
+    local spin = 0
+    for _, sp in ipairs(CarRead.pitSpinners()) do
+      if (sp.type == 'pressure' or sp.type == 'wing') and not sp.readOnly then spin = spin + 1 end
+    end
+    local pc = presetCount()
+    if not ROWS or rowsTab ~= PitBox.tab or rowsPresets ~= pc or rowsSpin ~= spin then
+      rowsTab, rowsPresets, rowsSpin = PitBox.tab, pc, spin
+      ROWS = buildRows()
+    end
     PitBox.ROWS = ROWS
     if PitBox.row > #ROWS then PitBox.row = #ROWS end
     PitBox.open = CarRead.parked(car) and not state.hold and not Rules.dsqOn()
@@ -7743,25 +7923,35 @@ do
   }, function(sender, msg)
     if sender and sender.index ~= 0 and Flags.restartUntil then Flags.redSwaps[sender.index] = tonumber(msg.swapS) end
   end, nil, nil, { processPostponed = true })
+  local placeSeq, placeK, placeAhead, placeList = nil, nil, nil, {}
+  local function placeOrder(a, b)
+    if (a.sw ~= nil) ~= (b.sw ~= nil) then return a.sw == nil end
+    if a.sw and a.sw ~= b.sw then return a.sw < b.sw end
+    if a.pos ~= b.pos then return a.pos < b.pos end
+    return a.i < b.i
+  end
   local function restartPlace()
-    local list = {}
-    for i = 0, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and (i == 0 or c.isConnected) and not CarRead.isStaff(i) then
-        list[#list + 1] = { i = i, pos = CarRead.num(c.racePosition),
-          sw = i == 0 and Flags.mySwapMs and math.floor(Flags.mySwapMs / 1000) or Flags.redSwaps[i] }
+    if placeSeq == CarsTick.seq then return placeK, placeAhead end
+    placeSeq, placeK, placeAhead = CarsTick.seq, nil, nil
+    local list, n = placeList, 0
+    for _, r in ipairs(CarsTick.rows) do
+      if r.on and not r.staff then
+        n = n + 1
+        local e = list[n] or {}
+        list[n] = e
+        e.i, e.pos = r.i, CarRead.num(r.c.racePosition)
+        e.sw = r.i == 0 and Flags.mySwapMs and math.floor(Flags.mySwapMs / 1000) or Flags.redSwaps[r.i]
       end
     end
-    table.sort(list, function(a, b)
-      if (a.sw ~= nil) ~= (b.sw ~= nil) then return a.sw == nil end
-      if a.sw and a.sw ~= b.sw then return a.sw < b.sw end
-      if a.pos ~= b.pos then return a.pos < b.pos end
-      return a.i < b.i
-    end)
+    for k = #list, n + 1, -1 do list[k] = nil end
+    table.sort(list, placeOrder)
     for k, e in ipairs(list) do
-      if e.i == 0 then return k, list[k - 1] and list[k - 1].i end
+      if e.i == 0 then
+        placeK, placeAhead = k, list[k - 1] and list[k - 1].i
+        break
+      end
     end
-    return nil
+    return placeK, placeAhead
   end
   Flags.restartPlace = restartPlace
   local function restartText()
@@ -7895,19 +8085,11 @@ do
   end
   local RED_PASS_SPLINE = 0.02
   local RED_MOVING_KMH = 10
-  local function passAllowed(i, c)
-    local kmh = CarRead.num(c.speedKmh)
+  local function passAllowed(r)
+    local kmh = CarRead.num(r.c.speedKmh)
     if kmh <= RED_MOVING_KMH then return true end
     if kmh >= config.flags.passSlowKmh then return false end
-    local len = tonumber(sim.trackLengthM) or 0
-    local nearest = math.huge
-    for j = 1, (sim.carsCount or 1) - 1 do
-      local o = ac.getCar(j)
-      if j ~= i and o and o.isConnected and not o.isInPitlane and not CarRead.isStaff(j) then
-        nearest = math.min(nearest, ((CarRead.num(o.splinePosition) - CarRead.num(c.splinePosition)) % 1) * len)
-      end
-    end
-    return nearest > config.flags.passFarM
+    return CarsTick.aheadM(r) > config.flags.passFarM
   end
   local function sideOf(car, c)
     local d = CarRead.num(car.splinePosition) - CarRead.num(c.splinePosition)
@@ -7946,7 +8128,8 @@ do
   local yellowSide = {}
   local function yellowRules(car)
     if state.redFlag or Rules.dsqOn() then
-      yellowSide, Flags.giveBack = {}, {}
+      if next(yellowSide) then yellowSide = {} end
+      if next(Flags.giveBack) then Flags.giveBack = {} end
       return
     end
     local clock = state.ui.clock
@@ -7966,16 +8149,17 @@ do
       end
     end
     if not Flags.localYellow or state.code80 or Flags.yellowOwn then
-      yellowSide = {}
+      if next(yellowSide) then yellowSide = {} end
       return
     end
-    for i = 1, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and c.isConnected and not c.isInPitlane and not car.isInPitlane and not CarRead.isStaff(i) then
+    if not CarsTick.frame then return end
+    for _, r in ipairs(CarsTick.rows) do
+      local i, c = r.i, r.c
+      if i > 0 and r.on and not c.isInPitlane and not car.isInPitlane and not r.staff then
         local d = sideOf(car, c)
         local side = d > 0 and 1 or -1
         if yellowSide[i] == -1 and side == 1 and math.abs(d) < RED_PASS_SPLINE and not Flags.giveBack[i] then
-          if passAllowed(i, c) then
+          if passAllowed(r) then
             ac.log(string.format('race-control: car %d passed under the yellow flag: allowed (stopped, or slow and far)', i))
           else
             Flags.giveBack[i] = clock
@@ -7992,7 +8176,7 @@ do
   local redSide = {}
   local function redRules(car, lineFrame)
     if not state.redFlag or Rules.dsqOn() then
-      redSide = {}
+      if next(redSide) then redSide = {} end
       Flags.redOver, Flags.redOverSince, Flags.redPrevLane = false, nil, nil
       return
     end
@@ -8036,15 +8220,16 @@ do
       Rules.sgAddSeconds(cfg.redNoLineSG, TEXTS.redNoLineSG, 'RL')
     end
     local me = CarRead.num(car.splinePosition)
-    for i = 1, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and c.isConnected and not c.isInPitlane and not car.isInPitlane and not CarRead.isStaff(i) then
-        local d = me - CarRead.num(c.splinePosition)
+    if not CarsTick.frame then return end
+    for _, r in ipairs(CarsTick.rows) do
+      local i, c = r.i, r.c
+      if i > 0 and r.on and not c.isInPitlane and not car.isInPitlane and not r.staff then
+        local d = me - r.sp
         if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
         local side = d > 0 and 1 or -1
         local was = redSide[i]
         local passed = was == -1 and side == 1 and math.abs(d) < RED_PASS_SPLINE
-        if passed and passAllowed(i, c) then
+        if passed and passAllowed(r) then
           ac.log(string.format('race-control: car %d passed with the red flag: allowed (stopped, or slow and far)', i))
         elseif passed and grace then
           ac.log(string.format('race-control: overtake with the red flag in the grace time (car %d): warning only', i))
@@ -8083,9 +8268,8 @@ do
     end
   end
   local function leaderLaps()
-    for i = 0, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and (i == 0 or c.isConnected) and CarRead.num(c.racePosition) == 1 and not CarRead.isStaff(i) then return CarRead.num(c.lapCount) end
+    for _, r in ipairs(CarsTick.rows) do
+      if r.on and not r.staff and CarRead.num(r.c.racePosition) == 1 then return CarRead.num(r.c.lapCount) end
     end
     return nil
   end
@@ -8185,7 +8369,7 @@ do
   function Flags.update(car, lineFrame)
     if CarRead.isStaff(0) then
       sessionEnd(car, lineFrame)
-      Flags.current = pick(car)
+      if CarsTick.frame then Flags.current = pick(car) end
       return
     end
     redPit(car)
@@ -8204,7 +8388,7 @@ do
     if Flags.parkedUpdate then Flags.parkedUpdate(car) end
     if Flags.formationUpdate then Flags.formationUpdate(car) end
     yellowRules(car)
-    Flags.current = pick(car)
+    if CarsTick.frame then Flags.current = pick(car) end
   end
   sessionPart('flags', Flags, function()
     return { incidents = {}, own = 0, ownSince = SESSION_NONE, sentKind = 0, sentT = -1e9, greenUntil = 0, lastGroup = SESSION_NONE,
@@ -8908,6 +9092,20 @@ do
       PitSpeed.entryLap and math.max(lapNow - PitSpeed.entryLap, 0) or -1, flag(state.list.jumped),
       flag(Flags.redReceived), flag(state.redCommitted), math.floor(TrackList.frozenSince or 0), lapNow, flag(PitStops.passInStopWindow) }
   end
+  local seen, cur, PROBE = {}, {}, 27
+  local function moved()
+    local p, sw = PitStops.pass, state.swap
+    cur[1], cur[2], cur[3], cur[4], cur[5], cur[6], cur[7] = p, p and p.id, PitStops.line, p and p.entryMs, p and p.jumped, p and p.stopped, p and p.stop
+    cur[8], cur[9], cur[10], cur[11], cur[12] = p and p.raceFlag, p and p.driverFlag, p and p.service, p and #p.paid, p and p.sgPaid
+    cur[13], cur[14], cur[15], cur[16], cur[17] = p and p.sgServiced, p and p.sgParked, sw.passSwap, sw.passSwapValid, sw.passVoided
+    cur[18], cur[19], cur[20], cur[21], cur[22] = state.pitPaid, PitSpeed.over, PitSpeed.annul, PitSpeed.entryLap, Lap.count
+    cur[23], cur[24], cur[25], cur[26], cur[27] = state.list.jumped, Flags.redReceived, state.redCommitted, TrackList.frozenSince, PitStops.passInStopWindow
+    local any = false
+    for k = 1, PROBE do
+      if cur[k] ~= seen[k] then seen[k], any = cur[k], true end
+    end
+    return any
+  end
   function PassMirror.update(car)
     local red = PassMirror.red
     if red and state.redFlag and TrackList.frozenSince and math.floor(TrackList.frozenSince) == red.since then
@@ -8918,6 +9116,7 @@ do
     elseif red and not state.redFlag then
       PassMirror.red = nil
     end
+    if not moved() and PassMirror.last ~= nil then return end
     local f = fields(car)
     local key = table.concat(f, '|', 1, SPEED_FIELD - 1) .. '|' .. table.concat(f, '|', SPEED_FIELD + 1)
     if key == PassMirror.last then return end
@@ -9017,6 +9216,12 @@ do
       ps.lane, ps.parked = false, false
     end
   end
+  local pool = {}
+  local function bestOrder(a, b)
+    if (a.best > 0) ~= (b.best > 0) then return a.best > 0 end
+    if a.best > 0 and a.best ~= b.best then return a.best < b.best end
+    return a.order < b.order
+  end
   function RaceTable.refresh()
     local session = ac.getSession(Session.index)
     local board = session and session.leaderboard
@@ -9026,20 +9231,23 @@ do
       for k = 0, #board do
         local e = board[k]
         local c = e and e.car
-        if c and not CarRead.isStaff(c.index) then
+        local t = c and CarsTick.byIndex[c.index]
+        if t and not t.staff then
           stopsWatch(c)
-          local cls = RaceTable.classOf(c.index)
           local n, b = Lap.of(c.index)
           local laps, best = n or 0, b or 0
           local inBoard = (e.laps or 0) > 0 or (e.bestLapTimeMs or 0) > 0
           if (c.index == 0 or c.isConnected) and not RaceTable.seen[c.index] then
             RaceTable.seen[c.index], added = true, true
           end
-          local r = { index = c.index, class = cls,
-            number = ac.getDriverNumber(c.index) or c.index, name = tostring(ac.getDriverName(c.index) or ''),
-            team = tostring(ac.getDriverTeam(c.index) or ''), laps = laps, best = best,
-            spline = CarRead.num(c.splinePosition), inPit = c.isInPitlane, connected = c.isConnected,
-            stops = RaceTable.stops[c.index] or 0 }
+          local r = pool[c.index]
+          if not r then
+            r = { index = c.index, class = RaceTable.classOf(c.index) }
+            pool[c.index] = r
+          end
+          r.number, r.name, r.team, r.laps, r.best = t.number, t.name, t.team, laps, best
+          r.spline, r.inPit, r.connected, r.stops, r.absent = CarRead.num(c.splinePosition), c.isInPitlane, c.isConnected, RaceTable.stops[c.index] or 0, nil
+          r.pos, r.classPos, r.order = nil, nil, nil
           Lap.passAt(c.index, r.spline, now)
           if RaceTable.seen[c.index] or laps > 0 or best > 0 or inBoard then
             rows[#rows + 1] = r
@@ -9054,11 +9262,7 @@ do
     if added then seenSave() end
     if sim.raceSessionType ~= ac.SessionType.Race then
       for k, r in ipairs(rows) do r.order = k end
-      table.sort(rows, function(a, b)
-        if (a.best > 0) ~= (b.best > 0) then return a.best > 0 end
-        if a.best > 0 and a.best ~= b.best then return a.best < b.best end
-        return a.order < b.order
-      end)
+      table.sort(rows, bestOrder)
     end
     local classPos2 = {}
     for k, r in ipairs(rows) do
@@ -9118,7 +9322,26 @@ do
   RecordSync.restorers.stint = function(body, seq)
     if not RaceTable.stintDone then stintApply(body, seq) end
   end
+  local loaded = false
+  local function lapsJoin(body)
+    local mine, have = RaceTable.laps, {}
+    for _, l in ipairs(mine) do have[l.lap] = true end
+    lapsApply(body)
+    local fromBase = RaceTable.laps
+    RaceTable.laps = mine
+    local added = 0
+    for _, l in ipairs(fromBase) do
+      if not have[l.lap] then mine[#mine + 1] = l; added = added + 1 end
+    end
+    if added == 0 then return end
+    table.sort(mine, function(a, b) return a.lap < b.lap end)
+    while #mine > MAX_LAPS do table.remove(mine, 1) end
+    RaceTable.lastLap = mine[#mine].lap
+    lapsSave()
+    ac.log(string.format('race-control: %d laps of this car from the laps of the base', added))
+  end
   function RaceTable.load()
+    loaded = true
     lapsApply(Record.load('laps'))
     RaceTable.lastLap = RaceTable.laps[#RaceTable.laps] and RaceTable.laps[#RaceTable.laps].lap or nil
     stopsLoad()
@@ -9187,13 +9410,13 @@ do
     return out
   end
   RaceTable.losses = nil
-  local bestKey, bestOf = nil, nil
+  local bestN, bestLast, bestMs, bestOf = nil, nil, nil, nil
   function RaceTable.ownBest()
     local laps = RaceTable.laps
     local last = laps[#laps]
-    local key = #laps .. '|' .. (last and last.ms or 0) .. '|' .. (last and last.lap or 0)
-    if key == bestKey then return bestOf end
-    bestKey, bestOf = key, Lap.bestOf(laps)
+    local ms = last and last.ms or 0
+    if bestOf and bestN == #laps and bestLast == last and bestMs == ms then return bestOf end
+    bestN, bestLast, bestMs, bestOf = #laps, last, ms, Lap.bestOf(laps)
     return bestOf
   end
   Lap.ownBest = function() return RaceTable.ownBest().ms end
@@ -9264,6 +9487,11 @@ do
     ac.log(string.format('race-control: pit lane loss measured %.1f s (%d laps, parked %.1f s)', loss / 1000, #PL.ms, PL.park))
   end
   function RaceTable.update(car, lineFrame, viaPit)
+    local fromBase = RecordSync.base.lapsBase
+    if fromBase and loaded then
+      RecordSync.base.lapsBase = nil
+      lapsJoin(fromBase)
+    end
     if car.isInPitlane then touched = true end
     local L = Lap.last
     if lineFrame and L and L.ms > 0 and L.lap ~= RaceTable.lastLap then
@@ -9284,17 +9512,23 @@ do
       if #laps > MAX_LAPS then table.remove(laps, 1) end
       lapsSave()
       if config.baseUrl ~= '' then
-        local life, vkm = {}, {}
+        local life, vkm, press = {}, {}, {}
         for w = 0, 3 do
           local lf = CarRead.tyreLife(car, w, state.tyreLineKm[w] or 0)
           life[#life + 1] = lf and string.format('%.0f', lf) or '-'
           vkm[#vkm + 1] = string.format('%.2f', state.tyreLineKm[w] or 0)
+          local wh = car.wheels and car.wheels[w]
+          local pr = wh and tonumber(wh.tyrePressure)
+          press[#press + 1] = pr and pr > 0 and string.format('%.1f', pr) or '-'
         end
+        local compound = tostring(ac.getTyresName and ac.getTyresName(0, CarRead.num(car.compoundIndex)) or CarRead.num(car.compoundIndex)):gsub('[|,;]', ' ')
         local l = laps[#laps]
-        state.lapOut[#state.lapOut + 1] = string.format('L3|%d|%d|%d|%d|%s|%.2f|%.3f|%s|%s|%.1f|%.1f|%.0f|%s|%s|%s|%s', l.lap, l.ms,
+        state.lapOut[#state.lapOut + 1] = string.format('L4|%d|%d|%d|%d|%s|%.2f|%.3f|%s|%s|%.1f|%.1f|%.0f|%s|%s|%s|%s|%s|%s', l.lap, l.ms,
           l.valid and 1 or 0, l.pit and 1 or 0, table.concat(l.s, '/'), CarRead.num(car.fuel), CarRead.num(car.fuelPerLap),
           table.concat(life, ','), table.concat(vkm, ','), CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature),
-          CarRead.num(sim.roadGrip) * 100, RecordSync.base.trackKey(), RecordSync.base.carKey(), infoText(l), l.driver)
+          CarRead.num(sim.roadGrip) * 100, RecordSync.base.trackKey(), RecordSync.base.carKey(), infoText(l), compound, table.concat(press, ','), l.driver)
+        local data, n, dt = LapTrace.close(l.ms)
+        if data then RecordSync.base.traceAdd(l.lap, data, n, dt) end
         if #state.lapOut > 200 then table.remove(state.lapOut, 1) end
         state.outDirty = true
       end
@@ -9440,9 +9674,9 @@ do
     if R.lastT and clock - R.lastT > 1 then R.cars, R.lastT = {}, nil end
     if R.lastT and clock - R.lastT < SAMPLE then return end
     R.lastT = clock
-    for i = 0, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and c.position and (i == 0 or (c.isConnected and not c.isInPitlane)) then sample(i, c, clock) else R.cars[i] = nil end
+    for _, r in ipairs(CarsTick.rows) do
+      local i, c = r.i, r.c
+      if c.position and (i == 0 or (r.on and not c.isInPitlane)) then sample(i, c, clock) else R.cars[i] = nil end
     end
   end
   function Relative.of(i)
@@ -10014,7 +10248,7 @@ local Desktop = { current = 1, count = 1, pitOn = true, place = {}, focus = nil,
   indicatorUntil = 0, drawnOrder = {}, wasInPit = nil }
 do
   local SCREENS = { 'pitbox', 'setup', 'status', 'race', 'laps', 'standings', 'relative', 'laptime', 'delta', 'event',
-    'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc' }
+    'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'report' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local STORAGE_KEY = 'rc.desktops'
   local OFF_KEY = 'rc.desktopsOff'
@@ -10263,6 +10497,8 @@ do
       Desktop.cockpitStep(dir)
     elseif g == 'calc' then
       Desktop.calcStep(dir)
+    elseif g == 'report' then
+      Desktop.reportStep(dir)
     end
   end
   local WX_KEY = 'rc.weatherMode'
@@ -10282,6 +10518,8 @@ do
   Desktop.cockpitMove = function() end
   Desktop.calcStep = function() end
   Desktop.calcMove = function() end
+  Desktop.reportStep = function() end
+  Desktop.reportMove = function() end
   Desktop.shareStep = function(dir) RecordSync.base.rrShare(dir > 0) end
   Desktop.shareMove = function() end
   function Desktop.padFor(g)
@@ -10575,6 +10813,10 @@ do
         if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.calcMove(-1) end
         if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.calcMove(1) end
       end
+      if g == 'report' then
+        if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.reportMove(-1) end
+        if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.reportMove(1) end
+      end
     end
   end
 end
@@ -10751,8 +10993,8 @@ Lang.hooks[#Lang.hooks + 1] = commandTexts
 local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
-    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc' }
-  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden', calc = 'hidden' }
+    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'report' }
+  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden', calc = 'hidden', report = 'hidden' }
   local MODES = { visible = true, auto = true, hidden = true }
   Drag.EYE_NEXT = { visible = 'hidden', auto = 'hidden', hidden = 'visible' }
   Drag.GHOST_NEXT = { visible = 'auto', auto = 'visible', hidden = 'auto' }
@@ -10838,7 +11080,7 @@ do
           { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
           { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.Weather, 'weather' },
           { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' }, { ui.Icons.VideoCamera, 'share' },
-          { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' }, { ui.Icons.Calculator, 'calc' } }) do
+          { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' }, { ui.Icons.Calculator, 'calc' }, { ui.Icons.Search, 'report' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
       end
     end
@@ -11381,7 +11623,7 @@ do
     local strategy = PitBox.tab == 'strategy' and presets > 1
     local stopN = #rows
     if strategy then
-      local all = ac.getPitstopSpinners and ac.getPitstopSpinners() or {}
+      local all = CarRead.pitSpinners()
       local list = {}
       for i = 0, presets - 1 do
         local press, wingV = {}, {}
@@ -11935,7 +12177,7 @@ local drawRaceScreens = (function()
   local PLACE = { relative = { 1572, 380, 330 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 510 }, event = { 770, 200, 380 },
     weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 },
-    calc = { 380, 110, 380 } }
+    calc = { 380, 110, 380 }, report = { 660, 110, 600 } }
   local filter = Desktop.filter
   local function lapTime(ms)
     if not ms or ms <= 0 then return '-' end
@@ -12070,14 +12312,9 @@ local drawRaceScreens = (function()
     Drag.icons('relative', p1, p2, s)
   end
   local function kmrOf(r)
-    if r.index == 0 then return Audit.points, Audit.rating end
-    local c = ac.getCar(r.index)
-    local byCar = c and RecordSync.peers[c.sessionID]
-    local rec = byCar and byCar.kmr and Record.decode(byCar.kmr.text)
-    if not rec then return nil, nil end
-    local driver, points, rating = tostring(rec.body or ''):match('^(%d+)|([^|]*)|?([^|]*)$')
-    if not driver or tonumber(driver) ~= nameCode(ac.getDriverName(r.index)) then return nil, nil end
-    return tonumber(points), tonumber(rating)
+    local k = Audit.kmrOf(r.index)
+    if not k then return nil, nil end
+    return k.points, k.rating
   end
   local function standingsScreen(car, w, h, s)
     local list = {}
@@ -12748,10 +12985,9 @@ float4 main(PS_IN pin) {
     ui.pushClipRect(a, b, true)
     if ui.ExtraCanvas then
       Radar.canvas = Radar.canvas or ui.ExtraCanvas(vec2(256, 256))
-      local key = half .. '|' .. t .. '|' .. #Radar.flKey
-      if Radar.canvasT ~= key then
+      if Radar.canvasHalf ~= half or Radar.canvasT ~= t or Radar.canvasFl ~= Radar.flKey then
         local ok = Radar.canvas:updateWithShader({ values = Radar.values(FL, t, half), shader = RADAR_SHADER, async = true, cacheKey = 676 })
-        if ok ~= false then Radar.canvasT = key end
+        if ok ~= false then Radar.canvasHalf, Radar.canvasT, Radar.canvasFl = half, t, Radar.flKey end
       end
       ui.drawImage(Radar.canvas, a, b)
     end
@@ -13054,6 +13290,23 @@ float4 main(PS_IN pin) {
     end
     return stints
   end
+  local stCache = { n = -1 }
+  local function stintsNow()
+    local laps = RaceTable.laps
+    local last = laps[#laps]
+    local c = stCache
+    if c.list ~= laps or c.n ~= #laps or c.last ~= last then
+      c.list, c.n, c.last = laps, #laps, last
+      c.stints, c.carBest = stintsOf(laps), Lap.bestOf(laps)
+    end
+    return c.stints, c.carBest
+  end
+  local ownRaw, ownName = nil, ''
+  local function ownDriver()
+    local raw = tostring(ac.getDriverName(0) or '')
+    if raw ~= ownRaw then ownRaw, ownName = raw, (raw:gsub('[,;|]', ' ')) end
+    return ownName
+  end
   Desktop.lapsStep = function(dir)
     local list, seen = { 'ALL' }, {}
     for _, l in ipairs(RaceTable.laps) do
@@ -13065,7 +13318,7 @@ float4 main(PS_IN pin) {
     LapsView.sel = nil
   end
   local function lapsBig(car, w, h, s)
-    local all = stintsOf(RaceTable.laps)
+    local all = stintsNow()
     local stints = {}
     for _, st in ipairs(all) do if LapsView.driver == 'ALL' or st.driver == LapsView.driver then stints[#stints + 1] = st end end
     local sel = LapsView.sel and all[LapsView.sel] or stints[#stints]
@@ -13151,18 +13404,14 @@ float4 main(PS_IN pin) {
   end
   local function lapsScreen(car, w, h, s)
     if LapsView.big then return lapsBig(car, w, h, s) end
-    local laps = RaceTable.laps
     local sessionBest = Lap.sessionBest()
-    local driver = tostring(ac.getDriverName(0) or ''):gsub('[,;|]', ' ')
-    local stints = {}
-    for _, l in ipairs(laps) do
-      local cur = stints[#stints]
-      if not cur or cur.driver ~= l.driver then cur = { driver = l.driver, laps = {} }; stints[#stints + 1] = cur end
-      cur.laps[#cur.laps + 1] = l
+    local driver = ownDriver()
+    local all, carBest = stintsNow()
+    local nStints, now, prev = #all, all[#all], all[#all - 1]
+    if not now or now.driver ~= driver then
+      nStints, prev = #all + 1, now
+      now = { driver = driver, laps = {} }
     end
-    if not stints[#stints] or stints[#stints].driver ~= driver then stints[#stints + 1] = { driver = driver, laps = {} } end
-    local now, prev = stints[#stints], stints[#stints - 1]
-    local carBest = Lap.bestOf(laps)
     local best, bestDriver = carBest.ms, carBest.lap and carBest.lap.driver or '-'
     local n = math.min(#now.laps, 8)
     local p1, p2, y = frame('laps', w, h, s, 2.5 + n + (prev and 2.6 or 0) + 1.6, TEXTS.scrLaps, nil)
@@ -13179,7 +13428,7 @@ float4 main(PS_IN pin) {
     local tot = RaceTable.driveMs() or ms
     local stintCol = (rule.minMinutes <= 0 and rule.maxMinutes <= 0) and COLOR_DIM or ((rule.maxMinutes > 0 and tot > rule.maxMinutes * 60000) and RED)
       or ((rule.minMinutes > 0 and tot < rule.minMinutes * 60000) and YELLOW) or GREEN
-    drawText(string.format(TEXTS.scrStintN, #stints, now.driver), FONT_TITLE, 10.5 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
+    drawText(string.format(TEXTS.scrStintN, nStints, now.driver), FONT_TITLE, 10.5 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
     drawTextRight(string.format(TEXTS.scrStintInfo, #now.laps, hms(ms)) .. ((rule.minMinutes > 0 or rule.maxMinutes > 0) and
       (' - ' .. string.format(TEXTS.scrDriveTotal, hms(tot)) .. (rule.minMinutes > 0 and string.format(TEXTS.scrStintMin, rule.minMinutes) or '')) or ''),
       FONT_MONO, 10 * s, p2.x - 14 * s, y, stintCol)
@@ -13201,10 +13450,8 @@ float4 main(PS_IN pin) {
     if prev then
       drawSeparator(p1, p2, y + 3 * s, s)
       y = y + 8 * s
-      local total = 0
-      for _, l in ipairs(prev.laps) do total = total + l.ms end
-      local pb = Lap.bestOf(prev.laps).ms
-      drawText(string.format(TEXTS.scrStintN, #stints - 1, prev.driver), FONT_TITLE, 10.5 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
+      local total, pb = prev.total, prev.best
+      drawText(string.format(TEXTS.scrStintN, nStints - 1, prev.driver), FONT_TITLE, 10.5 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
       drawTextRight(string.format(TEXTS.scrStintInfo, #prev.laps, hms(total)), FONT_MONO, 10 * s, p2.x - 14 * s, y, COLOR_DIM)
       y = y + ROW * s
       row(p1, y, s, { { string.format(TEXTS.scrBestAvg, lapTime(pb), lapTime(#prev.laps > 0 and total / #prev.laps or 0)), 14,
@@ -13915,6 +14162,340 @@ float4 main(PS_IN pin) {
       Drag.icons('calc', p1, p2, s)
     end
   end)()
+  local reportScreen = (function()
+    local P = { page = 'search', f = { driver = 1, car = 1, track = 1, type = 1 }, sel = 1, top = 0, busy = false, err = false, L = {}, over = true,
+      mark = tonumber(ac.storage['rc.reportMark'] or '') }
+    local FILTERS = { 'driver', 'car', 'track', 'type' }
+    local LIST = 12
+    local CW, CH, MAPW = 1024, 416, 230
+    local CHANNELS = { { 'speed', 0.1, 'spd' }, { 'gas', 0.1, 'thr' }, { 'brake', 0.1, 'brk' }, { 'clutch', 0.1, 'clu' }, { 'steer', 0.1, 'str' }, { 'gear', 1, 'gear' } }
+    local COLOR_A, COLOR_B = rgbm(0.494, 0.627, 1, 1), rgbm(1, 0.851, 0.251, 1)
+    local function options(k)
+      local out = { { label = TEXTS.rep.all } }
+      if k == 'driver' then
+        out[#out + 1] = { label = TEXTS.rep.me, q = { steam = tostring(ac.getUserSteamID() or '') } }
+        for _, r in ipairs(RaceTable.rows) do
+          if r.index ~= 0 and not r.absent and r.name ~= '' then out[#out + 1] = { label = r.name, q = { driver = r.name } } end
+        end
+      elseif k == 'car' then
+        local seen = {}
+        for i = 0, (sim.carsCount or 1) - 1 do
+          local id = tostring(ac.getCarID(i) or '')
+          if id ~= '' and not seen[id] then seen[id] = true; out[#out + 1] = { label = id, q = { car = id } } end
+        end
+      elseif k == 'track' then
+        local t = RecordSync.base.trackKey()
+        out[#out + 1] = { label = t, q = { track = t } }
+      else
+        for t = 1, 3 do out[#out + 1] = { label = TEXTS.rep.types[t], q = { type = t } } end
+      end
+      return out
+    end
+    local function pick(k)
+      local o = options(k)
+      return o[math.min(P.f[k], #o)], #o
+    end
+    local function ask(path, params, done)
+      P.busy, P.err = true, false
+      RecordSync.base.reportGet(path, params, function(d)
+        P.busy = false
+        if not d or d.error then P.err = true return end
+        done(d)
+      end)
+    end
+    local function search()
+      local q = {}
+      for _, k in ipairs(FILTERS) do for a, v in pairs(pick(k).q or {}) do q[a] = v end end
+      P.sessions = nil
+      ask('search', q, function(d) P.sessions = d.sessions or {} end)
+    end
+    local function openSession(key)
+      P.page, P.sess, P.drivers, P.sel, P.top = 'session', key, nil, 1, 0
+      ask('session', { key = key }, function(d) P.drivers = d.drivers or {} end)
+    end
+    local function openDriver(d)
+      P.page, P.drv, P.laps, P.best, P.sel, P.top = 'laps', d, nil, nil, 1, 0
+      ask('laps', { idx = d.id }, function(r) P.laps = r.laps or {} end)
+      RecordSync.base.reportGet('best', { track = d.track, car = d.car, session = P.sess }, function(b) P.best = b end)
+    end
+    local function lapGet(id)
+      if not id or P.L[id] then return end
+      P.L[id] = { busy = true }
+      RecordSync.base.reportGet('lap', { id = id }, function(d)
+        if not d or not d.lap then P.L[id] = nil; P.err = true return end
+        local e = { lap = d.lap }
+        if d.trace and d.trace.data then e.cols, e.n = LapTrace.decode(d.trace.data) end
+        P.L[id] = e
+        P.canvasKey = nil
+      end)
+    end
+    local function openLap(id)
+      P.page, P.lapId, P.err = 'lap', id, false
+      lapGet(id)
+      if P.mark then lapGet(P.mark) end
+    end
+    local function setMark(id)
+      P.mark = id
+      ac.storage['rc.reportMark'] = id and tostring(id) or ''
+      P.over, P.canvasKey = true, nil
+      if id then lapGet(id) end
+    end
+    local function back()
+      P.page = P.page == 'lap' and 'laps' or P.page == 'laps' and 'session' or 'search'
+      P.sel, P.top, P.err = 1, 0, false
+    end
+    local function reload()
+      P.err = false
+      if P.page == 'search' then search()
+      elseif P.page == 'session' then openSession(P.sess)
+      elseif P.page == 'laps' then openDriver(P.drv)
+      else P.L[P.lapId] = nil; openLap(P.lapId) end
+    end
+    local function items()
+      if P.page == 'search' then
+        local out = {}
+        for _, k in ipairs(FILTERS) do out[#out + 1] = { filter = k } end
+        for _, x in ipairs(P.sessions or {}) do out[#out + 1] = { sess = x } end
+        return out
+      elseif P.page == 'session' then
+        local out = {}
+        for _, d in ipairs(P.drivers or {}) do out[#out + 1] = { drv = d } end
+        return out
+      elseif P.page == 'laps' then
+        local out = { { best = 'session' }, { best = 'allTime' } }
+        local ls = P.laps or {}
+        for i = #ls, 1, -1 do out[#out + 1] = { lap = ls[i] } end
+        return out
+      end
+      return {}
+    end
+    local function stepFilter(k, dir)
+      local _, n = pick(k)
+      P.f[k] = (math.min(P.f[k], n) - 1 + dir) % n + 1
+      search()
+    end
+    local function open(it)
+      if not it then return end
+      if it.filter then stepFilter(it.filter, 1)
+      elseif it.sess then openSession(it.sess.key)
+      elseif it.drv then openDriver(it.drv)
+      elseif it.lap then openLap(it.lap.id)
+      elseif it.best then local b = P.best and P.best[it.best]; if b then openLap(b.id) end end
+    end
+    Desktop.reportMove = function(dir)
+      local n = #items()
+      if n > 0 then P.sel = (P.sel - 1 + dir) % n + 1 end
+    end
+    Desktop.reportStep = function(dir)
+      local it = items()[P.sel]
+      if it and it.filter then stepFilter(it.filter, dir)
+      elseif dir > 0 then open(it)
+      else back() end
+    end
+    local function timeAt(L, d)
+      local D, T = L.cols.dist, L.cols.time
+      if d <= D[1] then return T[1] end
+      if d >= D[L.n] then return T[L.n] end
+      local lo, hi = 1, L.n
+      while hi - lo > 1 do
+        local m = math.floor((lo + hi) / 2)
+        if D[m] <= d then lo = m else hi = m end
+      end
+      local span = D[hi] - D[lo]
+      return span > 0 and T[lo] + (T[hi] - T[lo]) * (d - D[lo]) / span or T[lo]
+    end
+    local function paint(A, B)
+      P.canvas = P.canvas or ui.ExtraCanvas(vec2(CW, CH))
+      local bands = #CHANNELS + (B and 1 or 0)
+      local gw, bh = CW - MAPW - 12, CH / bands
+      local maxD = math.max(A.cols.dist[A.n], B and B.cols.dist[B.n] or 0, 1)
+      local pt = vec2(0, 0)
+      local function band(i, lo, hi, list)
+        local y0, y1 = (i - 1) * bh + 3, i * bh - 3
+        ui.drawSimpleLine(vec2(0, y1), vec2(gw, y1), rgbm(1, 1, 1, 0.12), 1)
+        for _, e in ipairs(list) do
+          local L, vals, col = e[1], e[2], e[3]
+          for j = 1, L.n do ui.pathLineTo(pt:set(L.cols.dist[j] / maxD * gw, y1 - (vals(j) - lo) / ((hi - lo) ~= 0 and (hi - lo) or 1) * (y1 - y0))) end
+          ui.pathStroke(col, false, 1.6)
+        end
+      end
+      P.canvas:clear(rgbm(0, 0, 0, 0))
+      P.canvas:update(function()
+        for i, c in ipairs(CHANNELS) do
+          local col, f, k = c[1], c[2], c[3]
+          local lo, hi = math.huge, -math.huge
+          for _, L in ipairs({ A, B }) do
+            for j = 1, L.n do local v = L.cols[col][j] * f; lo, hi = math.min(lo, v), math.max(hi, v) end
+          end
+          if k == 'thr' or k == 'brk' or k == 'clu' then lo, hi = 0, 100
+          elseif k == 'spd' or k == 'gear' then lo, hi = 0, math.max(hi, 1) * (k == 'spd' and 1.05 or 1)
+          else local m = math.max(math.abs(lo), math.abs(hi), 1); lo, hi = -m, m end
+          local function vals(L) return function(j) return L.cols[col][j] * f end end
+          band(i, lo, hi, B and { { B, vals(B), COLOR_B }, { A, vals(A), COLOR_A } } or { { A, vals(A), TELE_COLOR[k] } })
+        end
+        if B then
+          local dl, m = {}, 0.1
+          for j = 1, A.n do dl[j] = (A.cols.time[j] - timeAt(B, A.cols.dist[j])) / 1000; m = math.max(m, math.abs(dl[j])) end
+          local y = (#CHANNELS + 0.5) * bh
+          ui.drawSimpleLine(vec2(0, y), vec2(gw, y), rgbm(1, 1, 1, 0.25), 1)
+          band(#CHANNELS + 1, -m, m, { { A, function(j) return dl[j] end, COLOR_TITLE } })
+        end
+        local x0, x1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
+        for _, L in ipairs({ A, B }) do
+          for j = 1, L.n do x0, x1 = math.min(x0, L.cols.x[j]), math.max(x1, L.cols.x[j]); z0, z1 = math.min(z0, L.cols.z[j]), math.max(z1, L.cols.z[j]) end
+        end
+        local k = math.min((MAPW - 16) / math.max(x1 - x0, 1), (CH - 16) / math.max(z1 - z0, 1))
+        local ox, oz = CW - MAPW + (MAPW - (x1 - x0) * k) / 2, (CH - (z1 - z0) * k) / 2
+        for _, e in ipairs(B and { { B, COLOR_B }, { A, COLOR_A } } or { { A, COLOR_TITLE } }) do
+          local L = e[1]
+          for j = 1, L.n do ui.pathLineTo(pt:set(ox + (L.cols.x[j] - x0) * k, oz + (L.cols.z[j] - z0) * k)) end
+          ui.pathStroke(e[2], false, 2)
+        end
+        ui.drawCircleFilled(vec2(ox + (A.cols.x[1] - x0) * k, oz + (A.cols.z[1] - z0) * k), 4, COLOR_TITLE, 12)
+      end)
+    end
+    local function chip(t, x, y, s, on, fn)
+      local tw = textWidth(t, FONT_MONO, 9 * s)
+      local a, b = vec2(x - tw - 6 * s, y + 5 * s), vec2(x, y + 18 * s)
+      if on then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
+      drawText(t, FONT_MONO, 9 * s, TMP.a:set(a.x + 3 * s, a.y + 1 * s), on and TMP.dark or COLOR_DIM)
+      Drag.clickable(a, b, fn)
+      return a.x - 4 * s
+    end
+    local function lapLabel(l)
+      if not l then return '-' end
+      return string.format('%s · %s · %s %d · %s', tostring(l.idx_driver or l.driver or ''), tostring(l.idx_car or l.car or ''), TEXTS.rep.lap,
+        tonumber(l.lap) or 0, lapTime(tonumber(l.ms)))
+    end
+    local function cell(v) return (v ~= nil and tostring(v) ~= '') and tostring(v):gsub(',', ' ') or '-' end
+    local function when(ms) return ms and os.date('%d/%m %H:%M', math.floor(tonumber(ms) / 1000)) or '-' end
+    return function(car, w, h, s)
+      if P.page == 'search' and not P.sessions and not P.busy and not P.err then search() end
+      local list = items()
+      P.sel = math.max(1, math.min(P.sel, math.max(#list, 1)))
+      local fixed = P.page == 'search' and #FILTERS or P.page == 'laps' and 2 or 0
+      local shownRows = math.min(LIST, #list - fixed)
+      if P.sel > fixed then
+        if P.sel - fixed > P.top + LIST then P.top = P.sel - fixed - LIST end
+        if P.sel - fixed <= P.top then P.top = P.sel - fixed - 1 end
+      end
+      P.top = math.max(0, math.min(P.top, math.max(#list - fixed - LIST, 0)))
+      local rows = P.page == 'lap' and 24 or (fixed + 2 + math.max(shownRows, 1) + 1)
+      local p1, p2, y = frame('report', w, h, s, rows, TEXTS.scrReport, nil)
+      local focus = Desktop.focus == 'report'
+      local x = p2.x - 14 * s
+      if P.page ~= 'search' then x = chip('<', x, p1.y, s, false, back) end
+      if P.page == 'lap' then
+        x = chip(TEXTS.rep.mark, x, p1.y, s, P.mark == P.lapId, function() setMark(P.mark ~= P.lapId and P.lapId or nil) end)
+        if P.mark and P.mark ~= P.lapId then x = chip(P.over and TEXTS.rep.over or TEXTS.rep.alone, x, p1.y, s, P.over, function() P.over, P.canvasKey = not P.over, nil end) end
+      end
+      drawTextRight(TEXTS.rep.pages[P.page], FONT_MONO, 9 * s, x - 4 * s, p1.y + 6 * s, COLOR_DIM)
+      local function line(i, cells, fn, mark)
+        local on = P.sel == i
+        if on and focus then ui.drawRectFilled(vec2(p1.x + 6 * s, y), vec2(p2.x - 6 * s, y + ROW * s), rgbm(1, 1, 1, 0.07), 2 * s) end
+        for _, c in ipairs(cells) do if on and not c[3] then c[3] = YELLOW end end
+        row(p1, y, s, cells)
+        if fn then Drag.clickable(vec2(p1.x + 6 * s, y), vec2(p2.x - (mark and 40 or 6) * s, y + ROW * s), function() P.sel = i; fn() end) end
+        if mark then
+          local a, b = vec2(p2.x - 34 * s, y), vec2(p2.x - 16 * s, y + 12 * s)
+          if P.mark == mark then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
+          drawText('M', FONT_MONO, 9 * s, TMP.a:set(a.x + 6 * s, a.y), P.mark == mark and TMP.dark or COLOR_DIM)
+          Drag.clickable(a, b, function() setMark(P.mark ~= mark and mark or nil) end)
+        end
+        y = y + ROW * s
+      end
+      local H = TEXTS.rep
+      if P.page == 'search' then
+        for i, k in ipairs(FILTERS) do
+          line(i, { { H[k], 14, COLOR_DIM, false, FONT_TEXT }, { '< ' .. pick(k).label .. ' >', 110 } }, function() stepFilter(k, 1) end)
+        end
+        drawSeparator(p1, p2, y + 3 * s, s)
+        y = y + 8 * s
+        row(p1, y, s, { { H.hdrDate, 14, COLOR_AXIS }, { H.hdrType, 104, COLOR_AXIS }, { H.track, 200, COLOR_AXIS }, { H.hdrDrivers, 520, COLOR_AXIS, true }, { H.hdrLaps, 580, COLOR_AXIS, true } })
+        y = y + ROW * s
+        for i = fixed + P.top + 1, math.min(#list, fixed + P.top + LIST) do
+          local x2 = list[i].sess
+          line(i, { { when(x2.start), 14 }, { H.types[tonumber(x2.type) or 0] or '-', 104, COLOR_DIM }, { tostring(x2.track or ''), 200 },
+            { tostring(x2.drivers or '-'), 520, nil, true }, { tostring(x2.laps or '-'), 580, nil, true } }, function() openSession(x2.key) end)
+        end
+      elseif P.page == 'session' then
+        row(p1, y, s, { { 'P', 24, COLOR_AXIS, true }, { H.driver, 34, COLOR_AXIS }, { H.car, 250, COLOR_AXIS }, { H.hdrLaps, 480, COLOR_AXIS, true }, { H.hdrBest, 580, COLOR_AXIS, true } })
+        y = y + ROW * s
+        for i = P.top + 1, math.min(#list, P.top + LIST) do
+          local d = list[i].drv
+          line(i, { { tostring(d.pos or '-'), 24, nil, true }, { tostring(d.driver or ''), 34, nil, false, FONT_TEXT }, { tostring(d.car or ''), 250, COLOR_DIM },
+            { tostring(d.laps or 0), 480, nil, true }, { lapTime(tonumber(d.best)), 580, nil, true } }, function() openDriver(d) end)
+        end
+      elseif P.page == 'laps' then
+        for i, k in ipairs({ 'session', 'allTime' }) do
+          local b = P.best and P.best[k]
+          line(i, { { k == 'session' and H.bestSess or H.bestAll, 14, COLOR_DIM, false, FONT_TEXT },
+            { b and string.format('%s · %s · %s', tostring(b.driver or ''), lapTime(tonumber(b.ms)), when(b.at)) or '-', 250, PURPLE } },
+            b and function() openLap(b.id) end or nil, b and b.id or nil)
+        end
+        drawSeparator(p1, p2, y + 3 * s, s)
+        y = y + 8 * s
+        row(p1, y, s, { { H.lap, 30, COLOR_AXIS, true }, { H.hdrTime, 100, COLOR_AXIS, true }, { 'S1', 156, COLOR_AXIS, true }, { 'S2', 206, COLOR_AXIS, true },
+          { 'S3', 256, COLOR_AXIS, true }, { H.hdrValid, 266, COLOR_AXIS }, { H.hdrPit, 296, COLOR_AXIS }, { H.hdrFuel, 370, COLOR_AXIS, true },
+          { H.hdrTyre, 380, COLOR_AXIS }, { H.hdrTel, 510, COLOR_AXIS } })
+        y = y + ROW * s
+        for i = fixed + P.top + 1, math.min(#list, fixed + P.top + LIST) do
+          local l = list[i].lap
+          local ss = {}
+          for v in tostring(l.sectors or ''):gmatch('[^/,;%s]+') do ss[#ss + 1] = tonumber(v) end
+          local col = tonumber(l.valid) == 1 and nil or RED
+          line(i, { { tostring(l.lap or ''), 30, col, true }, { lapTime(tonumber(l.ms)), 100, col, true }, { secs(ss[1]), 156, col, true }, { secs(ss[2]), 206, col, true },
+            { secs(ss[3]), 256, col, true }, { tonumber(l.valid) == 1 and 'V' or '-', 266, col }, { tonumber(l.pit) == 1 and 'P' or '-', 296, COLOR_DIM },
+            { l.fuel and string.format('%.1f', tonumber(l.fuel) or 0) or '-', 370, COLOR_DIM, true }, { cell(l.compound), 380, COLOR_DIM },
+            { l.trace and 'T' or '-', 510, COLOR_DIM } }, function() openLap(l.id) end, l.id)
+        end
+      else
+        local A = P.L[P.lapId]
+        local Bm = P.mark and P.mark ~= P.lapId and P.over and P.L[P.mark] or nil
+        local B = Bm and Bm.cols and Bm or nil
+        local a, b = vec2(p1.x + 10 * s, y), vec2(p2.x - 10 * s, y + 228 * s)
+        if A and A.cols and ui.ExtraCanvas then
+          local key = tostring(P.lapId) .. '|' .. tostring(B and P.mark or '')
+          if P.canvasKey ~= key then paint(A, B); P.canvasKey = key end
+          ui.drawImage(P.canvas, a, b)
+          local bands = #CHANNELS + (B and 1 or 0)
+          local bhS = (b.y - a.y) / bands
+          for i, c in ipairs(CHANNELS) do drawText(TEXTS.teleChannels[c[3]], FONT_MONO, 8 * s, TMP.a:set(a.x + 2 * s, a.y + (i - 1) * bhS), TELE_COLOR[c[3]]) end
+          if B then drawText(H.delta, FONT_MONO, 8 * s, TMP.a:set(a.x + 2 * s, a.y + #CHANNELS * bhS), COLOR_TITLE) end
+        else
+          drawText((A and not A.busy) and H.noTrace or H.loading, FONT_MONO, 9 * s, TMP.a:set(a.x + 4 * s, a.y + 4 * s), COLOR_OFF)
+        end
+        y = b.y + 6 * s
+        local la = A and A.lap
+        row(p1, y, s, { { 'A', 14, B and COLOR_A or COLOR_TITLE }, { lapLabel(la), 30, B and COLOR_A or COLOR_TITLE, false, FONT_TEXT } })
+        y = y + ROW * s
+        if P.mark and P.mark ~= P.lapId then
+          local lb = P.L[P.mark] and P.L[P.mark].lap
+          row(p1, y, s, { { 'B', 14, COLOR_B }, { lapLabel(lb) .. (P.over and '' or (' · ' .. H.alone)), 30, COLOR_B, false, FONT_TEXT } })
+        end
+        y = y + ROW * s
+        if la then
+          row(p1, y, s, { { string.format('%s %s · %s %s · %s %s', H.hdrFuel, la.fuel and string.format('%.1f', tonumber(la.fuel) or 0) or '-', H.hdrTyre, cell(la.compound),
+            H.airRoad, string.format('%s/%s', la.air and string.format('%.0f', tonumber(la.air) or 0) or '-', la.road and string.format('%.0f', tonumber(la.road) or 0) or '-')), 14, COLOR_DIM } })
+          y = y + ROW * s
+          row(p1, y, s, { { string.format('%s %s · %s %s · %s %s', H.life, cell(la.tyre_life), H.km, cell(la.tyre_km), H.press, cell(la.pressure)), 14, COLOR_DIM } })
+        end
+        y = y + ROW * s
+      end
+      y = math.max(y, p2.y - (ROW + 4) * s)
+      local msg = P.busy and H.loading or P.err and H.down or (#list - fixed == 0 and P.page ~= 'lap') and H.none or nil
+      if msg then
+        drawText(msg, FONT_TEXT, FS * s, TMP.a:set(p1.x + 14 * s, y), P.err and RED or COLOR_DIM)
+        if P.err then Drag.clickable(vec2(p1.x + 10 * s, y), vec2(p2.x - 60 * s, y + ROW * s), reload) end
+      end
+      if P.page ~= 'lap' and #list - fixed > LIST then
+        drawTextRight(string.format('%d-%d / %d', P.top + 1, math.min(P.top + LIST, #list - fixed), #list - fixed), FONT_MONO, 9 * s, p2.x - 54 * s, y, COLOR_DIM)
+        stepBox('-', vec2(p2.x - 48 * s, y), s, function() P.top = math.max(P.top - LIST, 0); P.sel = fixed + P.top + 1 end)
+        stepBox('+', vec2(p2.x - 30 * s, y), s, function() P.top = P.top + LIST; P.sel = math.min(fixed + P.top + 1, #list) end)
+      end
+      Drag.icons('report', p1, p2, s)
+    end
+  end)()
   return function(car, w, h, s)
     local line, sector = Desktop.recent('line'), Desktop.recent('sector')
     if shown('race', car.isInPitlane or line) then raceScreen(car, w, h, s) end
@@ -13931,6 +14512,7 @@ float4 main(PS_IN pin) {
     if shown('cockpit', car.isInPitlane) then cockpitScreen(car, w, h, s) end
     if shown('perf', false) then perfScreen(car, w, h, s) end
     if shown('calc', false) then calcScreen(car, w, h, s) end
+    if shown('report', false) then reportScreen(car, w, h, s) end
   end
 end)()
 local KmrEvents = (function()
@@ -15216,9 +15798,8 @@ local drawDesktopUI = (function()
     local parts = { TEXTS.sessionName[sim.raceSessionType] or '-' }
     parts[#parts + 1] = string.format(TEXTS.dirSessionTime, hms(sessionElapsedMs()), hms(CarRead.num(sim.sessionTimeLeft)))
     local lead = 0
-    for i = 0, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and (i == 0 or c.isConnected) and not CarRead.isStaff(i) then lead = math.max(lead, CarRead.num(c.lapCount)) end
+    for _, r in ipairs(CarsTick.rows) do
+      if r.on and not r.staff then lead = math.max(lead, CarRead.num(r.c.lapCount)) end
     end
     local total = session and session.laps or 0
     if total > 0 then
@@ -15304,12 +15885,9 @@ local drawDesktopUI = (function()
   local function driversList(w, h, s, dp1, dp2)
     webUpdate()
     local names, on, onCar = {}, {}, {}
-    for i = 0, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and (i == 0 or c.isConnected) then
-        local n = tostring(ac.getDriverName(i) or '')
-        if n ~= '' and not on[n] then on[n] = true; onCar[n] = c; names[#names + 1] = n end
-      end
+    for _, r in ipairs(CarsTick.rows) do
+      local n = r.name
+      if r.on and n ~= '' and not on[n] then on[n] = true; onCar[n] = r.c; names[#names + 1] = n end
     end
     local off = {}
     local webList = Direction.web.list
@@ -15446,21 +16024,7 @@ local drawDesktopUI = (function()
     if cur ~= '' or #out == 0 then out[#out + 1] = cur end
     return out
   end
-  local function penaltyLine(i, c)
-    local items, dsq
-    if i == 0 then
-      items, dsq = state.list.items, state.list.dsq
-    else
-      local peer = RecordSync.peers[c.sessionID]
-      local rec = peer and peer.penalties and Record.decode(peer.penalties.text)
-      if not rec or not Record.sameSession(rec.key, Record.key()) then return TEXTS.dirPenUnknown, COLOR_OFF end
-      local d, list = rec.body:match('^%d+|%d+|%-?%d+|%d+|(%d)|%d|%d+|%d+|%d+|(.*)$')
-      dsq, items = tonumber(d) or 0, {}
-      for text in (list or ''):gmatch('[^;]+') do
-        local it = Rules.itemDecode(text)
-        if it then items[#items + 1] = it end
-      end
-    end
+  local function penaltyText(items, dsq)
     local parts = {}
     for _, it in ipairs(items) do
       parts[#parts + 1] = it.cat:match('^SG%d+$')
@@ -15470,6 +16034,27 @@ local drawDesktopUI = (function()
     if (dsq or 0) > 0 then parts[#parts + 1] = TEXTS.dirPenDsq end
     if #parts == 0 then return TEXTS.dirPenNone, COLOR_DIM end
     return TEXTS.dirPenTitle .. table.concat(parts, '  -  '), (dsq or 0) > 0 and PANEL_COLORS.red or PANEL_COLORS.yellow
+  end
+  local penCache = {}
+  local function penaltyOther(text)
+    local rec = text and Record.decode(text)
+    if not rec or not Record.sameSession(rec.key, Record.key()) then return TEXTS.dirPenUnknown, COLOR_OFF end
+    local d, list = rec.body:match('^%d+|%d+|%-?%d+|%d+|(%d)|%d|%d+|%d+|%d+|(.*)$')
+    local items = {}
+    for x in (list or ''):gmatch('[^;]+') do
+      local it = Rules.itemDecode(x)
+      if it then items[#items + 1] = it end
+    end
+    return penaltyText(items, tonumber(d) or 0)
+  end
+  local function penaltyLine(i, c)
+    if i == 0 then return penaltyText(state.list.items, state.list.dsq) end
+    local text = RecordSync.base.dirPen.bySlot[c.sessionID]
+    local hit = penCache[c.sessionID]
+    if hit and hit.text == text and hit.sid == Session.id then return hit.line, hit.col end
+    local line, col = penaltyOther(text)
+    penCache[c.sessionID] = { text = text, sid = Session.id, line = line, col = col }
+    return line, col
   end
   local function mmss(sec)
     sec = math.max(math.floor(sec or 0), 0)
@@ -15557,11 +16142,11 @@ local drawDesktopUI = (function()
       ac.log('race-control: race direction: KMR login not answered - fell')
     end
     local cars = {}
-    for i = 0, (sim.carsCount or 1) - 1 do
-      local c = ac.getCar(i)
-      if c and c.isConnected and not CarRead.isStaff(i) then cars[#cars + 1] = { i = i, c = c } end
+    for _, r in ipairs(CarsTick.rows) do
+      if r.c.isConnected and not r.staff then cars[#cars + 1] = r end
     end
     local cmd = config.canCommand
+    RecordSync.base.dirPenAsk()
     if Direction.guidJob and state.ui.clock - Direction.guidJob.t > 6 then
       Direction.status, Direction.statusColor = string.format(TEXTS.dirGuidNone, Direction.guidJob.name), PANEL_COLORS.red
       Direction.statusT, Direction.guidJob = state.ui.clock, nil
@@ -15979,12 +16564,14 @@ local drawDesktopUI = (function()
       end
     end
   end
-  local lobbyWin, lobbyOpen, lobbyHud = nil, false, false
+  local lobbyWin, lobbyOpen, lobbyHud, lobbySeen = nil, false, false, {}
   Desktop.lobbyUpdate = function()
-    if config.canCommand then
-      for i = 0, (sim.carsCount or 1) - 1 do
-        local c = ac.getCar(i)
-        if c and (i == 0 or c.isConnected) then seenAdd(tostring(ac.getDriverName(i) or '')) end
+    if config.canCommand and CarsTick.frame then
+      for _, r in ipairs(CarsTick.rows) do
+        if r.on and r.name ~= lobbySeen[r.i] then
+          lobbySeen[r.i] = r.name
+          seenAdd(r.name)
+        end
       end
     end
     if not lobbyHud and ui.onExclusiveHUD then
@@ -16821,18 +17408,14 @@ function script.update(dt)
   Diag.update(car)
   CarRead.updateMotion(car)
   OnlineQueue.web.update()
+  CarsTick.update()
   Connection.update()
   RecordSync.update()
+  SwapRecord.baseLine()
   RecordSync.base.update()
   RecordSync.base.bestUpdate()
   RecordSync.base.serverUpdate()
   RecordSync.base.forecastUpdate()
-  RecordSync.base.rrUpdate()
-  RecordSync.base.stratUpdate()
-  RecordSync.base.planUpdate()
-  RecordSync.base.boxUpdate()
-  RecordSync.base.statusUpdate()
-  RecordSync.base.elecUpdate()
   RecordSync.base.setupTabUpdate()
   RecordSync.base.setupPushUpdate()
   if state.hold and serverTimeMs() >= state.hold.untilMs then
@@ -16856,8 +17439,6 @@ function script.update(dt)
   if not swapAllowed then sw.allowT = nil elseif not sw.allowT then sw.allowT = state.ui.clock end
   if not inPit then sw.remaining = nil end
   sw.prevInPit = parked
-  updateSwapRelay()
-  publishOwnList(car)
   PitStops.update(car)
   Rules.raceEndTime(car)
   DriverTable.update()
@@ -16866,23 +17447,6 @@ function script.update(dt)
   if config.mode == 'CSP' then
     PitControl.update(car)
     PitBox.update(car)
-  end
-  if sw.pendingList then
-    local items = sw.pendingList
-    sw.pendingList = nil
-    if config.wrongDriver then
-      ac.log('race-control: swap: penalties of the previous driver not taken over (paid only by that driver)')
-    elseif #state.list.items == 0 then
-      local parts = {}
-      for _, it in ipairs(items) do
-        listAdd(it.cat, it.laps)
-        parts[#parts + 1] = it.cat .. ' DT' .. it.laps
-      end
-      ac.log('race-control: swap: penalties of the previous driver taken over: ' .. table.concat(parts, ', '))
-      rcLog(TEXTS.rc.swap, 'Pending penalties taken over: ' .. table.concat(parts, ', '))
-      state.ui.lastSeq = state.list.seq
-      Rules.finalize()
-    end
   end
   if sw.remaining and state.ui.clock - sw.remainingT >= sw.remaining then
     sw.remaining = nil
@@ -16909,9 +17473,9 @@ function script.update(dt)
     local closed = isPitClosed()
     if config.mode == 'CSP' then
       checkPitExit(0, closed, pitRule)
-    elseif config.isRaceControl then
-      for i = 0, sim.carsCount - 1 do
-        checkPitExit(i, closed, pitRule)
+    elseif config.isRaceControl and CarsTick.frame then
+      for _, r in ipairs(CarsTick.rows) do
+        checkPitExit(r.i, closed, pitRule)
       end
     end
   end
