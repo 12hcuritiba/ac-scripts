@@ -429,7 +429,9 @@ local LANG_PT = {
   scrRadarLoop = '%s - 1 hora em 6 segmentos de 10 min, um por segundo', scrRadarNoTrack = 'Sem a linha da IA nesta pista',
   scrWeatherAnim = 'previsão em segmentos de 10 min', scrWeatherStatic = 'sem previsão', scrWxPage = '< %d/%d >',
   scrWxTime = 'Hora local', scrWxSky = 'Céu', scrWxAir = 'Ar / pista', scrWxWind = 'Vento', scrWxRain = 'Chuva', scrWxNext = 'Próximo',
-  scrEvent = 'EVENTO', scrEventInfo = 'informações', evStarts = ' - inicia %s', evStops = 'Paradas exigidas', evSwaps = 'Trocas de piloto exigidas',
+  scrEvent = 'EVENTO', scrEventInfo = 'informações', evStarts = ' - inicia %s', evRaceN = 'CORRIDA %d',
+  bc = { green = 'Verde', red = 'Vermelha', finished = 'Encerrada', yellowS = 'Amarela · S%d', sess = { [1] = 'Treino', [2] = 'Classificação', [3] = 'Corrida' },
+    raceN = 'Corrida %d', classOf = 'classe %s', lap = 'volta %d', sessEnd = 'Fim da %s' }, evStops = 'Paradas exigidas', evSwaps = 'Trocas de piloto exigidas',
   evStint = 'Stint', evOrder = 'Ordem da parada', evPitSpeed = 'Velocidade no pit lane', evRating = 'Nota KMR',
   flagRed = 'BANDEIRA VERMELHA',
   flagRedLine = 'Reduza - sem ultrapassar - complete a volta na pista, depois o box',
@@ -545,7 +547,8 @@ local LANG_PT = {
     rising = 'Temperatura da pista subindo %d°C.' },
   wxWindFmt = '%.0f km/h %03.0f°', wxRainFmt = '%.0f%% - molhada %.0f%%', wxGripFmt = 'aderência %.0f%%',
   evStintFmt = 'mín %d - máx %d min', evRatingFmt = 'DSQ em %s', posClassFmt = ' - classe P%d %s',
-  tyreLapsFmt = '%d voltas%s', trackGripFmt = '%s - %s', trackWet = 'MOLHADA', trackDry = 'SECA', trackDamp = 'ÚMIDA', trackFlooded = 'ALAGADA',
+  tyreLapsFmt = '%d voltas%s', trackGripFmt = '%s - %s',
+  trackGrip = { DUSTY = 'POEIRENTA', DIRTY = 'SUJA', GREEN = 'VERDE', SLOW = 'LENTA', FAST = 'RÁPIDA', OPTIMUM = 'ÓTIMA' }, trackWet = 'MOLHADA', trackDry = 'SECA', trackDamp = 'ÚMIDA', trackFlooded = 'ALAGADA',
   edPitTag = 'BOX', edTrackTag = 'PISTA', edTrackDesk = 'Área de pista',
   ctlGroup = { elec = 'ELETRÔNICA', engine = 'MOTOR - FREIOS', hybrid = 'HÍBRIDO' },
   ctlBox = { aero = 'AERO', drs = 'DRS', open = 'ABERTO', closed = 'FECHADO', pit = 'BOX', limiter = 'LIMITADOR', on = 'LIG', off = 'DESL',
@@ -1050,6 +1053,19 @@ ac.onSharedEvent(APP_REQUEST, function(data, senderName, senderType, senderID)
   ac.broadcastSharedEvent(APP_ANSWER, text)
 end)
 local SETUP_VALUES = 'amxracing.race-control.setupvalues'
+local KEY_REQUEST = 'amxracing.race-control.key'
+local keyDown = nil
+ac.onSharedEvent(KEY_REQUEST, function(data)
+  if not active then return end
+  local code = tonumber(data)
+  if not code or code < 1 or code > 254 or keyDown then return end
+  ac.sendKeyboardButtonEvent(code, true)
+  keyDown = code
+  setTimeout(function()
+    ac.sendKeyboardButtonEvent(keyDown, false)
+    keyDown = nil
+  end, 0.08)
+end)
 ac.onSharedEvent(SETUP_VALUES, function(data, senderName, senderType)
   if not active or senderType ~= 'server_script' then
     ac.log('race-control app: setup values ignored, sender ' .. tostring(senderName) .. ' / ' .. tostring(senderType) .. (active and '' or ', not the server of the event'))

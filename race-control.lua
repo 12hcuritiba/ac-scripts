@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V195 - 2026.10.18'
+local RC_VERSION = 'V196 - 2026.10.18'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -552,7 +552,9 @@ local TEXTS = {
   scrRadarLoop = '%s - 1 hour in 6 segments of 10 min, one a second', scrRadarNoTrack = 'No AI spline on this track',
   scrWeatherAnim = 'forecast in segments of 10 min', scrWeatherStatic = 'no forecast', scrWxPage = '< %d/%d >',
   scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
-  scrEvent = 'EVENT', scrEventInfo = 'event info', evStarts = ' - starts %s', evStops = 'Pit stops required', evSwaps = 'Driver swaps required',
+  scrEvent = 'EVENT', scrEventInfo = 'event info', evStarts = ' - starts %s', evRaceN = 'RACE %d',
+  bc = { green = 'Green', red = 'Red', finished = 'Finished', yellowS = 'Yellow · S%d', sess = { [1] = 'Practice', [2] = 'Qualifying', [3] = 'Race' },
+    raceN = 'Race %d', classOf = 'class %s', lap = 'lap %d', sessEnd = 'End of %s' }, evStops = 'Pit stops required', evSwaps = 'Driver swaps required',
   evStint = 'Stint', evOrder = 'Pit stop order', evPitSpeed = 'Pit lane speed', evRating = 'KMR rating',
   flagRed = 'RED FLAG',
   flagRedLine = 'Slow down - no overtaking - complete the lap on track, then the pits',
@@ -668,7 +670,8 @@ local TEXTS = {
     rising = 'Track temperature rising %d°C.' },
   wxWindFmt = '%.0f km/h %03.0f deg', wxRainFmt = '%.0f%% - wet %.0f%%', wxGripFmt = 'grip %.0f%%',
   evStintFmt = 'min %d - max %d min', evRatingFmt = 'DSQ at %s', posClassFmt = ' - class P%d %s',
-  tyreLapsFmt = '%d laps%s', trackGripFmt = '%s - %s', trackWet = 'WET', trackDry = 'DRY', trackDamp = 'DAMP', trackFlooded = 'FLOODED',
+  tyreLapsFmt = '%d laps%s', trackGripFmt = '%s - %s',
+  trackGrip = { DUSTY = 'DUSTY', DIRTY = 'DIRTY', GREEN = 'GREEN', SLOW = 'SLOW', FAST = 'FAST', OPTIMUM = 'OPTIMUM' }, trackWet = 'WET', trackDry = 'DRY', trackDamp = 'DAMP', trackFlooded = 'FLOODED',
   edPitTag = 'PIT', edTrackTag = 'TRACK', edTrackDesk = 'Track desktop',
   ctlGroup = { elec = 'ELECTRONICS', engine = 'ENGINE - BRAKES', hybrid = 'HYBRID' },
   ctlBox = { aero = 'AERO', drs = 'DRS', open = 'OPEN', closed = 'CLOSED', pit = 'PIT', limiter = 'LIMITER', on = 'ON', off = 'OFF',
@@ -1356,6 +1359,27 @@ function CarRead.isStaff(i)
   end
   return true
 end
+function CarRead.isTv(i)
+  if not CarRead.isStaff(i) then return false end
+  local s = CarRead.staffIndex and CarRead.staffIndex[i]
+  return s ~= nil and s.what == 'tv'
+end
+CarRead.numberIndex = nil
+function CarRead.number(i)
+  local idx = CarRead.numberIndex
+  if not idx then
+    idx = {}
+    local slotOf, list = ac.getCar.serverSlot, config.slotNumbers
+    if slotOf and list then
+      for k, n in pairs(list) do
+        local c = slotOf(k - 1)
+        if c then idx[c.index] = n end
+      end
+    end
+    CarRead.numberIndex = idx
+  end
+  return idx[i] or ac.getDriverNumber(i) or i
+end
 function CarRead.num(v) return tonumber(v) or 0 end
 function CarRead.flagOn(v)
   return v == true or (type(v) == 'number' and v ~= 0)
@@ -1554,7 +1578,7 @@ local function mmss(seconds, fixed)
   return string.format('%d:%02d', math.floor(s / 60), s % 60)
 end
 local function driverTag()
-  return string.format('#%d %s', ac.getDriverNumber(0) or 0, tostring(ac.getDriverName(0) or ''))
+  return string.format('#%d %s', CarRead.number(0), tostring(ac.getDriverName(0) or ''))
 end
 local function rcLog(what, reason)
   local msg = string.format('%s%s - %s - %s', TEXTS.rcPrefix, what, driverTag(), reason)
@@ -1579,9 +1603,12 @@ do
   local function driver(r)
     local i = r.i
     r.name = tostring(ac.getDriverName(i) or '')
-    r.number = ac.getDriverNumber(i) or i
+    r.number = CarRead.number(i)
     r.team = tostring(ac.getDriverTeam(i) or '')
     r.staff = CarRead.isStaff(i)
+  end
+  function CarsTick.driversAgain()
+    for i in pairs(CarsTick.byIndex) do stale[i] = true end
   end
   local ring, ringN = {}, 0
   local function bySp(a, b)
@@ -2072,6 +2099,22 @@ do
   end
   B.parts, B.track, B.traceOut = {}, nil, {}
   B.beat = {}
+  local beatSent = {}
+  local function beatPush(list, body)
+    if not body or beatSent[list] == body then return end
+    beatSent[list] = body
+    local seq = math.floor(serverTimeMs())
+    B.push(list, seq, Record.encode(list, seq, body))
+  end
+  B.beat[#B.beat + 1] = function()
+    local car = ac.getCar(0)
+    if car then beatPush('sp', string.format('%.4f|%d', CarRead.num(car.splinePosition), car.isInPitlane and 1 or 0)) end
+    if Broadcast and Broadcast.on() then
+      if Broadcast.camsDirty then Broadcast.camsDirty = false beatPush('tvcams', Broadcast.camsText()) end
+      beatPush('tvstate', Broadcast.stateText())
+      beatPush('tvalerts', Broadcast.alertsText())
+    end
+  end
   function B.push(list, seq, text)
     if not on() or list == 'laps' then return end
     local p = { t = math.floor(serverTimeMs()), x = text }
@@ -2512,6 +2555,28 @@ do
         config.staffPits.org, config.staffPits.tv = org, tv
         CarRead.staffIndex, CarRead.staffLogged = nil, {}
       end
+      local bcId = body:match('bcId=([%w%+/=_%-]+)')
+      if bcId and bcId ~= config.bcIdentityText then
+        local ok, t = pcall(function() return JSON.parse(ac.decodeBase64((bcId:gsub('%-', '+'):gsub('_', '/')))) end)
+        if ok and type(t) == 'table' then
+          config.bcIdentity, config.bcIdentityText = t, bcId
+          ac.log('race-control: identity of the broadcast of the event from the base')
+        end
+      end
+      config.eventRaces = tonumber(body:match('races=(%d+)')) or 1
+      config.raceNo = tonumber(body:match('raceNo=(%d+)'))
+      local nums = body:match('numbers=([%d,]*)')
+      if nums and nums ~= '' and nums ~= config.slotNumbersText then
+        local list, k = {}, 0
+        for v in (nums .. ','):gmatch('([^,]*),') do
+          k = k + 1
+          list[k] = tonumber(v)
+        end
+        config.slotNumbers, config.slotNumbersText = list, nums
+        CarRead.numberIndex = nil
+        CarsTick.driversAgain()
+        ac.log('race-control: official numbers of the cars from the tool of the organization: ' .. nums)
+      end
       local req = tonumber(body:match('pitStopsRequired=(%-?%d+)'))
       local race = ac.SessionType.Race
       if req and req ~= config.pitStopsRequiredBy[race] then
@@ -2833,6 +2898,11 @@ do
     local data = '#' .. math.floor(preset or 0) .. ';' .. text
     ac.broadcastSharedEvent(APP_REQUEST, data)
     ac.log('race-control: preset kept by the app: ' .. data)
+  end
+  local KEY_REQUEST = 'amxracing.race-control.key'
+  function AppLink.key(code)
+    ac.broadcastSharedEvent(KEY_REQUEST, tostring(math.floor(code)))
+    ac.log('race-control: key ' .. tostring(code) .. ' asked to the app (broadcast)')
   end
   local pingT = -1e9
   function AppLink.ping()
@@ -3203,7 +3273,7 @@ do
   end
 end
 DICT.rcActions = { REDFLAG = true, RELAX = true, UNLOCK = true, DT = true, HOLD = true, TELEPORT = true, DSQ = true,
-  LOCK = true, FUEL = true, KMR = true }
+  LOCK = true, FUEL = true, KMR = true, TV = true }
 DICT.code80Kinds = { VSC = true, SC = true, ['CODE-80'] = true }
 local function hasAny(text, words)
   for _, word in ipairs(words) do
@@ -3455,7 +3525,7 @@ do
   local function newInfo() return { crash = 0, cut = 0, spin = 0, pen = {} } end
   sessionPart('lap', Lap, function()
     return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false }, last = SESSION_NONE, others = {}, passT = {},
-      best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE }
+      best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false }
   end, { 'splits' })
   local P = {}
   sessionPart('lapWay', P, function()
@@ -3496,12 +3566,13 @@ do
   function Lap.number() return Lap.base + Lap.count end
   function Lap.save()
     Lap.seq = (Lap.seq or 0) + 1
-    Record.save('lap', Lap.seq, string.format('%d|%d|%s|%d|%d|%d', Lap.number(), P.open and P.start and math.floor(P.start) or -1, why(Lap.marks),
-      (P.pit.started or P.pit.left) and 1 or 0, nameCode(ac.getDriverName(0)), P.open and 1 or 0))
+    Record.save('lap', Lap.seq, string.format('%d|%d|%s|%d|%d|%d|%d', Lap.number(), P.open and P.start and math.floor(P.start) or -1, why(Lap.marks),
+      (P.pit.started or P.pit.left) and 1 or 0, nameCode(ac.getDriverName(0)), P.open and 1 or 0, Lap.over and 1 or 0))
   end
   local function apply(body, seq)
-    local n, start, m, out, driver, open = tostring(body or ''):match('^(%d+)|(%-?%d+)|(%a*)|?(%d?)|?(%d*)|?(%d?)')
+    local n, start, m, out, driver, open, over = tostring(body or ''):match('^(%d+)|(%-?%d+)|(%a*)|?(%d?)|?(%d*)|?(%d?)|?(%d?)')
     if not n then return end
+    if over == '1' then Lap.over = true end
     Lap.seq = math.max(Lap.seq or 0, seq or 0)
     Lap.base = tonumber(n) - Lap.count
     P.open = tonumber(start) >= 0 and open ~= '0'
@@ -3641,6 +3712,12 @@ do
     P.lineT = state.ui.clock
     Lap.save()
   end
+  function Lap.finish()
+    if Lap.over then return end
+    Lap.over, P.open, P.start = true, false, nil
+    ac.log('race-control: lap: chequered flag of this car: no lap counts from here (decision 953)')
+    Lap.save()
+  end
   local function open(car, t)
     P.open, P.start, P.secT, P.broken, P.trace, P.info = true, t, {}, false, {}, newInfo()
     Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel = false, false, false
@@ -3681,7 +3758,9 @@ do
     P.pit.wasIn = car.isInPitlane == true
     spinWatch(car)
     local closed = false
-    if (crossT or gameLine) and not P.open then
+    if Lap.over then
+      if crossT or gameLine then P.prog = crossT and math.max(sp, 0) or 0 end
+    elseif (crossT or gameLine) and not P.open then
       open(car, crossT or now)
       P.prog = crossT and math.max(sp, 0) or 0
       if crossT then along(0, sp, crossT, now) end
@@ -4251,7 +4330,7 @@ do
   local function gapM(a, b)
     return ((CarRead.num(b.splinePosition) - CarRead.num(a.splinePosition)) % 1) * (tonumber(sim.trackLengthM) or 0)
   end
-  local function tag(i) return string.format('#%s', tostring(ac.getDriverNumber(i) or i)) end
+  local function tag(i) return string.format('#%s', tostring(CarRead.number(i))) end
   local function byPlace()
     local out = {}
     for i, p in pairs(Start.locked) do out[p] = i end
@@ -7753,8 +7832,13 @@ do
       if stT and state.formationStart and state.formationStart(tonumber(stT)) then
         TrackList.changed()
       end
+      local tv = body:match('^%s*[Rr][Cc]%s+[Tt][Vv]%s+(.+)$')
+      if tv and Broadcast and Broadcast.on() then
+        local okTv = Broadcast.command(tv)
+        ac.log('race-control: broadcast command ' .. tv .. (okTv and '' or ' (not understood)'))
+      end
       local action, id, value = body:match('^%s*[Rr][Cc]%s+(%a+)%s+(%d+)%s*(%S*)')
-      if action and not red and isMine(id) then
+      if action and not red and not tv and isMine(id) then
         action, value = action:upper(), value:upper()
         local ok
         if action == 'RELAX' then ok = relax(value, reason)
@@ -7921,7 +8005,7 @@ do
     return ((pos - CarRead.num(car.splinePosition)) % 1) * len
   end
   local function carTag(i)
-    return string.format('#%d', ac.getDriverNumber(i) or i)
+    return string.format('#%d', CarRead.number(i))
   end
   local SWAP_RESEND = 5
   local sendRedSwap = ac.OnlineEvent({
@@ -8152,7 +8236,7 @@ do
       elseif clock - t >= config.flags.yellowGiveBackSeconds then
         Flags.giveBack[i] = nil
         ac.log(string.format('race-control: yellow flag overtake of car %d not given back: stop & go', i))
-        Rules.sgAddSeconds(config.flags.yellowPassSG, string.format(TEXTS.yellowPassSG, carTag(i)), 'YP' .. string.format('%d', ac.getDriverNumber(i) or i))
+        Rules.sgAddSeconds(config.flags.yellowPassSG, string.format(TEXTS.yellowPassSG, carTag(i)), 'YP' .. string.format('%d', CarRead.number(i)))
       end
     end
     if not Flags.localYellow or state.code80 or Flags.yellowOwn then
@@ -8315,6 +8399,7 @@ do
     if now ~= was then
       Flags.ending = now
       if now then rcLog(TEXTS.rc.sessionEnd, now) end
+      if now == 'finished' then Lap.finish() end
     end
   end
   local START_LIGHTS_FROM = 22
@@ -8763,7 +8848,7 @@ do
       t0Sent = -1e9, firstAligned = SESSION_NONE, pitStart = false, missed = false, armed = false, goT = SESSION_NONE, gridAt = SESSION_NONE,
       leftGrid = false, speedWarn = SESSION_NONE, trackSent = SESSION_NONE, trackT = -1e9, logged = false }
   end)
-  local function tag(i) return string.format('#%s', tostring(ac.getDriverNumber(i) or i)) end
+  local function tag(i) return string.format('#%s', tostring(CarRead.number(i))) end
   local function lapLen() return tonumber(sim.trackLengthM) or 0 end
   local function gapM(a, b) return ((CarRead.num(b.splinePosition) - CarRead.num(a.splinePosition)) % 1) * lapLen() end
   local function byPlace()
@@ -12010,8 +12095,11 @@ local drawStatus
   F1.NOSE_EXTRA2, F1.EXTRA2_Y = 0.6, -25
   F1.SHIFT = -4
   F1.WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }
+  F1.TRUMPET_Y, F1.TRUMPET_R = 9, 1.3
+  F1.REAR_UP = F1.TRUMPET_Y - F1.TRUMPET_R
+  F1.DIRT_GAP, F1.DIRT_W, F1.DIRT_TRACK = 1.5, 1.5, rgbm(1, 1, 1, 0.1)
   F1.RING, F1.at = { vec2(0, 0), vec2(0, 0), vec2(0, 0), vec2(0, 0) }, 0
-  local function drawF1(cx, cy, s)
+  local function drawF1(cx, cy, s, car)
     local body = COLOR_TITLE
     local function P(x, y)
       F1.at = F1.at % 4 + 1
@@ -12038,21 +12126,31 @@ local drawStatus
     ui.pathStroke(body, true, 1)
     local a, b = P(-tip + 0.3, F1.BODY[2]), P(tip - 0.3, F1.BODY[2])
     ui.drawRectFilled(vec2(a.x, a.y - 1), b, rgbm(1, 1, 1, 1))
-    for _, wl in ipairs(F1.WHEELS) do
+    local wh = car.wheels or {}
+    for n, wl in ipairs(F1.WHEELS) do
       local mid = (wl[3] + wl[4]) / 2
+      local up = n == 2 and F1.REAR_UP or mid - 4
       for _, sd in ipairs({ -1, 1 }) do
         local x1, x2 = sd < 0 and -wl[2] or wl[1], sd < 0 and -wl[1] or wl[2]
         ui.drawRectFilled(P(x1, wl[3]), P(x2, wl[4]), body, 2 * s)
-        ui.drawLine(P(sd * wl[1], mid), P(sd * half(mid - 4), mid - 4), body, 1)
+        ui.drawLine(P(sd * wl[1], mid), P(sd * half(up), up), body, 1)
         ui.drawLine(P(sd * wl[1], mid), P(sd * half(mid + 4), mid + 4), body, 1)
+        local w = wh[(n - 1) * 2 + (sd < 0 and 0 or 1)]
+        local k = math.min(math.max(num(w and w.tyreDirty), 0), 1)
+        local bx1, bx2 = sd * (wl[2] + F1.DIRT_GAP), sd * (wl[2] + F1.DIRT_GAP + F1.DIRT_W)
+        if bx1 > bx2 then bx1, bx2 = bx2, bx1 end
+        ui.drawRectFilled(P(bx1, wl[3]), P(bx2, wl[4]), F1.DIRT_TRACK, 1)
+        if k > 0 then
+          ui.drawRectFilled(P(bx1, wl[4] - (wl[4] - wl[3]) * k), P(bx2, wl[4]), k > 0.5 and COLOR_WARN or COLOR_OK, 1)
+        end
       end
     end
     ui.drawRect(P(-4, -9.2), P(4, 5.2), body, 2 * s, nil, 1)
     ui.drawSimpleLine(P(-2.5, -7), P(2.5, -7), body, 1)
     ui.drawRect(P(-4, 6.5), P(4, 24), body, 0, nil, 1)
     for j = 0, 3 do
-      ui.drawCircle(P(-2, 9 + j * 3.6), 1.3 * s, body, 10, 1)
-      ui.drawCircle(P(2, 10.8 + j * 3.6), 1.3 * s, body, 10, 1)
+      ui.drawCircle(P(-2, F1.TRUMPET_Y + j * 3.6), F1.TRUMPET_R * s, body, 10, 1)
+      ui.drawCircle(P(2, F1.TRUMPET_Y + 1.8 + j * 3.6), F1.TRUMPET_R * s, body, 10, 1)
     end
     for _, ex in ipairs({ { -3, 36 }, { -1.2, 39.5 }, { 1.2, 39.5 }, { 3, 36 } }) do
       ui.drawSimpleLine(P(ex[1], 24), P(ex[1], ex[2]), body, 1)
@@ -12156,7 +12254,7 @@ local drawStatus
     drawText(string.format('%s %.0f', TEXTS.side.left, vL), FONT_MONO, bf, TMP.a:set(p1.x + 19 * s, cy - 6 * s), cL)
     drawTextRight(string.format('%s %.0f', TEXTS.side.right, vR), FONT_MONO, bf, p2.x - 19 * s, cy - 6 * s, cR)
     vbar(p2.x - 15 * s, kR, cR)
-    drawF1(cx, cy + F1.SHIFT * s, s)
+    drawF1(cx, cy + F1.SHIFT * s, s, car)
     Drag.icons('status', p1, p2, s)
   end
   local function shown(group, car)
@@ -12411,7 +12509,7 @@ local drawRaceScreens = (function()
     y = y + 8 * s
     local best = own.ms
     local sessionBest, who = Lap.sessionBest()
-    local owner = who and ('  #' .. tostring(ac.getDriverNumber(who) or who)) or ''
+    local owner = who and ('  #' .. tostring(CarRead.number(who))) or ''
     local optimal = 0
     for k = 0, 2 do optimal = (optimal >= 0 and own.s[k]) and optimal + own.s[k] or -1 end
     if optimal < 0 then optimal = 0 end
@@ -13229,15 +13327,19 @@ float4 main(PS_IN pin) {
         local total = ss.durationMinutes and ss.durationMinutes > 0 and hms(ss.durationMinutes * 60000)
           or (ss.laps and ss.laps > 0 and string.format(TEXTS.lapsShort, ss.laps)) or '-'
         local now = i == sim.currentSessionIndex
-        if now then total = hms(sessionElapsedMs()) .. ' / ' .. total end
         local starts = RecordSync.base.forecast.starts
-        local at = starts and starts[i]
-        if not at and now and not Session.beforeStart() then
-          local t = (CarRead.num(sim.timeHours) * 3600 + CarRead.num(sim.timeMinutes) * 60 + CarRead.num(sim.timeSeconds)
-            - math.floor(sessionElapsedMs() / 1000 * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
-          at = string.format('%02d:%02d', math.floor(t / 3600), math.floor(t / 60) % 60)
+        local races = ss.type == ac.SessionType.Race and math.max(math.floor(tonumber(config.eventRaces) or 1), 1) or 1
+        for n = 1, races do
+          local on = now and (races == 1 or (config.raceNo or 1) == n)
+          local at = n == 1 and starts and starts[i] or nil
+          if not at and on and not Session.beforeStart() then
+            local t = (CarRead.num(sim.timeHours) * 3600 + CarRead.num(sim.timeMinutes) * 60 + CarRead.num(sim.timeSeconds)
+              - math.floor(sessionElapsedMs() / 1000 * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
+            at = string.format('%02d:%02d', math.floor(t / 3600), math.floor(t / 60) % 60)
+          end
+          local name = races > 1 and string.format(TEXTS.evRaceN, n) or (TEXTS.sessionName[ss.type] or '-')
+          out[#out + 1] = { name .. (at and string.format(TEXTS.evStarts, at) or ''), on and (hms(sessionElapsedMs()) .. ' / ' .. total) or total, on }
         end
-        out[#out + 1] = { (TEXTS.sessionName[ss.type] or '-') .. (at and string.format(TEXTS.evStarts, at) or ''), total, now }
       end
     end
     out[#out + 1] = false
@@ -13339,7 +13441,7 @@ float4 main(PS_IN pin) {
     local cmp = LapsView.cmp and all[LapsView.cmp] or nil
     local width = cmp and 760 or 600
     local n = LapsView.rows
-    local p1, p2, y = frame('laps', w, h, s, n + 1.4, string.format(TEXTS.scrLapsCar, tostring(ac.getDriverNumber(0) or '')), nil, width)
+    local p1, p2, y = frame('laps', w, h, s, n + 1.4, string.format(TEXTS.scrLapsCar, tostring(CarRead.number(0))), nil, width)
     local x = p2.x - 14 * s
     local function button(t, on, fn)
       local tw = textWidth(t, FONT_MONO, 9 * s)
@@ -13563,7 +13665,7 @@ float4 main(PS_IN pin) {
     local rating = Audit.rating and Audit.num(Audit.rating) or '-'
     for _, l in ipairs({
       { TEXTS.scrTyres, string.format(TEXTS.tyreLapsFmt, state.tyreLaps[0] or 0, life and string.format(' - %d%%', math.floor(life)) or '') },
-      { TEXTS.scrTrack, string.format(TEXTS.trackGripFmt, wet, CarRead.gripName(CarRead.num(sim.roadGrip) * 100)) },
+      { TEXTS.scrTrack, string.format(TEXTS.trackGripFmt, wet, TEXTS.trackGrip[CarRead.gripName(CarRead.num(sim.roadGrip) * 100)]) },
       { TEXTS.scrPending, pen and pen.value or '-', pen and ORANGE },
       { TEXTS.scrKmr, kmr, Audit.points and Audit.points >= config.kmrPoints.limit * 0.8 and RED or nil },
       { TEXTS.scrKmrRating, rating, rt.on and Audit.rating and Audit.rating <= rt.dsqAt and RED or nil },
@@ -13700,7 +13802,7 @@ float4 main(PS_IN pin) {
     local st = small and tostring(kmh) or string.format('%d km/h', kmh)
     local ssz = (small and 6.5 or 9) * s
     local sw = textWidth(st, FONT_MONO, ssz)
-    drawText(st, FONT_MONO, ssz, TMP.a:set(c.x - sw / 2, small and (c.y + 1 * s) or (c.y - r + 8 * s)), COLOR_DIM)
+    drawText(st, FONT_MONO, ssz, TMP.a:set(c.x - sw / 2, small and (c.y + 4 * s) or (c.y - r + 8 * s)), COLOR_DIM)
     Drag.icons('telemetry', p1, p2, s)
   end
   local Perf = { fps = 0, cpu = 0, gpu = 0, top = 60 }
@@ -14501,6 +14603,600 @@ float4 main(PS_IN pin) {
         stepBox('+', vec2(p2.x - 30 * s, y), s, function() P.top = P.top + LIST; P.sel = math.min(fixed + P.top + 1, #list) end)
       end
       Drag.icons('report', p1, p2, s)
+    end
+  end)()
+  ;(function()
+    Broadcast = Broadcast or {}
+    local BC = Broadcast
+    local KEEP = 'rc.tv'
+    local KEY_ESC, KEY_F2, KEY_ADD, KEY_SUB = 27, 113, 107, 109
+    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 82, bar = true, logos = 'BOTH', defSet = nil }
+    BC.cam = { mode = 'start', set = nil, cam = nil, fov = nil, free = false, freeFov = nil }
+    BC.wait = { on = false, mode = 'NAV', set = nil, cam = nil, secs = 8, at = 0, k = 0 }
+    do
+      local kept = tostring(ac.storage[KEEP] or '')
+      for k, v in kept:gmatch('(%w+)=([^;]*)') do
+        if BC.opt[k] ~= nil or k == 'defSet' then
+          if k == 'op' then BC.opt.op = tonumber(v) or 82
+          elseif k == 'bar' then BC.opt.bar = v ~= '0'
+          elseif k == 'defSet' then BC.opt.defSet = tonumber(v)
+          else BC.opt[k] = v end
+        end
+      end
+    end
+    local function keep()
+      local o = BC.opt
+      ac.storage[KEEP] = string.format('place=%s;legend=%s;fix=%s;time=%s;op=%d;bar=%d;logos=%s;defSet=%s', o.place, o.legend, o.fix, o.time, o.op,
+        o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '')
+    end
+    function BC.on() return CarRead.isTv(0) end
+    local sets = nil
+    function BC.sets()
+      if sets then return sets end
+      sets = {}
+      local n = math.max(math.floor(CarRead.num(sim.trackCamerasSetsCount)), 0)
+      for k = 0, n - 1 do
+        local file = k == 0 and 'cameras.ini' or string.format('cameras_%d.ini', k)
+        local ok, ini = pcall(ac.INIConfig.trackData, file)
+        local set = { index = k, name = file, cams = {} }
+        if ok and ini then
+          set.name = tostring(ini:get('HEADER', 'SET_NAME', file))
+          local count = math.floor(tonumber(ini:get('HEADER', 'CAMERA_COUNT', 0)) or 0)
+          for c = 0, count - 1 do
+            local sec = 'CAMERA_' .. c
+            set.cams[#set.cams + 1] = { idx = c, name = tostring(ini:get(sec, 'NAME', sec)), pos = ini:get(sec, 'POSITION', vec3()),
+              fwd = ini:get(sec, 'FORWARD', vec3(0, 0, 1)), up = ini:get(sec, 'UP', vec3(0, 1, 0)), minFov = tonumber(ini:get(sec, 'MIN_FOV', 30)) or 30,
+              maxFov = tonumber(ini:get(sec, 'MAX_FOV', 30)) or 30, inP = tonumber(ini:get(sec, 'IN_POINT', 0)) or 0,
+              outP = tonumber(ini:get(sec, 'OUT_POINT', 0)) or 0, fixed = tonumber(ini:get(sec, 'IS_FIXED', 0)) == 1 }
+          end
+        end
+        sets[#sets + 1] = set
+      end
+      ac.log(string.format('race-control: broadcast: %d sets of cameras of the track read', #sets))
+      return sets
+    end
+    function BC.setByName(name)
+      for _, s in ipairs(BC.sets()) do if s.name == name then return s end end
+      return nil
+    end
+    local function setOf(k) return BC.sets()[(tonumber(k) or -1) + 1] end
+    local grab = nil
+    local function release()
+      if grab then pcall(function() grab:dispose() end) end
+      grab = nil
+    end
+    local function trackMode(k)
+      ac.setCurrentCamera(ac.CameraMode.Track)
+      if k then ac.setCurrentTrackCamera(k) end
+    end
+    local function putCam(setK, camK, why)
+      local s = setOf(setK)
+      local c = s and s.cams[(tonumber(camK) or -1) + 1]
+      if not c then return false end
+      release()
+      trackMode(s.index)
+      local g, err = ac.grabCamera('race-control broadcast')
+      if not g then
+        ac.log('race-control: broadcast: the camera could not be taken: ' .. tostring(err))
+        return false
+      end
+      grab = g
+      BC.cam.mode, BC.cam.set, BC.cam.cam, BC.cam.fov, BC.cam.free = why or 'cam', s.index, c.idx, c.maxFov, false
+      return true
+    end
+    BC.camNow = function()
+      local s = BC.cam.set and setOf(BC.cam.set)
+      return s and BC.cam.cam and s.cams[BC.cam.cam + 1] or nil
+    end
+    local look = vec3()
+    local function grabUpdate()
+      if not grab then return end
+      local c = BC.camNow()
+      if not c or not grab:active() then release() return end
+      local tr = grab.transform
+      tr.position:set(c.pos)
+      local waiting = BC.cam.mode == 'wait'
+      local car = ac.getCar(sim.focusedCar)
+      if c.fixed or waiting or not car then
+        tr.look:set(c.fwd)
+      else
+        local p = car.position
+        look:set(p.x - c.pos.x, p.y + 0.6 - c.pos.y, p.z - c.pos.z)
+        if look:length() > 0.01 then tr.look:set(look:normalize()) end
+      end
+      tr.up:set(0, 1, 0)
+      grab.fov = math.min(math.max(BC.cam.fov or c.maxFov, 2), 120)
+    end
+    local function slotCar(slot)
+      for _, r in ipairs(CarsTick.rows) do if r.c and r.c.sessionID == slot then return r.i end end
+      return nil
+    end
+    local function stateSave()
+      keep()
+      BC.stateDirty = true
+    end
+    function BC.command(words)
+      local w = {}
+      for x in tostring(words or ''):gmatch('%S+') do w[#w + 1] = x end
+      local a = (w[1] or ''):upper()
+      if a == 'FOCUS' then
+        local i = slotCar(tonumber(w[2]))
+        if not i then return false end
+        ac.focusCar(i)
+        BC.sel = i
+      elseif a == 'SET' then
+        local s = setOf(w[2])
+        if not s then return false end
+        release()
+        trackMode(s.index)
+        BC.cam.mode, BC.cam.set, BC.cam.cam, BC.cam.free = 'set', s.index, nil, false
+      elseif a == 'CAM' then
+        if not putCam(w[2], w[3], 'cam') then return false end
+      elseif a == 'AUTO' then
+        release()
+        trackMode(BC.cam.set)
+        BC.cam.mode, BC.cam.cam, BC.cam.free = 'set', nil, false
+      elseif a == 'RANDOM' then
+        release()
+        trackMode(nil)
+        AppLink.key(KEY_F2)
+        BC.cam.mode, BC.cam.cam, BC.cam.free = 'random', nil, false
+      elseif a == 'FREE' then
+        local on = (w[2] or ''):upper() ~= 'OFF'
+        release()
+        if on then
+          ac.setCurrentCamera(ac.CameraMode.Free)
+          BC.cam.freeFov = CarRead.num(ac.getCameraFOV()) > 0 and CarRead.num(ac.getCameraFOV()) or 40
+          BC.cam.mode = 'free'
+        else
+          trackMode(BC.cam.set)
+          BC.cam.mode = 'set'
+        end
+        BC.cam.free = on
+      elseif a == 'MOVE' or a == 'LOOK' then
+        if not BC.cam.free then return false end
+        local d = (w[2] or ''):upper()
+        local pos, fwd, up, side = ac.getCameraPosition(), ac.getCameraForward(), ac.getCameraUp(), ac.getCameraSide()
+        local step = tonumber(w[3]) or 2
+        if a == 'MOVE' then
+          local v = d == 'F' and fwd or d == 'B' and -fwd or d == 'R' and side or d == 'L' and -side or d == 'U' and up or d == 'D' and -up or nil
+          if not v then return false end
+          ac.setCameraPosition(pos + v * step)
+        else
+          local r = math.rad(tonumber(w[3]) or 5)
+          local v = d == 'L' and (fwd * math.cos(r) - side * math.sin(r)) or d == 'R' and (fwd * math.cos(r) + side * math.sin(r))
+            or d == 'U' and (fwd * math.cos(r) + up * math.sin(r)) or d == 'D' and (fwd * math.cos(r) - up * math.sin(r)) or nil
+          if not v then return false end
+          ac.setCameraDirection(v:normalize(), vec3(0, 1, 0))
+        end
+      elseif a == 'FOV' then
+        local more = (w[2] or '') == '+'
+        if grab then
+          BC.cam.fov = math.min(math.max((BC.cam.fov or 30) + (more and 2 or -2), 2), 120)
+        elseif BC.cam.free then
+          BC.cam.freeFov = math.min(math.max((BC.cam.freeFov or 40) + (more and 2 or -2), 5), 120)
+          ac.setCameraFOV(BC.cam.freeFov)
+        else
+          AppLink.key(more and KEY_ADD or KEY_SUB)
+        end
+      elseif a == 'WAIT' then
+        local m = (w[2] or ''):upper()
+        if m == 'OFF' then
+          BC.wait.on = false
+          if BC.cam.mode == 'wait' then release(); trackMode(BC.cam.set); BC.cam.mode = 'set' end
+        elseif m == 'NAV' or m == 'FIX' then
+          BC.wait.on, BC.wait.mode, BC.wait.set = true, m, tonumber(w[3])
+          BC.wait.cam = m == 'FIX' and tonumber(w[4]) or nil
+          BC.wait.secs = m == 'NAV' and math.max(tonumber(w[4]) or 8, 2) or BC.wait.secs
+          BC.wait.at, BC.wait.k = 0, 0
+        else return false end
+      elseif a == 'DEF' then
+        BC.opt.defSet = tonumber(w[2])
+      elseif a == 'BAR' then
+        local k, v = (w[2] or ''):upper(), w[3] or ''
+        if k == 'PLACE' then BC.opt.place = v ~= '' and v or 'ALL'
+        elseif k == 'LEGEND' then BC.opt.legend = v:upper()
+        elseif k == 'FIX' then BC.opt.fix = v:upper()
+        elseif k == 'TIME' then BC.opt.time = v:upper()
+        elseif k == 'OP' then BC.opt.op = math.min(math.max(tonumber(v) or 82, 40), 100)
+        elseif k == 'SHOW' then BC.opt.bar = v ~= '0'
+        elseif k == 'LOGOS' then BC.opt.logos = v:upper()
+        else return false end
+      elseif a == 'QUIT' then
+        ac.log('race-control: broadcast: the game closed by the room of the broadcast')
+        ac.shutdownAssettoCorsa()
+      else
+        return false
+      end
+      stateSave()
+      return true
+    end
+    local escWas = false
+    function BC.update()
+      if not BC.on() then return end
+      ac.hideMouseCursor()
+      local esc = ac.isKeyDown(KEY_ESC) == true
+      if esc and not escWas then
+        ac.log('race-control: broadcast: ESC, the game closed')
+        ac.shutdownAssettoCorsa()
+      end
+      escWas = esc
+      if BC.cam.mode == 'start' then
+        BC.cam.mode = 'set'
+        local s = BC.setByName('12hTV Fixed')
+        if s and #s.cams > 0 then putCam(s.index, #s.cams - 1, 'cam') end
+        BC.stateDirty, BC.camsDirty = true, true
+      end
+      local W = BC.wait
+      if W.on then
+        local onTrack = false
+        for _, r in ipairs(CarsTick.rows) do if r.i > 0 and r.on and not r.staff and r.c and not r.c.isInPitlane then onTrack = true break end end
+        local s = W.set and setOf(W.set)
+        if not onTrack and s and #s.cams > 0 then
+          if W.mode == 'FIX' then
+            if W.cam and (BC.cam.mode ~= 'wait' or BC.cam.cam ~= W.cam) then putCam(s.index, W.cam, 'wait')
+            elseif not W.cam and BC.cam.mode ~= 'waitset' then release(); trackMode(s.index); BC.cam.mode, BC.cam.set = 'waitset', s.index end
+          elseif state.ui.clock >= W.at then
+            W.at = state.ui.clock + W.secs
+            local order = {}
+            for _, c in ipairs(s.cams) do order[#order + 1] = c end
+            table.sort(order, function(a, b) return a.inP < b.inP end)
+            W.k = W.k % #order + 1
+            putCam(s.index, order[W.k].idx, 'wait')
+          end
+        end
+      end
+      grabUpdate()
+    end
+    local INK = rgbm(0.03, 0.035, 0.045, 1)
+    local PAPER = rgbm(0.96, 0.97, 0.98, 1)
+    local DIMW = rgbm(1, 1, 1, 0.62)
+    local TIMEBG = rgbm(0.85, 0.86, 0.88, 1)
+    local TWELVE = rgbm(0.12, 0.41, 0.81, 1)
+    local FLAGC = { green = rgbm(0.18, 0.8, 0.44, 1), yellow = rgbm(1, 0.82, 0.18, 1), red = rgbm(0.9, 0.15, 0.18, 1), white = PAPER }
+    local CLASS_DEFAULT = { rgbm(0.74, 0.84, 0.25, 1), rgbm(1, 0.54, 0.24, 1), rgbm(0.36, 0.77, 1, 1), rgbm(0.85, 0.45, 1, 1) }
+    local TYRE_DEFAULT = { S = rgbm(0.9, 0.28, 0.3, 1), M = rgbm(0.95, 0.83, 0.23, 1), H = rgbm(0.95, 0.95, 0.95, 1) }
+    local colorCache = {}
+    local function hexColor(hex)
+      local c = colorCache[hex]
+      if c then return c end
+      local r, g, b = tostring(hex or ''):match('^#?(%x%x)(%x%x)(%x%x)$')
+      c = r and rgbm(tonumber(r, 16) / 255, tonumber(g, 16) / 255, tonumber(b, 16) / 255, 1) or nil
+      colorCache[hex] = c or false
+      return c
+    end
+    local function fonts()
+      local barlow, rajdhani
+      for _, f in ipairs(Desktop.text.sets) do
+        if f.id == 'barlow' then barlow = f.title end
+        if f.id == 'rajdhani' then rajdhani = f.title end
+      end
+      return (barlow or FONT_TITLE) .. ';Style=Italic', rajdhani or FONT_MONO
+    end
+    local function identity() return config.bcIdentity or {} end
+    local function classStyle(key)
+      local id = identity()
+      for n, c in ipairs(id.classes or {}) do
+        if c.key == key then return (c.name ~= nil and c.name ~= '') and c.name or key, hexColor(c.color) or CLASS_DEFAULT[(n - 1) % #CLASS_DEFAULT + 1] end
+      end
+      local n = 0
+      for _, k in ipairs(BC.classKeys or {}) do n = n + 1 if k == key then break end end
+      return key, CLASS_DEFAULT[(math.max(n, 1) - 1) % #CLASS_DEFAULT + 1]
+    end
+    local function tyreStyle(name)
+      local id = identity()
+      for _, t in ipairs(id.tyres or {}) do
+        if t.name == name then return t.sigla or '?', hexColor(t.color) or PAPER end
+      end
+      local words = {}
+      for x in tostring(name or ''):gmatch('%a+') do words[#words + 1] = x end
+      local sig = #words >= 2 and (words[1]:sub(1, 1) .. words[2]:sub(1, 1)):upper() or tostring(name or '?'):sub(1, 1):upper()
+      return sig, TYRE_DEFAULT[sig] or PAPER
+    end
+    local function short(name)
+      local first, rest = tostring(name or ''):match('^(%S+)%s+(.+)$')
+      return first and (first:sub(1, 1) .. '. ' .. rest) or tostring(name or '')
+    end
+    local function flagNow()
+      local T = TEXTS.bc
+      if Session.phase == 'resultados' or Session.phase == 'terminou' then return 'end', T.finished end
+      if state.redFlag then return 'red', T.red end
+      if state.code80 then return 'code', TEXTS.flagCode80[state.code80] or state.code80 end
+      for i, inc in pairs(Flags.incidents) do
+        if inc and inc.pos and not CarRead.isStaff(i) then
+          local sec, sp = 1, Lap.splits or {}
+          for k, v in ipairs(sp) do if inc.pos >= v then sec = k + 1 end end
+          return 'yellow', string.format(T.yellowS, sec)
+        end
+      end
+      return 'green', T.green
+    end
+    local function sessionLine()
+      local T = TEXTS.bc
+      local ss = ac.getSession(Session.index)
+      local type = ss and ss.type or sim.raceSessionType
+      local name = T.sess[type] or '-'
+      if type == ac.SessionType.Race and (tonumber(config.eventRaces) or 1) > 1 then name = string.format(T.raceN, config.raceNo or 1) end
+      local cls = BC.opt.place ~= 'ALL' and (' · ' .. string.format(T.classOf, (classStyle(BC.opt.place)))) or ''
+      local lead = RaceTable.rows and RaceTable.rows[1]
+      local lapTxt = type == ac.SessionType.Race and lead and lead.laps and lead.laps > 0 and (' · ' .. string.format(T.lap, lead.laps + 1)) or ''
+      local total = ss and ss.durationMinutes and ss.durationMinutes > 0 and hms(ss.durationMinutes * 60000) or (ss and ss.laps and ss.laps > 0 and tostring(ss.laps)) or '-'
+      return name .. cls .. lapTxt, hms(sessionElapsedMs()), total, name
+    end
+    local rowsBuf = {}
+    local function creditRows()
+      local out, n = rowsBuf, 0
+      local keys, seen = {}, {}
+      for _, r in ipairs(RaceTable.rows or {}) do
+        if not r.absent then
+          if r.class and not seen[r.class] then seen[r.class] = true keys[#keys + 1] = r.class end
+          if BC.opt.place == 'ALL' or r.class == BC.opt.place then
+            n = n + 1
+            out[n] = r
+          end
+        end
+      end
+      for k = #out, n + 1, -1 do out[k] = nil end
+      BC.classKeys = keys
+      return out, #keys > 1
+    end
+    local function timeText(r, list, k, phaseGap)
+      if phaseGap then
+        local behind = list[k + 1]
+        if not behind then return '' end
+        if sim.raceSessionType == ac.SessionType.Race then
+          if (behind.laps or 0) < (r.laps or 0) then return string.format('+%d L', (r.laps or 0) - (behind.laps or 0)) end
+          local g = Lap.gapAt(behind.index, r.index)
+          return g and string.format('+%.3f', g) or '-'
+        end
+        return (r.best > 0 and behind.best > 0) and string.format('+%.3f', (behind.best - r.best) / 1000) or '-'
+      end
+      local c = ac.getCar(r.index)
+      local ms = c and CarRead.num(c.previousLapTimeMs) or 0
+      return ms > 0 and lapTime(ms) or (r.best > 0 and lapTime(r.best) or '-')
+    end
+    local function item(x, y, h, k, r, list, i, nameFont, numFont, multi, sel, phaseGap, measure)
+      local pos = BC.opt.place ~= 'ALL' and (r.classPos or i) or (r.pos or i)
+      local cx = x
+      local bigN, nameS, smallS = 18 * k, 16 * k, 12 * k
+      local nm = short(r.name)
+      local nw = textWidth(nm, nameFont, nameS)
+      local tt = timeText(r, list, i, phaseGap)
+      local tw = math.max(textWidth(tt, numFont, 15 * k), 64 * k) + 14 * k
+      local nameW = math.max(nw + textWidth(r.team or '', nameFont, smallS) + 18 * k, 150 * k)
+      if measure then return x + 36 * k + 46 * k + nameW + 26 * k + tw + 26 * k end
+      if sel then ui.drawRectFilled(vec2(cx, y), vec2(cx + 340 * k, y + h), rgbm(TWELVE.r, TWELVE.g, TWELVE.b, 0.3)) end
+      drawText(tostring(pos), numFont, bigN, TMP.a:set(cx + 10 * k, y + 10 * k), PAPER)
+      cx = cx + 36 * k
+      drawText('#' .. tostring(r.number or ''), numFont, 14 * k, TMP.a:set(cx, y + 13 * k), DIMW)
+      cx = cx + 46 * k
+      drawText(nm, nameFont, nameS, TMP.a:set(cx, y + 6 * k), PAPER)
+      if r.team and r.team ~= '' then drawText(r.team, nameFont, smallS, TMP.a:set(cx + nw + 8 * k, y + 10 * k), DIMW) end
+      cx = cx + nameW
+      local tname = ac.getTyresLongName(r.index, -1, false) or ac.getTyresName(r.index, -1) or ''
+      local sig, tc = tyreStyle(tname)
+      local rc = vec2(cx + 9 * k, y + h / 2)
+      ui.drawCircle(rc, 8 * k, tc, 24, 2 * k)
+      local sw = textWidth(sig, numFont, 11 * k)
+      drawText(sig, numFont, 11 * k, TMP.a:set(rc.x - sw / 2, rc.y - 7 * k), tc)
+      cx = cx + 26 * k
+      local b1, b2 = vec2(cx, y + 9 * k), vec2(cx + tw, y + h - 9 * k)
+      ui.drawRectFilled(b1, b2, sel and PAPER or TIMEBG)
+      if multi and r.class then
+        local _, ccol = classStyle(r.class)
+        ui.drawRect(vec2(b1.x - 2 * k, b1.y - 2 * k), vec2(b2.x + 2 * k, b2.y + 2 * k), ccol, 0, nil, 2 * k)
+      end
+      drawText(tt, numFont, 15 * k, TMP.a:set(b1.x + 7 * k, b1.y + 1 * k), INK)
+      return cx + tw + 26 * k
+    end
+    local scrollX, scrollT = 0, nil
+    function BC.draw(w, h)
+      local k = h / 1080
+      local nameFont, numFont = fonts()
+      local id = identity()
+      local T = TEXTS.bc
+      if BC.opt.logos ~= 'NONE' then
+        local ev = id.logoEvent
+        local op = (tonumber(id.opEvent) or 34) / 100
+        if ev and ev ~= '' then
+          ui.drawImage(ev, vec2(w - 194 * k, 36 * k), vec2(w - 44 * k, 36 * k + 150 * k * 0.27), rgbm(1, 1, 1, op), vec2(0, 0), vec2(1, 1), ui.ImageFit.Fit)
+        else
+          drawText('12H', nameFont, 34 * k, TMP.a:set(w - 120 * k, 30 * k), rgbm(TWELVE.r, TWELVE.g, TWELVE.b, op))
+        end
+        if BC.opt.logos == 'BOTH' and id.logoChannel and id.logoChannel ~= '' then
+          ui.drawImage(id.logoChannel, vec2(44 * k, 36 * k), vec2(214 * k, 82 * k), rgbm(1, 1, 1, (tonumber(id.opChannel) or 80) / 100), vec2(0, 0), vec2(1, 1), ui.ImageFit.Fit)
+        end
+      end
+      if not BC.opt.bar then return end
+      local bh = 44 * k
+      local y2 = h - 34 * k
+      local y1 = y2 - bh
+      local op = math.min(math.max(BC.opt.op or 82, 40), 100) / 100
+      ui.drawRectFilled(vec2(0, y1), vec2(w, y2), rgbm(0.02, 0.025, 0.03, op))
+      ui.drawSimpleLine(vec2(0, y1), vec2(w, y1), rgbm(TWELVE.r, TWELVE.g, TWELVE.b, 0.8), 1.5 * k)
+      local x = 24 * k
+      local label, el, total, sname = sessionLine()
+      local ended = Session.phase == 'resultados' or Session.phase == 'terminou'
+      drawText(ended and string.format(T.sessEnd, sname) or label, nameFont, 12 * k, TMP.a:set(x, y1 + 4 * k), DIMW)
+      local tline = ended and T.finished or (el .. ' / ' .. total)
+      drawText(tline, numFont, 18 * k, TMP.a:set(x, y1 + 18 * k), PAPER)
+      x = x + math.max(textWidth(label, nameFont, 12 * k), textWidth(tline, numFont, 18 * k)) + 24 * k
+      local fk, ft = flagNow()
+      local fc = fk == 'red' and FLAGC.red or (fk == 'yellow' or fk == 'code') and FLAGC.yellow or fk == 'end' and FLAGC.white or FLAGC.green
+      local fw = textWidth(ft, nameFont, 14 * k) + 30 * k
+      local f1, f2 = vec2(x, y1 + 9 * k), vec2(x + fw, y2 - 9 * k)
+      if fk == 'code' then
+        ui.drawRectFilled(f1, f2, fc)
+        drawText(ft, nameFont, 14 * k, TMP.a:set(f1.x + 15 * k, f1.y + 3 * k), INK)
+      else
+        if fk == 'end' then
+          local q = 5 * k
+          for cxq = 0, math.floor((f2.x - f1.x) / q) - 1 do
+            for cyq = 0, math.floor((f2.y - f1.y) / q) - 1 do
+              if (cxq + cyq) % 2 == 0 then ui.drawRectFilled(vec2(f1.x + cxq * q, f1.y + cyq * q), vec2(f1.x + (cxq + 1) * q, f1.y + (cyq + 1) * q), rgbm(1, 1, 1, 0.22)) end
+            end
+          end
+        end
+        ui.drawRect(f1, f2, fc, 0, nil, 2.5 * k)
+        drawText(ft, nameFont, 14 * k, TMP.a:set(f1.x + 15 * k, f1.y + 3 * k), PAPER)
+      end
+      x = f2.x + 18 * k
+      local list, multi = creditRows()
+      if BC.opt.legend == 'CLASS' and multi then
+        for _, key in ipairs(BC.classKeys) do
+          local nm, cc = classStyle(key)
+          ui.drawRectFilled(vec2(x, y1 + 17 * k), vec2(x + 16 * k, y1 + 27 * k), cc)
+          drawText(nm, nameFont, 13 * k, TMP.a:set(x + 22 * k, y1 + 13 * k), (BC.opt.place == 'ALL' or BC.opt.place == key) and PAPER or rgbm(1, 1, 1, 0.35))
+          x = x + 22 * k + textWidth(nm, nameFont, 13 * k) + 14 * k
+        end
+        x = x + 6 * k
+      elseif BC.opt.legend == 'TYRE' then
+        local shownT = {}
+        for _, r in ipairs(list) do
+          local tname = ac.getTyresLongName(r.index, -1, false) or ac.getTyresName(r.index, -1) or ''
+          if tname ~= '' and not shownT[tname] then
+            shownT[tname] = true
+            local sig, tc = tyreStyle(tname)
+            ui.drawCircle(vec2(x + 8 * k, y1 + bh / 2), 7 * k, tc, 20, 2 * k)
+            drawText(sig, numFont, 10 * k, TMP.a:set(x + 8 * k - textWidth(sig, numFont, 10 * k) / 2, y1 + bh / 2 - 6 * k), tc)
+            drawText(tname, nameFont, 12 * k, TMP.a:set(x + 20 * k, y1 + 14 * k), PAPER)
+            x = x + 26 * k + textWidth(tname, nameFont, 12 * k) + 12 * k
+          end
+        end
+      end
+      local phaseGap = BC.opt.time == 'GAP' or (BC.opt.time == 'ALT' and math.floor(state.ui.clock / 10) % 2 == 1)
+      local fixed, fixedK = nil, nil
+      if BC.opt.fix == 'LEAD' then
+        fixed, fixedK = (RaceTable.rows or {})[1], 1
+      elseif BC.opt.fix == 'CLASSLEAD' then
+        fixed, fixedK = list[1], 1
+      else
+        for n, r in ipairs(list) do if r.index == sim.focusedCar then fixed, fixedK = r, n end end
+      end
+      if fixed then
+        ui.drawSimpleLine(vec2(x, y1 + 1), vec2(x + 340 * k, y1 + 1), TWELVE, 2.5 * k)
+        x = item(x, y1, bh, k, fixed, list, fixedK, nameFont, numFont, multi, true, phaseGap) + 8 * k
+      end
+      ui.drawRectFilled(vec2(x, y1), vec2(x + 10 * k, y2), rgbm(1, 1, 1, 0.08))
+      x = x + 18 * k
+      local now = state.ui.clock
+      scrollX = scrollX + (scrollT and math.min(now - scrollT, 0.5) or 0) * 70 * k
+      scrollT = now
+      if #list > 0 then
+        local width = 0
+        for n, r in ipairs(list) do width = item(width, y1, bh, k, r, list, n, nameFont, numFont, multi, false, phaseGap, true) end
+        width = math.max(width, w - x)
+        scrollX = scrollX % width
+        ui.pushClipRect(vec2(x, y1), vec2(w, y2))
+        local start = w - scrollX
+        while start > x do start = start - width end
+        local guard = 0
+        while start < w and guard < 6 do
+          guard = guard + 1
+          local cx = start
+          for n, r in ipairs(list) do
+            if cx > w then break end
+            cx = item(cx, y1, bh, k, r, list, n, nameFont, numFont, multi, false, phaseGap)
+          end
+          start = start + width
+        end
+        ui.popClipRect()
+      end
+      local sy1, sy2 = y2 + 6 * k, y2 + 18 * k
+      local sx1, sx2 = w - w * 0.42, w - 200 * k
+      local q = 6 * k
+      local cols = math.floor((sx2 - sx1) / q)
+      for c = 0, cols - 1 do
+        local a = math.min(c / math.max(cols * 0.6, 1), 1) * 0.55
+        for rr = 0, 1 do
+          if (c + rr) % 2 == 0 then ui.drawRectFilled(vec2(sx1 + c * q, sy1 + rr * q), vec2(sx1 + (c + 1) * q, sy1 + (rr + 1) * q), rgbm(1, 1, 1, a)) end
+        end
+      end
+      local ev = id.logoEvent
+      if ev and ev ~= '' then
+        ui.drawImage(ev, vec2(w - 192 * k, sy1 - 4 * k), vec2(w - 24 * k, sy2 + 4 * k), rgbm(1, 1, 1, 0.9), vec2(0, 0), vec2(1, 1), ui.ImageFit.Fit)
+      else
+        drawText('12H CURITIBA', nameFont, 14 * k, TMP.a:set(w - 186 * k, sy1 - 3 * k), TWELVE)
+      end
+    end
+    function BC.stateText()
+      local o, c, wt = BC.opt, BC.cam, BC.wait
+      return string.format('%s|%s|%s|%s|%d|%d|%s|%s|%s|%s|%d|%s|%s|%s|%s|%d|%d', o.place, o.legend, o.fix, o.time, math.floor(o.op), o.bar and 1 or 0, o.logos,
+        tostring(o.defSet or ''), c.mode, tostring(c.set or ''), c.cam or -1, c.free and '1' or '0', wt.on and '1' or '0', wt.mode, tostring(wt.set or ''),
+        wt.cam or -1, math.floor(wt.secs or 8)) .. '|' .. tostring((ac.getCar(sim.focusedCar) or {}).sessionID or -1) .. '|' .. table.concat(BC.classKeys or {}, ',') .. '|' .. BC.tyresSeen()
+    end
+    local tyresBuf = {}
+    function BC.tyresSeen()
+      local seen, n = {}, 0
+      for _, r in ipairs(CarsTick.rows) do
+        if r.on and not r.staff then
+          local name = ac.getTyresLongName(r.i, -1, false) or ac.getTyresName(r.i, -1)
+          if name and name ~= '' and not seen[name] then seen[name] = true n = n + 1 tyresBuf[n] = (name:gsub('[,|;%c]', ' ')) end
+        end
+      end
+      for k = #tyresBuf, n + 1, -1 do tyresBuf[k] = nil end
+      return table.concat(tyresBuf, ',')
+    end
+    local duels, pits, pitWas = {}, {}, {}
+    local INC_KIND = { [1] = 'slow', [2] = 'stop', [3] = 'broken', [4] = 'oil' }
+    local function slotOf(i)
+      local c = ac.getCar(i)
+      return c and c.sessionID or i
+    end
+    function BC.alertsText()
+      local now = state.ui.clock
+      local rows = RaceTable.rows or {}
+      if sim.raceSessionType == ac.SessionType.Race then
+        for k = 1, #rows - 1 do
+          local a, b = rows[k], rows[k + 1]
+          if not a.absent and not b.absent and not a.inPit and not b.inPit then
+            local key = a.index * 1000 + b.index
+            local g = Lap.gapAt(b.index, a.index)
+            local d = duels[key]
+            local way = (b.laps or 0) + (b.spline or 0)
+            if g and g < 1.0 then
+              if not d then d = { from = way, on = false, at = now } duels[key] = d end
+              d.gap, d.t, d.a, d.b, d.sp = g, now, a.index, b.index, b.spline or 0
+              if not d.on and way - d.from >= 0.5 then d.on, d.at = true, now end
+            elseif d and (not g or g > 1.5) then
+              duels[key] = nil
+            end
+          end
+        end
+        for key, d in pairs(duels) do if now - d.t > 5 then duels[key] = nil end end
+      end
+      for _, r in ipairs(CarsTick.rows) do
+        if r.i > 0 and r.on and not r.staff and r.c then
+          local inPit = r.c.isInPitlane == true
+          if inPit and pitWas[r.i] == false then pits[#pits + 1] = { a = r.i, at = now, sp = r.sp } end
+          pitWas[r.i] = inPit
+        end
+      end
+      for n = #pits, 1, -1 do if now - pits[n].at > 60 then table.remove(pits, n) end end
+      local list = {}
+      for _, d in pairs(duels) do if d.on then list[#list + 1] = { k = 'duel', a = d.a, b = d.b, gap = d.gap, sp = d.sp, at = d.at } end end
+      for i, inc in pairs(Flags.incidents) do
+        if inc and INC_KIND[inc.kind] and not CarRead.isStaff(i) then list[#list + 1] = { k = INC_KIND[inc.kind], a = i, sp = inc.pos or 0, at = inc.t or now } end
+      end
+      for _, p in ipairs(pits) do list[#list + 1] = { k = 'pit', a = p.a, sp = p.sp or 0, at = p.at } end
+      table.sort(list, function(x, y) return x.at > y.at end)
+      local out = {}
+      for n = 1, math.min(#list, 8) do
+        local e = list[n]
+        out[n] = string.format('%s|%d|%d|%.1f|%.3f|%d', e.k, slotOf(e.a), e.b and slotOf(e.b) or -1, e.gap or 0, e.sp or 0, math.floor(now - e.at))
+      end
+      return table.concat(out, ';')
+    end
+    function BC.camsText()
+      local out = {}
+      for _, s in ipairs(BC.sets()) do
+        local cams = {}
+        for _, c in ipairs(s.cams) do
+          cams[#cams + 1] = string.format('%d:%s:%.4f:%.4f:%d', c.idx, (c.name:gsub('[:;|\n]', ' ')), c.inP, c.outP, c.fixed and 1 or 0)
+        end
+        out[#out + 1] = string.format('%d:%s|%s', s.index, (s.name:gsub('[:;|\n]', ' ')), table.concat(cams, ';'))
+      end
+      return table.concat(out, '\n')
     end
   end)()
   return function(car, w, h, s)
@@ -16163,7 +16859,7 @@ local drawDesktopUI = (function()
     for _, e in ipairs(cars) do
       local list, lvl = dataCells(e.i, e.c)
       cells[e.i] = list
-      if lvl == 'bad' then alerts[#alerts + 1] = string.format(TEXTS.connAlertCar, tostring(ac.getDriverNumber(e.i) or e.i),
+      if lvl == 'bad' then alerts[#alerts + 1] = string.format(TEXTS.connAlertCar, tostring(CarRead.number(e.i)),
         tostring(ac.getDriverName(e.i) or ''), list[6][1]) end
     end
     local colW = {}
@@ -16344,7 +17040,7 @@ local drawDesktopUI = (function()
       if c.isInPitlane then inPits = inPits + 1 end
       local fast = not c.isInPitlane and kmh > config.flags.redSpeedKmh
       if fast then over = over + 1 end
-      drawText('#' .. tostring(ac.getDriverNumber(e.i) or e.i), FONT_MONO, 9.5 * s, TMP.a:set(x0, y), COLOR_TITLE)
+      drawText('#' .. tostring(CarRead.number(e.i)), FONT_MONO, 9.5 * s, TMP.a:set(x0, y), COLOR_TITLE)
       connLight(vec2(p1.x + 50 * s, y + 6.5 * s), s, Connection.heat(e.i))
       local carName = tostring(ac.getDriverName(e.i) or '')
       drawText(carName, FONT_TEXT, 9.5 * s, TMP.a:set(p1.x + 60 * s, y), Direction.target == carName and PANEL_COLORS.yellow or COLOR_TITLE)
@@ -16401,7 +17097,7 @@ local drawDesktopUI = (function()
       drawText(TEXTS.connGoneTitle, FONT_TITLE, 8.5 * s, TMP.a:set(x0, y), COLOR_DIM)
       y = y + 16 * s
       for _, g in ipairs(gone) do
-        drawText('#' .. tostring(ac.getDriverNumber(g.i) or g.i), FONT_MONO, 9.5 * s, TMP.a:set(x0, y), COLOR_DIM)
+        drawText('#' .. tostring(CarRead.number(g.i)), FONT_MONO, 9.5 * s, TMP.a:set(x0, y), COLOR_DIM)
         drawText(g.e.name, FONT_TEXT, 9.5 * s, TMP.a:set(p1.x + 60 * s, y), COLOR_DIM)
         drawText(TEXTS.connLeft, FONT_MONO, 9.5 * s, TMP.a:set(p1.x + 210 * s, y), PANEL_COLORS.red)
         local sl, slColor = swapLine(g.i, nil)
@@ -16586,6 +17282,11 @@ local drawDesktopUI = (function()
       ui.onExclusiveHUD(function(mode)
         if not ServerGuard.ok() then return end
         Connection.hudMode = mode
+        if mode == 'game' and Broadcast and Broadcast.on() then
+          script.drawUI(true)
+          Desktop.hudDrawn = true
+          return true
+        end
         if mode == 'menu' then
           local size = ac.getUI().windowSize
           local sm = math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3)
@@ -16662,7 +17363,7 @@ local drawDesktopUI = (function()
     local m = ui.mousePos()
     if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
     drawPanel(p1, p2, BORDER_YELLOW, s)
-    drawText('#' .. tostring(ac.getDriverNumber(cm.index) or cm.index) .. '  ' .. name, FONT_TITLE, 11 * s,
+    drawText('#' .. tostring(CarRead.number(cm.index)) .. '  ' .. name, FONT_TITLE, 11 * s,
       TMP.a:set(p1.x + 12 * s, p1.y + 4 * s), COLOR_TITLE)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.carMenu = nil end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
@@ -16716,6 +17417,11 @@ function script.drawUI(exclusive)
       Desktop.hudBoth = true
       ac.log('race-control: game UI cut, the script drawing called too (drawn once)')
     end
+    return
+  end
+  if Broadcast and Broadcast.on() then
+    local sz = ac.getUI().windowSize
+    Broadcast.draw(sz.x, sz.y)
     return
   end
   drawSessionWait()
@@ -17467,6 +18173,7 @@ function script.update(dt)
     Start.update(car)
     Flags.update(car, lineFrame)
     TrackList.update()
+    Broadcast.update()
     if state.ui.clock >= RaceTable.nextT then
       RaceTable.nextT = state.ui.clock + 0.25
       RaceTable.refresh()
