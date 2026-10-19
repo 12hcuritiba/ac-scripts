@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V203 - 2026.10.19'
+local RC_VERSION = 'V204 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2221,12 +2221,13 @@ do
     local car = ac.getCar(0)
     exitRead(car)
     LapTrace.tick(car)
-    if B.busy then return end
     local now = state.ui.clock
     local gap = config.persist.seconds
     if now < B.nextT and not B.exit.due then return end
+    if B.busy and now < B.nextT then return end
     B.nextT = now + gap
     for _, f in ipairs(B.beat) do f() end
+    if B.busy then return end
     B.stratUpdate()
     B.boxUpdate()
     B.statusUpdate()
@@ -15175,9 +15176,14 @@ float4 main(PS_IN pin) {
       local T = TEXTS.bc
       if BC.opt.logos ~= 'NONE' then
         local ev = id.logoEvent
-        if ev and ev ~= '' then
+        if BC.evUrl ~= ev then BC.evUrl, BC.evUv = ev, nil end
+        if ev and ev ~= '' and not BC.evUv and ui.isImageReady(ev) then
+          local isz = ui.imageSize(ev)
+          if isz.y > 0 then BC.evUv = vec2(1, math.min(172 / 640 * isz.x / isz.y, 1)) end
+        end
+        if ev and ev ~= '' and BC.evUv then
           LOGO_EV.mult = (tonumber(id.opEvent) or 34) / 100
-          ui.drawImage(ev, TMP.a:set(w - 194 * k, 36 * k), TMP.b:set(w - 44 * k, 36 * k + 150 * k * 172 / 640), LOGO_EV, UV0, UV1, ui.ImageFit.Fit)
+          ui.drawImage(ev, TMP.a:set(w - 194 * k, 36 * k), TMP.b:set(w - 44 * k, 36 * k + 150 * k * 172 / 640), LOGO_EV, UV0, BC.evUv, ui.ImageFit.Stretch)
         end
         if BC.opt.logos == 'BOTH' and id.logoChannel and id.logoChannel ~= '' then
           LOGO_CH.mult = (tonumber(id.opChannel) or 80) / 100
