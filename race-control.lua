@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V200 - 2026.10.19'
+local RC_VERSION = 'V201 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2100,6 +2100,7 @@ do
   B.parts, B.track, B.traceOut = {}, nil, {}
   B.beat = {}
   local beatSent = {}
+  local beatSess = nil
   local function beatPush(list, body)
     if not body or beatSent[list] == body then return end
     beatSent[list] = body
@@ -2107,11 +2108,16 @@ do
     B.push(list, seq, Record.encode(list, seq, body))
   end
   B.beat[#B.beat + 1] = function()
+    local sk = tostring(Session.id or 0) .. ':' .. tostring(Session.index or -1)
+    if sk ~= beatSess then
+      beatSess = sk
+      for key in pairs(beatSent) do beatSent[key] = nil end
+    end
     local car = ac.getCar(0)
     if car then beatPush('sp', string.format('%.4f|%d', CarRead.num(car.splinePosition), car.isInPitlane and 1 or 0)) end
     if Broadcast and Broadcast.on() then
       BroadcastAlerts.beat()
-      if Broadcast.camsDirty then Broadcast.camsDirty = false beatPush('tvcams', Broadcast.camsText()) end
+      if Broadcast.camsDirty or beatSent.tvcams == nil then Broadcast.camsDirty = false beatPush('tvcams', Broadcast.camsText()) end
       beatPush('tvstate', Broadcast.stateText())
       beatPush('tvalerts', BroadcastAlerts.text)
     end
@@ -2565,6 +2571,7 @@ do
         end
       end
       config.eventRaces = tonumber(body:match('races=(%d+)')) or 1
+      config.raceOverTime = tonumber(body:match('raceOverTime=(%d+)')) or config.raceOverTime
       config.raceNo = tonumber(body:match('raceNo=(%d+)'))
       local nums = body:match('numbers=([%d,]*)')
       if nums and nums ~= '' and nums ~= config.slotNumbersText then
@@ -13346,6 +13353,7 @@ float4 main(PS_IN pin) {
         local now = i == sim.currentSessionIndex
         local starts = RecordSync.base.forecast.starts
         local races = ss.type == ac.SessionType.Race and math.max(math.floor(tonumber(config.eventRaces) or 1), 1) or 1
+        local firstAt = nil
         for n = 1, races do
           local on = now and (races == 1 or (config.raceNo or 1) == n)
           local at = n == 1 and starts and starts[i] or nil
@@ -13354,6 +13362,14 @@ float4 main(PS_IN pin) {
               - math.floor(sessionElapsedMs() / 1000 * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
             at = string.format('%02d:%02d', math.floor(t / 3600), math.floor(t / 60) % 60)
           end
+          if n == 2 and not at and firstAt and ss.durationMinutes and ss.durationMinutes > 0 then
+            local hh, mm = firstAt:match('^(%d+):(%d+)')
+            if hh then
+              local t = (tonumber(hh) * 60 + tonumber(mm) + math.floor(ss.durationMinutes) + math.ceil((tonumber(config.raceOverTime) or 0) / 60)) % 1440
+              at = string.format('%02d:%02d', math.floor(t / 60), t % 60)
+            end
+          end
+          if n == 1 then firstAt = at end
           local name = races > 1 and string.format(TEXTS.evRaceN, n) or (TEXTS.sessionName[ss.type] or '-')
           out[#out + 1] = { name .. (at and string.format(TEXTS.evStarts, at) or ''), on and (hms(sessionElapsedMs()) .. ' / ' .. total) or total, on }
         end
@@ -14627,7 +14643,7 @@ float4 main(PS_IN pin) {
     local BC = Broadcast
     local KEEP = 'rc.tv'
     local KEY_ESC, KEY_F2, KEY_ADD, KEY_SUB = 27, 113, 107, 109
-    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 82, bar = true, logos = 'BOTH', defSet = nil, cycle = 0 }
+    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 82, bar = true, logos = 'BOTH', defSet = nil, cycle = 0, speed = 60 }
     BC.cam = { mode = 'start', set = nil, cam = nil, fov = nil, free = false, freeFov = nil }
     BC.wait = { on = true, mode = 'FIX', set = nil, cam = nil, secs = 8, at = 0, k = 0 }
     do
@@ -14636,6 +14652,7 @@ float4 main(PS_IN pin) {
         if BC.opt[k] ~= nil or k == 'defSet' then
           if k == 'op' then BC.opt.op = tonumber(v) or 82
           elseif k == 'cycle' then BC.opt.cycle = tonumber(v) or 0
+          elseif k == 'speed' then BC.opt.speed = math.min(math.max(tonumber(v) or 60, 20), 180)
           elseif k == 'bar' then BC.opt.bar = v ~= '0'
           elseif k == 'defSet' then BC.opt.defSet = tonumber(v)
           else BC.opt[k] = v end
@@ -14644,8 +14661,8 @@ float4 main(PS_IN pin) {
     end
     local function keep()
       local o = BC.opt
-      ac.storage[KEEP] = string.format('place=%s;legend=%s;fix=%s;time=%s;op=%d;bar=%d;logos=%s;defSet=%s;cycle=%d', o.place, o.legend, o.fix, o.time, o.op,
-        o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '', math.floor(o.cycle or 0))
+      ac.storage[KEEP] = string.format('place=%s;legend=%s;fix=%s;time=%s;op=%d;bar=%d;logos=%s;defSet=%s;cycle=%d;speed=%d', o.place, o.legend, o.fix, o.time, o.op,
+        o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '', math.floor(o.cycle or 0), math.floor(o.speed or 60))
     end
     function BC.on() return CarRead.isTv(0) end
     local sets = nil
@@ -14820,6 +14837,7 @@ float4 main(PS_IN pin) {
         elseif k == 'SHOW' then BC.opt.bar = v ~= '0'
         elseif k == 'LOGOS' then BC.opt.logos = v:upper()
         elseif k == 'CYCLE' then BC.opt.cycle = math.min(math.max(math.floor(tonumber(v) or 0), 0), 600)
+        elseif k == 'SPEED' then BC.opt.speed = math.min(math.max(math.floor(tonumber(v) or 60), 20), 180)
         else return false end
       elseif a == 'IDENT' then
         RecordSync.base.serverNew()
@@ -15172,14 +15190,14 @@ float4 main(PS_IN pin) {
       local kText = Lang.letters.upper(ended and string.format(T.sessEnd, sname) or label)
       local tot = ' / ' .. total
       local note = ended and Lang.letters.upper(nextLine()) or nil
-      local sw = 250 * k - textWidth('00', F.sessV, 21 * k)
+      local sw = 250 * k - textWidth('00', F.sessV, 20 * k)
       ui.pushClipRect(TMP.a:set(0, y1), TMP.b:set(sw - 6 * k, y2))
       drawText(kText, F.sessK, 12 * k, TMP.a:set(26 * k, y1 + 6 * k), DIMW)
       if note then
         drawText(note, F.notice, 17 * k, TMP.a:set(26 * k, y1 + 18 * k), PAPER)
       else
-        drawText(el, F.sessV, 21 * k, TMP.a:set(26 * k, y1 + 16 * k), PAPER)
-        drawText(tot, F.sessT, 21 * k, TMP.a:set(26 * k + textWidth((el:gsub('%d', '0')), F.sessV, 21 * k), y1 + 16 * k), DIMW)
+        drawText(el, F.sessV, 20 * k, TMP.a:set(26 * k, y1 + 17 * k), PAPER)
+        drawText(tot, F.sessT, 20 * k, TMP.a:set(26 * k + textWidth((el:gsub('%d', '0')), F.sessV, 20 * k), y1 + 17 * k), DIMW)
       end
       ui.popClipRect()
       local x = sw
@@ -15267,7 +15285,7 @@ float4 main(PS_IN pin) {
         end
         for n = #widthsBuf, #list + 1, -1 do widthsBuf[n] = nil end
         width = math.max(width, w - x)
-        scrollX = (scrollX + (scrollT and math.min(now - scrollT, 0.5) or 0) * width / 60) % width
+        scrollX = (scrollX + (scrollT and math.min(now - scrollT, 0.5) or 0) * width / (BC.opt.speed or 60)) % width
         ui.pushClipRect(TMP.a:set(x, y1), TMP.b:set(w, y2))
         local start = x - scrollX
         local guard = 0
@@ -15293,11 +15311,12 @@ float4 main(PS_IN pin) {
       local sx1, sx2 = w - w * 0.42, w - logoW
       local q = 10 * k
       local cols = math.max(math.floor((sx2 - sx1) / q), 0)
+      local qx = sx2 - cols * q
       for c = 0, cols - 1 do
         local fade = math.min(c / math.max(cols * 0.7, 1), 1)
         STRIP.mult, STRIP_INK.mult = 0.85 * fade, 0.82 * fade
         for rr = 0, 1 do
-          rect(sx1 + c * q, sy1 + rr * q, sx1 + (c + 1) * q, sy1 + (rr + 1) * q, (c + rr) % 2 == 0 and STRIP or STRIP_INK)
+          rect(qx + c * q, sy1 + rr * q, qx + (c + 1) * q, sy1 + (rr + 1) * q, (c + rr) % 2 == 0 and STRIP or STRIP_INK)
         end
       end
       rect(sx2, sy1, w, sy2, LOGOBG)
@@ -15311,7 +15330,7 @@ float4 main(PS_IN pin) {
       return string.format('%s|%s|%s|%s|%d|%d|%s|%s|%s|%s|%d|%s|%s|%s|%s|%d|%d', o.place, o.legend, o.fix, o.time, math.floor(o.op), o.bar and 1 or 0, o.logos,
         tostring(o.defSet or ''), c.mode, tostring(c.set or ''), c.cam or -1, c.free and '1' or '0', wt.on and '1' or '0', wt.mode, tostring(wt.set or ''),
         wt.cam or -1, math.floor(wt.secs or 8)) .. '|' .. tostring((ac.getCar(sim.focusedCar) or {}).sessionID or -1) .. '|' .. table.concat(BC.classKeys or {}, ',') .. '|'
-        .. BroadcastAlerts.tyres .. '|' .. math.floor(BC.opt.cycle or 0)
+        .. BroadcastAlerts.tyres .. '|' .. math.floor(BC.opt.cycle or 0) .. '|' .. math.floor(BC.opt.speed or 60)
     end
     function BC.camsText()
       local out = {}
