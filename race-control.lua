@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V204 - 2026.10.19'
+local RC_VERSION = 'V205 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -15176,14 +15176,14 @@ float4 main(PS_IN pin) {
       local T = TEXTS.bc
       if BC.opt.logos ~= 'NONE' then
         local ev = id.logoEvent
-        if BC.evUrl ~= ev then BC.evUrl, BC.evUv = ev, nil end
-        if ev and ev ~= '' and not BC.evUv and ui.isImageReady(ev) then
+        if BC.evUrl ~= ev then BC.evUrl, BC.evAr = ev, nil end
+        if ev and ev ~= '' and not BC.evAr and ui.isImageReady(ev) then
           local isz = ui.imageSize(ev)
-          if isz.y > 0 then BC.evUv = vec2(1, math.min(172 / 640 * isz.x / isz.y, 1)) end
+          if isz.y > 0 then BC.evAr = isz.x / isz.y end
         end
-        if ev and ev ~= '' and BC.evUv then
+        if ev and ev ~= '' and BC.evAr then
           LOGO_EV.mult = (tonumber(id.opEvent) or 34) / 100
-          ui.drawImage(ev, TMP.a:set(w - 194 * k, 36 * k), TMP.b:set(w - 44 * k, 36 * k + 150 * k * 172 / 640), LOGO_EV, UV0, BC.evUv, ui.ImageFit.Stretch)
+          ui.drawImage(ev, TMP.a:set(w - 194 * k, 36 * k), TMP.b:set(w - 44 * k, 36 * k + 150 * k / BC.evAr), LOGO_EV, UV0, UV1, ui.ImageFit.Fit)
         end
         if BC.opt.logos == 'BOTH' and id.logoChannel and id.logoChannel ~= '' then
           LOGO_CH.mult = (tonumber(id.opChannel) or 80) / 100
