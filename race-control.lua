@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V209 - 2026.10.19'
+local RC_VERSION = 'V210 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -14790,7 +14790,16 @@ float4 main(PS_IN pin) {
         trackMode(s.index)
         BC.cam.mode, BC.cam.set, BC.cam.cam, BC.cam.free = 'set', s.index, nil, false
       elseif a == 'CAM' then
-        if not putCam(w[2], w[3], 'cam') then return false end
+        if BC.cam.free then
+          local s = setOf(w[2])
+          local c = s and s.cams[(tonumber(w[3]) or -1) + 1]
+          if not c then return false end
+          ac.setCameraPosition(c.pos)
+          ac.setCameraDirection(c.fwd, vec3(0, 1, 0))
+          BC.cam.freeFov = c.maxFov or BC.cam.freeFov or 40
+          ac.setCameraFOV(BC.cam.freeFov)
+          BC.cam.set, BC.cam.cam = s.index, c.idx
+        elseif not putCam(w[2], w[3], 'cam') then return false end
       elseif a == 'AUTO' then
         release()
         trackMode(BC.cam.set)
@@ -14802,10 +14811,14 @@ float4 main(PS_IN pin) {
         BC.cam.mode, BC.cam.cam, BC.cam.free = 'random', nil, false
       elseif a == 'FREE' then
         local on = (w[2] or ''):upper() ~= 'OFF'
+        local pos, fwd, fov = ac.getCameraPosition():clone(), ac.getCameraForward():clone(), CarRead.num(ac.getCameraFOV())
         release()
         if on then
           ac.setCurrentCamera(ac.CameraMode.Free)
-          BC.cam.freeFov = CarRead.num(ac.getCameraFOV()) > 0 and CarRead.num(ac.getCameraFOV()) or 40
+          ac.setCameraPosition(pos)
+          ac.setCameraDirection(fwd, vec3(0, 1, 0))
+          BC.cam.freeFov = fov > 0 and fov or 40
+          ac.setCameraFOV(BC.cam.freeFov)
           BC.cam.mode = 'free'
         else
           trackMode(BC.cam.set)
