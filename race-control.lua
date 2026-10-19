@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V215 - 2026.10.19'
+local RC_VERSION = 'V216 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -4588,19 +4588,23 @@ ac.onChatMessage(function(message, senderCarIndex)
   end
   return false
 end)
-local function sessionElapsedMs()
-  local s = ac.getSession(Session.index)
+local function sessionElapsedMs(kind, s)
+  s = s or ac.getSession(Session.index)
   if not s then return 0 end
-  if s.durationMinutes > 0 then
-    return s.durationMinutes * 60000 - sim.sessionTimeLeft
-  end
-  return sim.time - s.startTime
+  local closed = (config.pit.closedSeconds[s.type] or 0) * 1000
+  local total = s.durationMinutes > 0 and math.max(s.durationMinutes * 60000 - closed, 0) or nil
+  if kind == 'total' then return total end
+  local e = s.durationMinutes > 0 and s.durationMinutes * 60000 - sim.sessionTimeLeft or sim.time - s.startTime
+  if kind == 'raw' then return e end
+  if not Session.ready or Session.beforeStart() then return 0 end
+  local shown = math.max(e - closed, 0)
+  return total and math.min(shown, total) or shown
 end
 local function isPitClosed()
   local closedSeconds = config.pit.closedSeconds[sim.raceSessionType] or 0
   if closedSeconds <= 0 then return false end
   if Session.beforeStart() then return true end
-  return sessionElapsedMs() < closedSeconds * 1000
+  return sessionElapsedMs('raw') < closedSeconds * 1000
 end
 local function isInZone(zone, p)
   if zone.startPos < zone.endPos then
@@ -6537,7 +6541,7 @@ do
   function PitStops.window() return windowOf(config.swapWindowStart, config.swapWindowEnd) end
   function PitStops.stopWindow() return windowOf(config.pitWindowStart, config.pitWindowEnd) end
   function PitStops.windowTime()
-    return TrackList.clockMs() or (sessionElapsedMs() - TrackList.frozenNowMs())
+    return TrackList.clockMs() or (sessionElapsedMs('raw') - TrackList.frozenNowMs())
   end
   function PitStops.windowOpen()
     local s, e = PitStops.window()
@@ -6562,7 +6566,7 @@ do
     PitStops.pass = nil
     if not p or not config.pitStopsEnabled then return end
     rcLog(TEXTS.rc.pit, string.format(TEXTS.pitStopRowText, p.id, p.stop and tostring(p.stop) or '-',
-      p.entryMs and raceTime(p.entryMs) or TEXTS.pitStopRowInPits, raceTime(sessionElapsedMs()),
+      p.entryMs and raceTime(p.entryMs) or TEXTS.pitStopRowInPits, raceTime(sessionElapsedMs('raw')),
       p.service or TEXTS.pitStopRowNoService, #p.paid > 0 and table.concat(p.paid, ', ') or TEXTS.pitStopRowNoPenalty,
       p.jumped and 'tow' or 'driven', p.raceFlag, p.driverFlag, tostring(ac.getDriverTeam(0) or '-'),
       tostring(ac.getUserSteamID() or '-')))
@@ -6720,7 +6724,7 @@ do
       PitStops.passInWindow = PitStops.windowOpen()
       PitStops.passInStopWindow = PitStops.stopWindowOpen()
       RecordSync.base.exit.win = swapValidNow()
-      openPass(state.list.jumped, sessionElapsedMs())
+      openPass(state.list.jumped, sessionElapsedMs('raw'))
       if wrongWayNow() and not state.pitPassReverse then
         state.pitPassReverse = nameCode(ac.getDriverName(0))
         PitRecord.save()
@@ -8455,6 +8459,7 @@ do
     return math.min(5, 6 - math.ceil(t / 1000))
   end
   local RED_TRACK_EVENT = 'race-control.redflag'
+  local pitSent, pitSentT = nil, -1e9
   local function redPit(car)
     local up = state.redFlag ~= nil
     if Flags.redWasUp and not up and not car.isInPitlane and not Flags.onGrid
@@ -8483,6 +8488,11 @@ do
     if lt ~= Flags.lightsSent or (state.lights and state.ui.clock - Flags.lightsSentT >= 2) then
       Flags.lightsSent, Flags.lightsSentT = lt, state.ui.clock
       ac.broadcastSharedEvent('race-control.lights', lt)
+    end
+    local pit = isPitClosed() and 'red' or 'green'
+    if pit ~= pitSent or state.ui.clock - pitSentT >= 2 then
+      pitSent, pitSentT = pit, state.ui.clock
+      ac.broadcastSharedEvent('race-control.pit', pit)
     end
     if up and CarRead.parked(car) then
       Lock.want('red')
@@ -13389,7 +13399,7 @@ float4 main(PS_IN pin) {
     for i = 0, (sim.sessionsCount or 0) - 1 do
       local ss = ac.getSession(i)
       if ss then
-        local total = ss.durationMinutes and ss.durationMinutes > 0 and hms(ss.durationMinutes * 60000)
+        local total = ss.durationMinutes and ss.durationMinutes > 0 and hms(sessionElapsedMs('total', ss))
           or (ss.laps and ss.laps > 0 and string.format(TEXTS.lapsShort, ss.laps)) or '-'
         local now = i == sim.currentSessionIndex
         local starts = RecordSync.base.forecast.starts
@@ -13400,7 +13410,7 @@ float4 main(PS_IN pin) {
           local at = n == 1 and starts and starts[i] or nil
           if not at and on and not Session.beforeStart() then
             local t = (CarRead.num(sim.timeHours) * 3600 + CarRead.num(sim.timeMinutes) * 60 + CarRead.num(sim.timeSeconds)
-              - math.floor(sessionElapsedMs() / 1000 * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
+              - math.floor(sessionElapsedMs('raw') / 1000 * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
             at = string.format('%02d:%02d', math.floor(t / 3600), math.floor(t / 60) % 60)
           end
           if n == 2 and not at and firstAt and ss.durationMinutes and ss.durationMinutes > 0 then
@@ -13651,9 +13661,9 @@ float4 main(PS_IN pin) {
   local function chip2(p, wdt, s, title, value, light)
     local a, b = vec2(p.x, p.y), vec2(p.x + wdt, p.y + CHIP_H * s)
     ui.drawRect(a, b, rgbm(1, 1, 1, 0.2), 3 * s)
-    ui.drawCircleFilled(vec2(a.x + 10 * s, a.y + CHIP_H * s / 2), 3 * s, light, 12)
-    drawText(title, FONT_TITLE, 9 * s, TMP.a:set(a.x + 19 * s, a.y + 3 * s), COLOR_TITLE)
-    drawText(value, FONT_MONO, FS * s, TMP.a:set(a.x + 19 * s, a.y + 15 * s), value == '-' and COLOR_OFF or light)
+    ui.drawCircleFilled(vec2(b.x - 7 * s, a.y + 7.5 * s), 3 * s, light, 12)
+    drawText(title, FONT_TITLE, 9 * s, TMP.a:set(a.x + 3 * s, a.y + 3 * s), COLOR_TITLE)
+    drawText(value, FONT_MONO, FS * s, TMP.a:set(a.x + 3 * s, a.y + 15 * s), value == '-' and COLOR_OFF or light)
   end
   local function raceScreen(car, w, h, s)
     local me = RaceTable.byIndex[0]
@@ -13669,7 +13679,7 @@ float4 main(PS_IN pin) {
       drawSeparator(p1, p2, y + (SEP / 2 - 2) * s, s)
       y = y + SEP * s
     end
-    local total = session and session.durationMinutes > 0 and hms(session.durationMinutes * 60000)
+    local total = session and session.durationMinutes > 0 and hms(sessionElapsedMs('total', session))
       or (session and session.laps > 0 and string.format(TEXTS.lapsShort, session.laps)) or nil
     line(TEXTS.scrClock, string.format('%02d:%02d:%02d', CarRead.num(sim.timeHours), CarRead.num(sim.timeMinutes), CarRead.num(sim.timeSeconds)))
     line(TEXTS.scrTime, hms(sessionElapsedMs()) .. (total and (' / ' .. total) or ''))
@@ -13756,11 +13766,11 @@ float4 main(PS_IN pin) {
     local ss, se = PitStops.stopWindow()
     local rule = config.driverStint
     local life = CarRead.tyreLife(car, 0, state.tyreLineKm[0] or 0)
-    return string.format('%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d', config.pitStopsEnabled and 1 or 0, config.stopsRequired(),
+    return string.format('%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d', config.pitStopsEnabled and 1 or 0, config.stopsRequired(),
       (config.swapOn() and config.swapRequiredNow()) and 1 or 0, config.swapRequiredNow() or 0, rule.minMinutes or 0, rule.maxMinutes or 0,
-      math.floor(ws or 0), math.floor(we or 0), math.floor(math.max(sessionElapsedMs() - PitStops.windowTime(), 0) / 1000) * 1000,
+      math.floor(ws or 0), math.floor(we or 0), math.floor(math.max(sessionElapsedMs('raw') - PitStops.windowTime(), 0) / 1000) * 1000,
       state.tyreLaps[0] or 0, life and math.floor(life) or -1, CarRead.num(sim.rainWetness) > 0.05 and 1 or 0, math.floor(CarRead.num(sim.roadGrip) * 100),
-      math.floor(ss or 0), math.floor(se or 0))
+      math.floor(ss or 0), math.floor(se or 0), math.floor((config.pit.closedSeconds[sim.raceSessionType] or 0) * 1000))
   end
   local Tele = { WINDOW = 8, RATE = 30, n = 0, at = 0, t = -1, buf = {} }
   local TELE_ORDER = { 'thr', 'brk', 'clu', 'str', 'spd', 'gear', 'glat', 'glon' }
@@ -15140,7 +15150,7 @@ float4 main(PS_IN pin) {
       local cls = place ~= 'ALL' and (' · ' .. string.format(T.classOf, (classStyle(place)))) or ''
       local lead = RaceTable.rows and RaceTable.rows[1]
       local lapTxt = type == ac.SessionType.Race and lead and lead.laps and lead.laps > 0 and (' · ' .. string.format(T.lap, lead.laps + 1)) or ''
-      local total = ss and ss.durationMinutes and ss.durationMinutes > 0 and hms(ss.durationMinutes * 60000) or (ss and ss.laps and ss.laps > 0 and tostring(ss.laps)) or '-'
+      local total = ss and ss.durationMinutes and ss.durationMinutes > 0 and hms(sessionElapsedMs('total', ss)) or (ss and ss.laps and ss.laps > 0 and tostring(ss.laps)) or '-'
       return name .. cls .. lapTxt, hms(sessionElapsedMs()), total, name
     end
     local function nextLine()
