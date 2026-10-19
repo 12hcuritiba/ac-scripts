@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V206 - 2026.10.19'
+local RC_VERSION = 'V207 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -14674,6 +14674,7 @@ float4 main(PS_IN pin) {
     end
     function BC.on() return CarRead.isTv(0) end
     function BC.drive()
+      if Session.ready then BC.entered = true end
       local sk = tostring(Session.id or 0) .. ':' .. tostring(Session.index or -1)
       if Session.ready and BC.startKey ~= sk and sim.isInMainMenu then
         BC.startKey = sk
@@ -14981,7 +14982,7 @@ float4 main(PS_IN pin) {
     local function classStyle(key)
       local id = identity()
       for n, c in ipairs(id.classes or {}) do
-        if c.key == key then return (c.name ~= nil and c.name ~= '') and c.name or key, hexColor(c.color) or CLASS_DEFAULT[(n - 1) % #CLASS_DEFAULT + 1] end
+        if c.key == key or c.name == key then return (c.name ~= nil and c.name ~= '') and c.name or key, hexColor(c.color) or CLASS_DEFAULT[(n - 1) % #CLASS_DEFAULT + 1] end
       end
       local n = 0
       for _, k in ipairs(BC.classKeys or {}) do n = n + 1 if k == key then break end end
@@ -17528,9 +17529,13 @@ local drawDesktopUI = (function()
       ui.onExclusiveHUD(function(mode)
         if not ServerGuard.ok() then return end
         Connection.hudMode = mode
-        if mode == 'game' and Broadcast and Broadcast.on() then
-          script.drawUI(true)
-          Desktop.hudDrawn = true
+        if Broadcast and Broadcast.on() then
+          if mode == 'game' or Broadcast.entered then
+            script.drawUI(true)
+            Desktop.hudDrawn = true
+          else
+            drawSessionWait()
+          end
           return true
         end
         if mode == 'menu' then
