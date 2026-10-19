@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V202 - 2026.10.19'
+local RC_VERSION = 'V203 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -15199,7 +15199,7 @@ float4 main(PS_IN pin) {
       local note = ended and Lang.letters.upper(nextLine()) or nil
       local sw = 250 * k - textWidth('00', F.sessV, 20 * k)
       ui.pushClipRect(TMP.a:set(0, y1), TMP.b:set(sw - 6 * k, y2))
-      drawText(kText, F.sessK, 12 * k, TMP.a:set(26 * k, y1 + 6 * k), DIMW)
+      drawText(kText, F.sessK, 12 * k, TMP.a:set(26 * k, y1 + 4 * k), DIMW)
       if note then
         drawText(note, F.notice, 17 * k, TMP.a:set(26 * k, y1 + 18 * k), PAPER)
       else
