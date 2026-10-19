@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V205 - 2026.10.19'
+local RC_VERSION = 'V206 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -7879,7 +7879,7 @@ do
       end
     end
   end
-  table.insert(RecordSync.base.beat, 1, function() if Broadcast and Broadcast.on() then RcCommand.tv() end end)
+  table.insert(RecordSync.base.beat, 1, function() if Broadcast and Broadcast.on() then RcCommand.tv(); if Broadcast.drive then Broadcast.drive() end end end)
 end
 local function startSlowdown(zone, r, lapCount)
   local toPay = math.max(r.param, 0)
@@ -14673,6 +14673,13 @@ float4 main(PS_IN pin) {
         o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '', math.floor(o.cycle or 0), math.floor(o.speed or 60))
     end
     function BC.on() return CarRead.isTv(0) end
+    function BC.drive()
+      local sk = tostring(Session.id or 0) .. ':' .. tostring(Session.index or -1)
+      if Session.ready and BC.startKey ~= sk and sim.isInMainMenu then
+        BC.startKey = sk
+        if not ac.tryToStart(true) then ac.log('race-control: broadcast: the start of the pits menu did not take') end
+      end
+    end
     local sets = nil
     function BC.sets()
       if sets then return sets end
