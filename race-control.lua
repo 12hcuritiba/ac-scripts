@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V211 - 2026.10.19'
+local RC_VERSION = 'V212 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -12242,9 +12242,9 @@ local drawStatus
       if strong then ui.drawRectFilled(q1, q2, rgbm(color.r, color.g, color.b, 0.1), 3 * s) end
       local border = (strong or color == COLOR_WARN) and rgbm(color.r, color.g, color.b, 0.65) or rgbm(0.23, 0.25, 0.27, 1)
       ui.drawRect(q1, q2, border, 3 * s, nil, 1)
-      ui.drawCircleFilled(vec2(px(tx + 8 * s), px(ty + L.tileH * s / 2)), 3 * s, color, 12)
-      drawText(name, FONT_TEXT, L.font * s, TMP.a:set(tx + 15 * s, ty + 2 * s), COLOR_TITLE)
-      drawText(value, FONT_MONO, L.font * s, TMP.a:set(tx + 15 * s, ty + 13 * s), color)
+      ui.drawCircleFilled(vec2(px(tx + tw - 7 * s), px(ty + 7.5 * s)), 3 * s, color, 12)
+      drawText(name, FONT_TEXT, L.font * s, TMP.a:set(tx + 6 * s, ty + 2 * s), COLOR_TITLE)
+      drawText(value, FONT_MONO, L.font * s, TMP.a:set(tx + 6 * s, ty + 13 * s), color)
     end
     local y = p1.y + (L.head + L.gap) * s
     blockTitle(TEXTS.statusWheels, y)
@@ -15126,13 +15126,13 @@ float4 main(PS_IN pin) {
       end
       if phaseGap then
         local behind = list[k + 1]
-        if not behind then return '' end
+        if not behind then return '---' end
         if sim.raceSessionType == ac.SessionType.Race then
           if (behind.laps or 0) < (r.laps or 0) then return '+' .. string.format(T.laps, (r.laps or 0) - (behind.laps or 0)) end
           local g = Lap.gapAt(behind.index, r.index)
-          return g and string.format('+%.3f', g) or '-'
+          return g and string.format('+%.3f', g) or '---'
         end
-        return (r.best > 0 and behind.best > 0) and string.format('+%.3f', (behind.best - r.best) / 1000) or '-'
+        return (r.best > 0 and behind.best > 0) and string.format('+%.3f', (behind.best - r.best) / 1000) or '---'
       end
       local c = ac.getCar(r.index)
       local ms = c and CarRead.num(c.previousLapTimeMs) or 0
@@ -15200,7 +15200,7 @@ float4 main(PS_IN pin) {
       local tx1, tx2 = cx, cx + ltw
       if cls then
         local _, ccol = classStyle(r.class)
-        slanted(tx1, y1 + 6.8 * k, tx2 + 4.4 * k, y1 + 37.2 * k, 7 * k, ccol)
+        slanted(tx1 - 1.52 * k, y1 + 2.4 * k, tx2 + 5.92 * k, y1 + 41.6 * k, 9.05 * k, ccol)
         tx1, tx2 = tx1 + 2.2 * k, tx2 + 2.2 * k
       end
       slanted(tx1, y1 + 9 * k, tx2, y1 + 35 * k, 6 * k, sel and WHITE or ((phaseGap and not ended) and MIST_GAP or MIST))
@@ -15350,15 +15350,15 @@ float4 main(PS_IN pin) {
           for n, r in ipairs(list) do
             if cx > w then break end
             local nx = cx + widthsBuf[n]
-            if nx > x then item(cx, y1, k, r, list, n, multi, false, phaseGap, ended) end
+            if nx > x then item(math.floor(cx + 0.5), y1, k, r, list, n, multi, false, phaseGap, ended) end
             cx = nx
           end
           start = start + width
         end
         ui.popClipRect()
         local fade = (w - x) * 0.03
-        ui.drawRectFilledMultiColor(TMP.a:set(x, y1 + k), TMP.b:set(x + fade, y2), BAR, BAR_EDGE, BAR_EDGE, BAR)
-        ui.drawRectFilledMultiColor(TMP.a:set(w - fade, y1 + k), TMP.b:set(w, y2), BAR_EDGE, BAR, BAR, BAR_EDGE)
+        ui.drawRectFilledMultiColor(TMP.a:set(x, y1), TMP.b:set(x + fade, y2), BAR, BAR_EDGE, BAR_EDGE, BAR)
+        ui.drawRectFilledMultiColor(TMP.a:set(w - fade, y1), TMP.b:set(w, y2), BAR_EDGE, BAR, BAR, BAR_EDGE)
       end
       scrollT = now
       local sy1, sy2 = h - 20 * k, h
