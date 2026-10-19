@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V197 - 2026.10.18'
+local RC_VERSION = 'V198 - 2026.10.18'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -14881,9 +14881,11 @@ float4 main(PS_IN pin) {
     local LOGOBG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.82)
     local FLAGC = { green = rgbm(31 / 255, 196 / 255, 59 / 255, 1), yellow = rgbm(1, 212 / 255, 0, 1), red = rgbm(224 / 255, 23 / 255, 23 / 255, 1),
       white = rgbm(242 / 255, 242 / 255, 242 / 255, 1) }
-    local GLOW = { green = rgbm(31 / 255, 196 / 255, 59 / 255, 0.30), yellow = rgbm(1, 212 / 255, 0, 0.30), red = rgbm(224 / 255, 23 / 255, 23 / 255, 0.30) }
+    local GLOW = { green = { rgbm(31 / 255, 196 / 255, 59 / 255, 0.55), rgbm(31 / 255, 196 / 255, 59 / 255, 0) },
+      yellow = { rgbm(1, 212 / 255, 0, 0.55), rgbm(1, 212 / 255, 0, 0) }, red = { rgbm(224 / 255, 23 / 255, 23 / 255, 0.55), rgbm(224 / 255, 23 / 255, 23 / 255, 0) } }
     local CHK_DARK, CHK_LIGHT = rgbm(0x11 / 255, 0x11 / 255, 0x11 / 255, 1), rgbm(0xee / 255, 0xee / 255, 0xee / 255, 1)
     local STRIP = rgbm(1, 1, 1, 0)
+    local STRIP_INK = rgbm(10 / 255, 12 / 255, 16 / 255, 0)
     local CLASS_DEFAULT = { rgbm(0xbd / 255, 0xd6 / 255, 0x3f / 255, 1), rgbm(1, 0x8a / 255, 0x3d / 255, 1), rgbm(0.36, 0.77, 1, 1), rgbm(0.85, 0.45, 1, 1) }
     local TYRE_DEFAULT = { S = rgbm(0xe5 / 255, 0x48 / 255, 0x4d / 255, 1), M = rgbm(0xf2 / 255, 0xd3 / 255, 0x3a / 255, 1), H = rgbm(0xf2 / 255, 0xf2 / 255, 0xf2 / 255, 1) }
     local colorCache = {}
@@ -14969,7 +14971,7 @@ float4 main(PS_IN pin) {
       local T = TEXTS.bc
       if Session.phase == 'resultados' or Session.phase == 'terminou' then return 'end', T.finished end
       if state.redFlag then return 'red', T.red end
-      if state.code80 then return 'code', TEXTS.flagCode80[state.code80] or state.code80 end
+      if state.code80 then return 'code', state.code80 end
       for i, inc in pairs(Flags.incidents) do
         if inc and inc.pos and not CarRead.isStaff(i) then
           local sec, sp = 1, Lap.splits or {}
@@ -15155,7 +15157,15 @@ float4 main(PS_IN pin) {
         frame(bx, by, bx + 26 * k, by + 26 * k, CHK_LIGHT, 2.5 * k)
       else
         rect(bx, by, bx + 26 * k, by + 26 * k, fk == 'code' and FLAGC.yellow or BOXBG)
-        if fk ~= 'code' then frame(bx + 3 * k, by + 3 * k, bx + 23 * k, by + 23 * k, GLOW[fk == 'red' and 'red' or fk == 'yellow' and 'yellow' or 'green'], 4 * k) end
+        if fk ~= 'code' then
+          local gc = GLOW[fk == 'red' and 'red' or fk == 'yellow' and 'yellow' or 'green']
+          local c, z = gc[1], gc[2]
+          local ix1, iy1, ix2, iy2, g = bx + 2.5 * k, by + 2.5 * k, bx + 23.5 * k, by + 23.5 * k, 8 * k
+          ui.drawRectFilledMultiColor(TMP.a:set(ix1, iy1), TMP.b:set(ix2, iy1 + g), c, c, z, z)
+          ui.drawRectFilledMultiColor(TMP.a:set(ix1, iy2 - g), TMP.b:set(ix2, iy2), z, z, c, c)
+          ui.drawRectFilledMultiColor(TMP.a:set(ix1, iy1), TMP.b:set(ix1 + g, iy2), c, z, z, c)
+          ui.drawRectFilledMultiColor(TMP.a:set(ix2 - g, iy1), TMP.b:set(ix2, iy2), z, c, c, z)
+        end
         frame(bx, by, bx + 26 * k, by + 26 * k, fc, 2.5 * k)
       end
       drawText(ft, F.flag, 15 * k, TMP.a:set(bx + 36 * k, y1 + 12 * k), PAPER)
@@ -15236,17 +15246,16 @@ float4 main(PS_IN pin) {
       local q = 10 * k
       local cols = math.max(math.floor((sx2 - sx1) / q), 0)
       for c = 0, cols - 1 do
-        STRIP.mult = 0.85 * 0.55 * math.min(c / math.max(cols * 0.7, 1), 1)
+        local fade = math.min(c / math.max(cols * 0.7, 1), 1)
+        STRIP.mult, STRIP_INK.mult = 0.85 * fade, 0.82 * fade
         for rr = 0, 1 do
-          if (c + rr) % 2 == 0 then rect(sx1 + c * q, sy1 + rr * q, sx1 + (c + 1) * q, sy1 + (rr + 1) * q, STRIP) end
+          rect(sx1 + c * q, sy1 + rr * q, sx1 + (c + 1) * q, sy1 + (rr + 1) * q, (c + rr) % 2 == 0 and STRIP or STRIP_INK)
         end
       end
       rect(sx2, sy1, w, sy2, LOGOBG)
-      local ev = id.logoEvent
-      if ev and ev ~= '' then
-        ui.drawImage(ev, TMP.a:set(sx2 + 10 * k, sy1 + 2.5 * k), TMP.b:set(w - 26 * k, sy1 + 17.5 * k), WHITE, UV0, UV1, ui.ImageFit.Fit)
-      else
-        drawText('12H', F.legend, 13 * k, TMP.a:set(sx2 + 10 * k, sy1 + 2 * k), TWELVE)
+      local ls = id.logoStrip
+      if ls and ls ~= '' then
+        ui.drawImage(ls, TMP.a:set(sx2 + 10 * k, sy1 + 2.5 * k), TMP.b:set(w - 26 * k, sy1 + 17.5 * k), WHITE, UV0, UV1, ui.ImageFit.Fit)
       end
     end
     function BC.stateText()
