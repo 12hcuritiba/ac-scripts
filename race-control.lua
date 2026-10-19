@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V207 - 2026.10.19'
+local RC_VERSION = 'V208 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -14651,7 +14651,7 @@ float4 main(PS_IN pin) {
     local BC = Broadcast
     local KEEP = 'rc.tv'
     local KEY_ESC, KEY_F2, KEY_ADD, KEY_SUB = 27, 113, 107, 109
-    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 82, bar = true, logos = 'BOTH', defSet = nil, cycle = 0, speed = 60 }
+    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 82, bar = true, logos = 'BOTH', defSet = nil, cycle = 0, speed = 60, flag = 'FIX' }
     BC.cam = { mode = 'start', set = nil, cam = nil, fov = nil, free = false, freeFov = nil }
     BC.wait = { on = true, mode = 'FIX', set = nil, cam = nil, secs = 8, at = 0, k = 0 }
     do
@@ -14660,7 +14660,7 @@ float4 main(PS_IN pin) {
         if BC.opt[k] ~= nil or k == 'defSet' then
           if k == 'op' then BC.opt.op = tonumber(v) or 82
           elseif k == 'cycle' then BC.opt.cycle = tonumber(v) or 0
-          elseif k == 'speed' then BC.opt.speed = math.min(math.max(tonumber(v) or 60, 20), 180)
+          elseif k == 'speed' then BC.opt.speed = math.min(math.max(tonumber(v) or 60, 10), 180)
           elseif k == 'bar' then BC.opt.bar = v ~= '0'
           elseif k == 'defSet' then BC.opt.defSet = tonumber(v)
           else BC.opt[k] = v end
@@ -14669,8 +14669,8 @@ float4 main(PS_IN pin) {
     end
     local function keep()
       local o = BC.opt
-      ac.storage[KEEP] = string.format('place=%s;legend=%s;fix=%s;time=%s;op=%d;bar=%d;logos=%s;defSet=%s;cycle=%d;speed=%d', o.place, o.legend, o.fix, o.time, o.op,
-        o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '', math.floor(o.cycle or 0), math.floor(o.speed or 60))
+      ac.storage[KEEP] = string.format('place=%s;legend=%s;fix=%s;time=%s;op=%d;bar=%d;logos=%s;defSet=%s;cycle=%d;speed=%d;flag=%s', o.place, o.legend, o.fix, o.time, o.op,
+        o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '', math.floor(o.cycle or 0), math.floor(o.speed or 60), o.flag or 'FIX')
     end
     function BC.on() return CarRead.isTv(0) end
     function BC.drive()
@@ -14853,7 +14853,8 @@ float4 main(PS_IN pin) {
         elseif k == 'SHOW' then BC.opt.bar = v ~= '0'
         elseif k == 'LOGOS' then BC.opt.logos = v:upper()
         elseif k == 'CYCLE' then BC.opt.cycle = math.min(math.max(math.floor(tonumber(v) or 0), 0), 600)
-        elseif k == 'SPEED' then BC.opt.speed = math.min(math.max(math.floor(tonumber(v) or 60), 20), 180)
+        elseif k == 'SPEED' then BC.opt.speed = math.min(math.max(math.floor(tonumber(v) or 60), 10), 180)
+        elseif k == 'FLAG' then BC.opt.flag = v:upper() == 'AUTO' and 'AUTO' or 'FIX'
         else return false end
       elseif a == 'IDENT' then
         RecordSync.base.serverNew()
@@ -15241,10 +15242,11 @@ float4 main(PS_IN pin) {
         rect(bx, by, bx + bw, by + 26 * k, fk == 'code' and FLAGC.yellow or BOXBG)
         frame(bx, by, bx + bw, by + 26 * k, fc, 2.5 * k)
       end
-      drawText(ft, F.flag, 15 * k, TMP.a:set(bx + bw + 10 * k, y1 + 12 * k), PAPER)
+      local onlyBox = BC.opt.flag == 'AUTO'
+      if not onlyBox then drawText(ft, F.flag, 15 * k, TMP.a:set(bx + bw + 10 * k, y1 + 12 * k), PAPER) end
       local fw = 0
       for _, s in ipairs({ T.green, T.red, T.finished, string.format(T.yellowS, 0), 'CODE-80', 'VSC', 'SC' }) do fw = math.max(fw, textWidth(Lang.letters.upper(s), F.flag, 15 * k)) end
-      x = bx + bw + 10 * k + fw + textWidth('0', F.flag, 15 * k) + 20 * k
+      x = onlyBox and (bx + bw + 20 * k) or (bx + bw + 10 * k + fw + textWidth('0', F.flag, 15 * k) + 20 * k)
       local list, multi = creditRows()
       local legend = (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '')
       if legend then
@@ -15356,7 +15358,7 @@ float4 main(PS_IN pin) {
       return string.format('%s|%s|%s|%s|%d|%d|%s|%s|%s|%s|%d|%s|%s|%s|%s|%d|%d', o.place, o.legend, o.fix, o.time, math.floor(o.op), o.bar and 1 or 0, o.logos,
         tostring(o.defSet or ''), c.mode, tostring(c.set or ''), c.cam or -1, c.free and '1' or '0', wt.on and '1' or '0', wt.mode, tostring(wt.set or ''),
         wt.cam or -1, math.floor(wt.secs or 8)) .. '|' .. tostring((ac.getCar(sim.focusedCar) or {}).sessionID or -1) .. '|' .. table.concat(BC.classKeys or {}, ',') .. '|'
-        .. BroadcastAlerts.tyres .. '|' .. math.floor(BC.opt.cycle or 0) .. '|' .. math.floor(BC.opt.speed or 60)
+        .. BroadcastAlerts.tyres .. '|' .. math.floor(BC.opt.cycle or 0) .. '|' .. math.floor(BC.opt.speed or 60) .. '|' .. (BC.opt.flag or 'FIX')
     end
     function BC.camsText()
       local out = {}
