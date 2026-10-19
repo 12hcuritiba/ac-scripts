@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V210 - 2026.10.19'
+local RC_VERSION = 'V211 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -9307,6 +9307,21 @@ do
     local id = tostring(ac.getCarID(i) or ''):lower()
     return (config.carClasses or {})[id] or classes[id]
   end
+  local eventKeys, eventFrom = {}, false
+  function RaceTable.classKeys()
+    local text = config.carClassesText or ''
+    if text == eventFrom then return eventKeys end
+    eventFrom = text
+    local keys, seen = {}, {}
+    if text ~= '' then
+      for _, c in text:gmatch('([^,:]+):([^,]+)') do if not seen[c] then seen[c] = true keys[#keys + 1] = c end end
+    else
+      for _, c in pairs(classes) do if not seen[c] then seen[c] = true keys[#keys + 1] = c end end
+      table.sort(keys)
+    end
+    eventKeys = keys
+    return keys
+  end
   local STOPS_KEY = 'rc.stops'
   local function stopsSave()
     local parts = {}
@@ -15089,20 +15104,16 @@ float4 main(PS_IN pin) {
     local rowsBuf = {}
     local function creditRows()
       local out, n = rowsBuf, 0
-      local keys, seen = {}, {}
       local place = placeNow()
       for _, r in ipairs(RaceTable.rows or {}) do
-        if not r.absent then
-          if r.class and not seen[r.class] then seen[r.class] = true keys[#keys + 1] = r.class end
-          if place == 'ALL' or r.class == place then
-            n = n + 1
-            out[n] = r
-          end
+        if not r.absent and (place == 'ALL' or r.class == place) then
+          n = n + 1
+          out[n] = r
         end
       end
       for k = #out, n + 1, -1 do out[k] = nil end
-      BC.classKeys = keys
-      return out, #keys > 1
+      BC.classKeys = RaceTable.classKeys()
+      return out, #BC.classKeys > 1
     end
     local function timeText(r, list, k, phaseGap, ended)
       local T = TEXTS.bc
