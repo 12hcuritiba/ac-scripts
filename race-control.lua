@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V198 - 2026.10.18'
+local RC_VERSION = 'V199 - 2026.10.18'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -11341,7 +11341,7 @@ do
       text = face('titillium-web-600', ';Weight=SemiBold', { 'Titillium Web', 'Titillium Web SemiBold' }), mono = MONO, files = true },
     { id = 'barlow', name = 'Barlow', title = face('barlow-condensed-600', ';Weight=SemiBold;Stretch=Condensed', { 'Barlow', 'Barlow Condensed' }),
       text = face('barlow-600', ';Weight=SemiBold', { 'Barlow', 'Barlow SemiBold' }), mono = MONO, files = true,
-      italic = face('barlow-condensed-600-italic', ';Weight=SemiBold;Stretch=Condensed;Style=Italic', { 'Barlow', 'Barlow Condensed' }) },
+      italic = face('barlow-condensed-600-italic', ';Weight=SemiBold;Stretch=Condensed;Style=Italic', { 'Barlow Condensed', 'Barlow Condensed SemiBold Italic', 'Barlow' }) },
     { id = 'rajdhani', name = 'Rajdhani', title = face('rajdhani-700', ';Weight=Bold', { 'Rajdhani', 'Rajdhani Bold' }),
       text = face('rajdhani-600', ';Weight=SemiBold', { 'Rajdhani', 'Rajdhani SemiBold' }), mono = MONO, files = true },
     { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
@@ -14831,7 +14831,6 @@ float4 main(PS_IN pin) {
     local escWas = false
     function BC.update()
       if not BC.on() then return end
-      ac.hideMouseCursor()
       local esc = ac.isKeyDown(KEY_ESC) == true
       if esc and not escWas then
         ac.log('race-control: broadcast: ESC, the game closed')
