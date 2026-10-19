@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V214 - 2026.10.19'
+local RC_VERSION = 'V215 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -3831,11 +3831,14 @@ do
     lapN = ac.StructItem.uint16(),
     lapBest = ac.StructItem.uint32(),
     lapSec = ac.StructItem.string(48),
+    lapLast = ac.StructItem.uint32(),
+    lapOk = ac.StructItem.uint8(),
   }, function(sender, msg)
     if not sender or sender.index == 0 then return end
     local s, k = {}, 0
     for v in tostring(msg.lapSec or ''):gmatch('%d+') do s[k], k = tonumber(v), k + 1 end
-    Lap.others[sender.index] = { n = tonumber(msg.lapN) or 0, best = tonumber(msg.lapBest) or 0, s = s, t = state.ui.clock }
+    Lap.others[sender.index] = { n = tonumber(msg.lapN) or 0, best = tonumber(msg.lapBest) or 0, last = tonumber(msg.lapLast) or 0, lastOk = tonumber(msg.lapOk) == 1,
+      s = s, t = state.ui.clock }
   end, nil, nil, { processPostponed = true })
   local noBest = { ms = 0, lapS = {} }
   function Lap.tell()
@@ -3848,15 +3851,16 @@ do
       if not v then break end
       parts[#parts + 1] = tostring(math.floor(v))
     end
-    local msg = { lapN = math.min(n, 65535), lapBest = math.floor(best), lapSec = table.concat(parts, '/') }
+    local msg = { lapN = math.min(n, 65535), lapBest = math.floor(best), lapSec = table.concat(parts, '/'),
+      lapLast = Lap.last and math.max(math.floor(Lap.last.ms or 0), 0) or 0, lapOk = Lap.last and Lap.last.valid and 1 or 0 }
     Lap.sentBest, Lap.sentT = { n = n, ms = best, lap = all.lap, msg = msg }, state.ui.clock
     OnlineQueue.push(sendLap, msg, nil, true)
   end
   function Lap.of(i)
-    if i == 0 then return Lap.number(), Lap.ownBest and Lap.ownBest() or 0 end
+    if i == 0 then return Lap.number(), Lap.ownBest and Lap.ownBest() or 0, Lap.last and Lap.last.ms or 0, Lap.last ~= nil and Lap.last.valid == true end
     local o = Lap.others[i]
     if not o then return nil end
-    return o.n, o.best
+    return o.n, o.best, o.last or 0, o.lastOk == true
   end
   function Lap.sessionBest()
     local best = Lap.ownBest and Lap.ownBest() or 0
@@ -15215,9 +15219,9 @@ float4 main(PS_IN pin) {
         end
         return (r.best > 0 and behind.best > 0) and string.format('+%.3f', (behind.best - r.best) / 1000) or '---'
       end
-      local c = ac.getCar(r.index)
-      local ms = c and CarRead.num(c.previousLapTimeMs) or 0
-      return ms > 0 and lapTime(ms) or (r.best > 0 and lapTime(r.best) or '-')
+      local _, _, ms, ok = Lap.of(r.index)
+      if (ms or 0) > 0 then return lapTime(ms), not ok end
+      return r.best > 0 and lapTime(r.best) or '-'
     end
     local function ringSize(sig, size, room)
       while size > 6 and textWidth(sig, F.rb, size) > room do size = size - 1 end
@@ -15300,7 +15304,7 @@ float4 main(PS_IN pin) {
     end
     local function item(x, y1, k, r, list, i, multi, sel, phaseGap, ended, measure, tw, byClass)
       local pos = (byClass or placeNow() ~= 'ALL') and (r.classPos or i) or (r.pos or i)
-      local tt = timeText(r, list, i, phaseGap, ended)
+      local tt, bad = timeText(r, list, i, phaseGap, ended)
       local nm = nameOf(r)
       local num = '#' .. tostring(r.number or '')
       local team = teamOf(r)
@@ -15364,7 +15368,7 @@ float4 main(PS_IN pin) {
       end
       slanted(bx1, by1, bx2, by2, 6 * k, sel and WHITE or ((phaseGap and not ended) and MIST_GAP or MIST))
       local ttw = textWidth(tt, F.rb, 17 * k)
-      drawText(tt, F.rb, 17 * k, TMP.a:set((bx1 + bx2) / 2 - ttw / 2, by1 + (tw and 2 or 3) * k), LT_INK)
+      drawText(tt, F.rb, 17 * k, TMP.a:set((bx1 + bx2) / 2 - ttw / 2, by1 + (tw and 2 or 3) * k), bad and RED or LT_INK)
       if r.index == BC.fastIdx then fastBadge(bx2 - 2 * k, by1 + k, k) end
       if tw then rect(x, y1, x + W, y1 + k, HAIR) else vline(x + W, y1, y2, HAIR, k) end
       return x + W
@@ -15528,13 +15532,14 @@ float4 main(PS_IN pin) {
     local function cardData(r, multi)
       local T = TEXTS.bc
       local n = 0
-      local c = ac.getCar(r.index)
-      local last = c and CarRead.num(c.previousLapTimeMs) or 0
+      local _, _, last, lastOk = Lap.of(r.index)
+      last = last or 0
       if last > 0 or (r.best or 0) > 0 then
         n = n + 1
         local p = cardPages[n]
         p.name, p.l1, p.v1, p.u1, p.l2, p.v2, p.u2, p.fast, p.cls = T.thTimes, T.lastLap, last > 0 and lapTime(last) or '-', nil, T.bestLap,
           (r.best or 0) > 0 and lapTime(r.best) or '-', nil, r.index == BC.fastIdx, nil
+        p.bad = last > 0 and not lastOk
       end
       local ahead, behind, found = nil, nil, false
       for _, x in ipairs(RaceTable.rows or {}) do
@@ -15547,7 +15552,7 @@ float4 main(PS_IN pin) {
       if ahead or behind then
         n = n + 1
         local p = cardPages[n]
-        p.name, p.fast, p.cls = T.thFight, false, nil
+        p.name, p.fast, p.cls, p.bad = T.thFight, false, nil, false
         p.l1 = ahead and string.format('%s · #%s %s', T.ahead, tostring(ahead.number or ''), nameOf(ahead)) or T.ahead
         p.v1, p.u1 = gapOf(r, ahead, '−')
         p.l2 = behind and string.format('%s · #%s %s', T.behind, tostring(behind.number or ''), nameOf(behind)) or T.behind
@@ -15557,11 +15562,12 @@ float4 main(PS_IN pin) {
         n = n + 1
         local p = cardPages[n]
         p.name, p.l1, p.v1, p.u1, p.l2, p.v2, p.u2, p.fast, p.cls = T.thClass, T.classK, nil, nil, T.classPos, 'P' .. tostring(r.classPos or '-'), nil, false, r.class
+        p.bad = false
       end
       return n
     end
     local function pageNow(n) return math.floor(state.ui.clock / math.max(BC.opt.theme or 6, 2)) % math.max(n, 1) + 1 end
-    local function pair(l, v, u, fast, cls, x, y, colW, k)
+    local function pair(l, v, u, fast, cls, x, y, colW, k, bad)
       local L = fitText(Lang.letters.upper(l or ''), F.lab, 11 * k, colW, '...')
       drawText(L, F.lab, 11 * k, TMP.a:set(x, y), DIMW)
       local vy = y + 14 * k
@@ -15573,7 +15579,7 @@ float4 main(PS_IN pin) {
         drawText(nm, F.cls, 14 * k, TMP.a:set(x + 22 * k, vy + 3 * k), PAPER)
         vw = 22 * k + textWidth(nm, F.cls, 14 * k)
       else
-        drawText(v or '-', F.rb, 19 * k, TMP.a:set(x, vy), fast and PURPLE or PAPER)
+        drawText(v or '-', F.rb, 19 * k, TMP.a:set(x, vy), fast and PURPLE or bad and RED or PAPER)
         vw = textWidth(v or '-', F.rb, 19 * k)
         if u then
           drawText(u, F.sessT, 13 * k, TMP.a:set(x + vw + 3 * k, vy + 5 * k), DIMW)
@@ -15647,7 +15653,7 @@ float4 main(PS_IN pin) {
           drawText(cn, F.cls, 14 * k, TMP.a:set(px + 22 * k, y1 + 15 * k), PAPER)
           px = px + 22 * k + textWidth(cn, F.cls, 14 * k) + 14 * k
         else
-          px = px + pair(pg.l1, pg.v1, pg.u1, false, nil, px, y1 + 6 * k, CW.pages, k) + 14 * k
+          px = px + pair(pg.l1, pg.v1, pg.u1, false, nil, px, y1 + 6 * k, CW.pages, k, pg.bad) + 14 * k
         end
         pair(pg.l2, pg.v2, pg.u2, pg.fast, nil, px, y1 + 6 * k, CW.pages, k)
       end
@@ -15689,7 +15695,7 @@ float4 main(PS_IN pin) {
       local colW = (372 * k - 32 * k - 54 * k - 14 * k) / 2
       if n > 0 then
         local pg = cardPages[on]
-        pair(pg.l1, pg.v1, pg.u1, false, pg.cls, x1 + 16 * k, cy, colW, k)
+        pair(pg.l1, pg.v1, pg.u1, false, pg.cls, x1 + 16 * k, cy, colW, k, pg.bad)
         pair(pg.l2, pg.v2, pg.u2, pg.fast, nil, x1 + 30 * k + colW, cy, colW, k)
       end
       dots(x2 - 40 * k, iy2 + 25.5 * k, n, on, k)
