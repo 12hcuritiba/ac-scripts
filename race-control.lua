@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V208 - 2026.10.19'
+local RC_VERSION = 'V209 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2331,7 +2331,7 @@ do
           if askName then B.nameRead(true, type(data.name) == 'string' and data.name or nil) end
           if askPush and type(data.push) == 'string' then B.pushRead(data.push) end
         end
-      end)
+      end, Broadcast and Broadcast.on())
   end
   if ac.onRelease then
     ac.onRelease(function()
@@ -7874,8 +7874,16 @@ do
       local body = cut and line:sub(1, cut - 1) or line
       local tv = body:match('^%s*[Rr][Cc]%s+[Tt][Vv]%s+(.+)$')
       if tv then
-        local okTv = Broadcast.command(tv)
-        ac.log('race-control: broadcast command ' .. tv .. (okTv and '' or ' (not understood)'))
+        local words, seq = tv:match('^(.-)%s+_(%d+)%s*$')
+        local n = seq and tonumber(seq)
+        if n then tv = words end
+        if n and Broadcast.lastSeq and n < Broadcast.lastSeq then
+          ac.log('race-control: broadcast command older than the last one run, dropped: ' .. tv)
+        else
+          if n then Broadcast.lastSeq = n end
+          local okTv = Broadcast.command(tv)
+          ac.log('race-control: broadcast command ' .. tv .. (okTv and '' or ' (not understood)'))
+        end
       end
     end
   end
