@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V199 - 2026.10.18'
+local RC_VERSION = 'V200 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -14627,7 +14627,7 @@ float4 main(PS_IN pin) {
     local BC = Broadcast
     local KEEP = 'rc.tv'
     local KEY_ESC, KEY_F2, KEY_ADD, KEY_SUB = 27, 113, 107, 109
-    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 82, bar = true, logos = 'BOTH', defSet = nil }
+    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 82, bar = true, logos = 'BOTH', defSet = nil, cycle = 0 }
     BC.cam = { mode = 'start', set = nil, cam = nil, fov = nil, free = false, freeFov = nil }
     BC.wait = { on = true, mode = 'FIX', set = nil, cam = nil, secs = 8, at = 0, k = 0 }
     do
@@ -14635,6 +14635,7 @@ float4 main(PS_IN pin) {
       for k, v in kept:gmatch('(%w+)=([^;]*)') do
         if BC.opt[k] ~= nil or k == 'defSet' then
           if k == 'op' then BC.opt.op = tonumber(v) or 82
+          elseif k == 'cycle' then BC.opt.cycle = tonumber(v) or 0
           elseif k == 'bar' then BC.opt.bar = v ~= '0'
           elseif k == 'defSet' then BC.opt.defSet = tonumber(v)
           else BC.opt[k] = v end
@@ -14643,8 +14644,8 @@ float4 main(PS_IN pin) {
     end
     local function keep()
       local o = BC.opt
-      ac.storage[KEEP] = string.format('place=%s;legend=%s;fix=%s;time=%s;op=%d;bar=%d;logos=%s;defSet=%s', o.place, o.legend, o.fix, o.time, o.op,
-        o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '')
+      ac.storage[KEEP] = string.format('place=%s;legend=%s;fix=%s;time=%s;op=%d;bar=%d;logos=%s;defSet=%s;cycle=%d', o.place, o.legend, o.fix, o.time, o.op,
+        o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '', math.floor(o.cycle or 0))
     end
     function BC.on() return CarRead.isTv(0) end
     local sets = nil
@@ -14818,7 +14819,10 @@ float4 main(PS_IN pin) {
         elseif k == 'OP' then BC.opt.op = math.min(math.max(tonumber(v) or 82, 40), 100)
         elseif k == 'SHOW' then BC.opt.bar = v ~= '0'
         elseif k == 'LOGOS' then BC.opt.logos = v:upper()
+        elseif k == 'CYCLE' then BC.opt.cycle = math.min(math.max(math.floor(tonumber(v) or 0), 0), 600)
         else return false end
+      elseif a == 'IDENT' then
+        RecordSync.base.serverNew()
       elseif a == 'QUIT' then
         ac.log('race-control: broadcast: the game closed by the room of the broadcast')
         ac.shutdownAssettoCorsa()
@@ -14880,8 +14884,6 @@ float4 main(PS_IN pin) {
     local LOGOBG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.82)
     local FLAGC = { green = rgbm(31 / 255, 196 / 255, 59 / 255, 1), yellow = rgbm(1, 212 / 255, 0, 1), red = rgbm(224 / 255, 23 / 255, 23 / 255, 1),
       white = rgbm(242 / 255, 242 / 255, 242 / 255, 1) }
-    local GLOW = { green = { rgbm(31 / 255, 196 / 255, 59 / 255, 0.55), rgbm(31 / 255, 196 / 255, 59 / 255, 0) },
-      yellow = { rgbm(1, 212 / 255, 0, 0.55), rgbm(1, 212 / 255, 0, 0) }, red = { rgbm(224 / 255, 23 / 255, 23 / 255, 0.55), rgbm(224 / 255, 23 / 255, 23 / 255, 0) } }
     local CHK_DARK, CHK_LIGHT = rgbm(0x11 / 255, 0x11 / 255, 0x11 / 255, 1), rgbm(0xee / 255, 0xee / 255, 0xee / 255, 1)
     local STRIP = rgbm(1, 1, 1, 0)
     local STRIP_INK = rgbm(10 / 255, 12 / 255, 16 / 255, 0)
@@ -14962,9 +14964,26 @@ float4 main(PS_IN pin) {
       local sig = #words >= 2 and (words[1]:sub(1, 1) .. words[2]:sub(1, 1)):upper() or tostring(name or '?'):sub(1, 1):upper()
       return sig, TYRE_DEFAULT[sig] or PAPER
     end
+    local UTF8 = '[%z\1-\127\194-\244][\128-\191]*'
     local function short(name)
       local first, rest = tostring(name or ''):match('^(%S+)%s+(.+)$')
-      return first and (first:sub(1, 1) .. '. ' .. rest) or tostring(name or '')
+      return first and ((first:match('^' .. UTF8) or first:sub(1, 1)) .. '. ' .. rest) or tostring(name or '')
+    end
+    local function cut(text, n)
+      local out, count = {}, 0
+      for ch in tostring(text or ''):gmatch(UTF8) do
+        count = count + 1
+        if count > n then out[n] = '.' return table.concat(out) end
+        out[count] = ch
+      end
+      return table.concat(out)
+    end
+    local function placeNow()
+      local cyc = tonumber(BC.opt.cycle) or 0
+      local keys = BC.classKeys or {}
+      if cyc <= 0 or #keys < 2 then return BC.opt.place end
+      local n = math.floor(state.ui.clock / cyc) % (#keys + 1)
+      return n == 0 and 'ALL' or keys[n]
     end
     local function flagNow()
       local T = TEXTS.bc
@@ -14986,7 +15005,8 @@ float4 main(PS_IN pin) {
       local type = ss and ss.type or sim.raceSessionType
       local name = T.sess[type] or '-'
       if type == ac.SessionType.Race and (tonumber(config.eventRaces) or 1) > 1 then name = string.format(T.raceN, config.raceNo or 1) end
-      local cls = BC.opt.place ~= 'ALL' and (' · ' .. string.format(T.classOf, (classStyle(BC.opt.place)))) or ''
+      local place = placeNow()
+      local cls = place ~= 'ALL' and (' · ' .. string.format(T.classOf, (classStyle(place)))) or ''
       local lead = RaceTable.rows and RaceTable.rows[1]
       local lapTxt = type == ac.SessionType.Race and lead and lead.laps and lead.laps > 0 and (' · ' .. string.format(T.lap, lead.laps + 1)) or ''
       local total = ss and ss.durationMinutes and ss.durationMinutes > 0 and hms(ss.durationMinutes * 60000) or (ss and ss.laps and ss.laps > 0 and tostring(ss.laps)) or '-'
@@ -15014,10 +15034,11 @@ float4 main(PS_IN pin) {
     local function creditRows()
       local out, n = rowsBuf, 0
       local keys, seen = {}, {}
+      local place = placeNow()
       for _, r in ipairs(RaceTable.rows or {}) do
         if not r.absent then
           if r.class and not seen[r.class] then seen[r.class] = true keys[#keys + 1] = r.class end
-          if BC.opt.place == 'ALL' or r.class == BC.opt.place then
+          if place == 'ALL' or r.class == place then
             n = n + 1
             out[n] = r
           end
@@ -15050,19 +15071,41 @@ float4 main(PS_IN pin) {
       local ms = c and CarRead.num(c.previousLapTimeMs) or 0
       return ms > 0 and lapTime(ms) or (r.best > 0 and lapTime(r.best) or '-')
     end
+    local function ringSize(sig, size, room)
+      while size > 6 and textWidth(sig, F.rb, size) > room do size = size - 1 end
+      return size
+    end
+    local COLS = { name = 0, team = 0 }
+    local function nameOf(r) return Lang.letters.upper(cut(short(r.name), 14)) end
+    local function teamOf(r) return cut(r.team or '', 16) end
+    local function columns(list, extra, k)
+      local nw, tw = 0, 0
+      for _, r in ipairs(list) do
+        nw = math.max(nw, textWidth(nameOf(r), F.name, 19 * k))
+        local tm = teamOf(r)
+        if tm ~= '' then tw = math.max(tw, textWidth(tm, F.team, 14 * k)) end
+      end
+      if extra then
+        nw = math.max(nw, textWidth(nameOf(extra), F.name, 19 * k))
+        local tm = teamOf(extra)
+        if tm ~= '' then tw = math.max(tw, textWidth(tm, F.team, 14 * k)) end
+      end
+      COLS.name, COLS.team = nw, tw
+    end
     local function item(x, y1, k, r, list, i, multi, sel, phaseGap, ended, measure)
-      local pos = BC.opt.place ~= 'ALL' and (r.classPos or i) or (r.pos or i)
+      local pos = placeNow() ~= 'ALL' and (r.classPos or i) or (r.pos or i)
       local tt = timeText(r, list, i, phaseGap, ended)
-      local nm = Lang.letters.upper(short(r.name))
+      local nm = nameOf(r)
       local num = '#' .. tostring(r.number or '')
-      local team = r.team or ''
-      local pw = math.max(textWidth(tostring(pos), F.rb, 22 * k), 22 * k)
-      local nw = textWidth(num, F.rb, 13 * k) + 10 * k
-      local namew = textWidth(nm, F.name, 19 * k)
-      local teamw = team ~= '' and textWidth(team, F.team, 14 * k) or 0
-      local ltw = math.max(84 * k, textWidth((tt:gsub('%d', '0')), F.rb, 17 * k) + 18 * k)
+      local team = teamOf(r)
+      local pw = math.max(textWidth('00', F.rb, 22 * k), 22 * k)
+      local nw = textWidth('#000', F.rb, 13 * k) + 10 * k
+      local namew = COLS.name
+      local teamw = COLS.team
+      local G = 9 * k + textWidth('0', F.name, 19 * k) / 5
+      local ltw = math.max(84 * k, textWidth('0:00.000', F.rb, 17 * k) + 18 * k)
       local cls = multi and r.class
-      local W = 14 * k + pw + 9 * k + nw + 9 * k + namew + (teamw > 0 and (9 * k + teamw) or 0) + 9 * k + 20 * k + 9 * k + ltw + (cls and 4.4 * k or 0) + 16 * k
+      local W = 14 * k + pw + G + nw + G + namew + (teamw > 0 and (G + teamw) or 0) + G + 20 * k + G + ltw + (multi and 4.4 * k or 0) + 16 * k
       if measure then return x + W end
       local y2 = y1 + 44 * k
       if sel then
@@ -15072,20 +15115,21 @@ float4 main(PS_IN pin) {
       local cx = x + 14 * k
       local p = tostring(pos)
       drawText(p, F.rb, 22 * k, TMP.a:set(cx + pw - textWidth(p, F.rb, 22 * k), y1 + 8 * k), PAPER)
-      cx = cx + pw + 9 * k
+      cx = cx + pw + G
       frame(cx, y1 + 13 * k, cx + nw, y1 + 31 * k, NUMB, k)
       drawText(num, F.rb, 13 * k, TMP.a:set(cx + 5 * k, y1 + 14 * k), PAPER)
-      cx = cx + nw + 9 * k
+      cx = cx + nw + G
       drawText(nm, F.name, 19 * k, TMP.a:set(cx, y1 + 9 * k), PAPER)
-      cx = cx + namew + 9 * k
+      cx = cx + namew + G
       if teamw > 0 then
-        drawText(team, F.team, 14 * k, TMP.a:set(cx, y1 + 13 * k), DIMW)
-        cx = cx + teamw + 9 * k
+        if team ~= '' then drawText(team, F.team, 14 * k, TMP.a:set(cx, y1 + 13 * k), DIMW) end
+        cx = cx + teamw + G
       end
       local sig, tc = tyreStyle(BroadcastAlerts.tyreOf[r.index] or '')
       ui.drawCircle(TMP.a:set(cx + 10 * k, y1 + 22 * k), 8.75 * k, tc, 24, 2.5 * k)
-      drawText(sig, F.rb, 11 * k, TMP.a:set(cx + 10 * k - textWidth(sig, F.rb, 11 * k) / 2, y1 + 15 * k), PAPER)
-      cx = cx + 20 * k + 9 * k
+      local rs = ringSize(sig, 11 * k, 12 * k)
+      drawText(sig, F.rb, rs, TMP.a:set(cx + 10 * k - textWidth(sig, F.rb, rs) / 2, y1 + 22 * k - 7 * k * rs / (11 * k)), PAPER)
+      cx = cx + 20 * k + G
       local tx1, tx2 = cx, cx + ltw
       if cls then
         local _, ccol = classStyle(r.class)
@@ -15127,11 +15171,9 @@ float4 main(PS_IN pin) {
       local ended = Session.phase == 'resultados' or Session.phase == 'terminou'
       local kText = Lang.letters.upper(ended and string.format(T.sessEnd, sname) or label)
       local tot = ' / ' .. total
-      local vW
       local note = ended and Lang.letters.upper(nextLine()) or nil
-      if note then vW = textWidth(note, F.notice, 17 * k)
-      else vW = textWidth((el:gsub('%d', '0')), F.sessV, 21 * k) + textWidth(tot, F.sessT, 21 * k) end
-      local sw = math.max(250 * k, 26 * k + math.max(textWidth(kText, F.sessK, 12 * k), vW) + 22 * k)
+      local sw = 250 * k - textWidth('00', F.sessV, 21 * k)
+      ui.pushClipRect(TMP.a:set(0, y1), TMP.b:set(sw - 6 * k, y2))
       drawText(kText, F.sessK, 12 * k, TMP.a:set(26 * k, y1 + 6 * k), DIMW)
       if note then
         drawText(note, F.notice, 17 * k, TMP.a:set(26 * k, y1 + 18 * k), PAPER)
@@ -15139,47 +15181,52 @@ float4 main(PS_IN pin) {
         drawText(el, F.sessV, 21 * k, TMP.a:set(26 * k, y1 + 16 * k), PAPER)
         drawText(tot, F.sessT, 21 * k, TMP.a:set(26 * k + textWidth((el:gsub('%d', '0')), F.sessV, 21 * k), y1 + 16 * k), DIMW)
       end
+      ui.popClipRect()
       local x = sw
       vline(x, y1, y2, HAIR, k)
       local fk, ft = flagNow()
       ft = Lang.letters.upper(ft)
       local fc = fk == 'red' and FLAGC.red or (fk == 'yellow' or fk == 'code') and FLAGC.yellow or fk == 'end' and FLAGC.white or FLAGC.green
-      local bx, by = x + 20 * k, y1 + 9 * k
+      local bw = 32 * k
+      local bx, by = x + 46 * k - bw, y1 + 9 * k
       if fk == 'end' then
         local q = 9 * k
-        for cxq = 0, 2 do
+        for cxq = 0, 3 do
           for cyq = 0, 2 do
             local x1q, y1q = bx + cxq * q, by + cyq * q
-            rect(x1q, y1q, math.min(x1q + q, bx + 26 * k), math.min(y1q + q, by + 26 * k), (cxq + cyq) % 2 == 0 and CHK_DARK or CHK_LIGHT)
+            rect(x1q, y1q, math.min(x1q + q, bx + bw), math.min(y1q + q, by + 26 * k), (cxq + cyq) % 2 == 0 and CHK_DARK or CHK_LIGHT)
           end
         end
-        frame(bx, by, bx + 26 * k, by + 26 * k, CHK_LIGHT, 2.5 * k)
+        frame(bx, by, bx + bw, by + 26 * k, CHK_LIGHT, 2.5 * k)
       else
-        rect(bx, by, bx + 26 * k, by + 26 * k, fk == 'code' and FLAGC.yellow or BOXBG)
-        if fk ~= 'code' then
-          local gc = GLOW[fk == 'red' and 'red' or fk == 'yellow' and 'yellow' or 'green']
-          local c, z = gc[1], gc[2]
-          local ix1, iy1, ix2, iy2, g = bx + 2.5 * k, by + 2.5 * k, bx + 23.5 * k, by + 23.5 * k, 8 * k
-          ui.drawRectFilledMultiColor(TMP.a:set(ix1, iy1), TMP.b:set(ix2, iy1 + g), c, c, z, z)
-          ui.drawRectFilledMultiColor(TMP.a:set(ix1, iy2 - g), TMP.b:set(ix2, iy2), z, z, c, c)
-          ui.drawRectFilledMultiColor(TMP.a:set(ix1, iy1), TMP.b:set(ix1 + g, iy2), c, z, z, c)
-          ui.drawRectFilledMultiColor(TMP.a:set(ix2 - g, iy1), TMP.b:set(ix2, iy2), z, c, c, z)
-        end
-        frame(bx, by, bx + 26 * k, by + 26 * k, fc, 2.5 * k)
+        rect(bx, by, bx + bw, by + 26 * k, fk == 'code' and FLAGC.yellow or BOXBG)
+        frame(bx, by, bx + bw, by + 26 * k, fc, 2.5 * k)
       end
-      drawText(ft, F.flag, 15 * k, TMP.a:set(bx + 36 * k, y1 + 12 * k), PAPER)
-      x = bx + 36 * k + textWidth(ft, F.flag, 15 * k) + 20 * k
+      drawText(ft, F.flag, 15 * k, TMP.a:set(bx + bw + 10 * k, y1 + 12 * k), PAPER)
+      local fw = 0
+      for _, s in ipairs({ T.green, T.red, T.finished, string.format(T.yellowS, 0), 'CODE-80', 'VSC', 'SC' }) do fw = math.max(fw, textWidth(Lang.letters.upper(s), F.flag, 15 * k)) end
+      x = bx + bw + 10 * k + fw + textWidth('0', F.flag, 15 * k) + 20 * k
       local list, multi = creditRows()
       local legend = (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '')
       if legend then
+        local lw, cw2, tw2 = 0, 0, 0
+        if multi then
+          for _, key in ipairs(BC.classKeys) do cw2 = cw2 + 22 * k + textWidth(Lang.letters.upper((classStyle(key))), F.legend, 13 * k) + 12 * k end
+        end
+        for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
+          if tname ~= '' then tw2 = tw2 + 24 * k + textWidth(Lang.letters.upper(tname), F.legend, 13 * k) + 12 * k end
+        end
+        lw = 16 * k + math.max(cw2, tw2) - 12 * k + 16 * k + textWidth('0', F.legend, 13 * k)
+        local x0 = x
         vline(x, y1, y2, HAIR, k)
         x = x + 16 * k
+        local place = placeNow()
         if BC.opt.legend == 'CLASS' then
           for _, key in ipairs(BC.classKeys) do
             local nm, cc = classStyle(key)
             nm = Lang.letters.upper(nm)
             slanted(x, y1 + 17 * k, x + 16 * k, y1 + 27 * k, 3 * k, cc)
-            drawText(nm, F.legend, 13 * k, TMP.a:set(x + 22 * k, y1 + 13 * k), (BC.opt.place == 'ALL' or BC.opt.place == key) and PAPER or OFFW)
+            drawText(nm, F.legend, 13 * k, TMP.a:set(x + 22 * k, y1 + 13 * k), (place == 'ALL' or place == key) and PAPER or OFFW)
             x = x + 22 * k + textWidth(nm, F.legend, 13 * k) + 12 * k
           end
         else
@@ -15188,13 +15235,14 @@ float4 main(PS_IN pin) {
               local sig, tc = tyreStyle(tname)
               local up = Lang.letters.upper(tname)
               ui.drawCircle(TMP.a:set(x + 9 * k, y1 + 22 * k), 7.75 * k, tc, 20, 2.5 * k)
-              drawText(sig, F.rb, 10 * k, TMP.a:set(x + 9 * k - textWidth(sig, F.rb, 10 * k) / 2, y1 + 15 * k), PAPER)
+              local rs = ringSize(sig, 10 * k, 10 * k)
+              drawText(sig, F.rb, rs, TMP.a:set(x + 9 * k - textWidth(sig, F.rb, rs) / 2, y1 + 22 * k - 7 * k * rs / (10 * k)), PAPER)
               drawText(up, F.legend, 13 * k, TMP.a:set(x + 24 * k, y1 + 13 * k), PAPER)
               x = x + 24 * k + textWidth(up, F.legend, 13 * k) + 12 * k
             end
           end
         end
-        x = x - 12 * k + 16 * k
+        x = x0 + lw
       end
       ui.drawLine(TMP.a:set(x + 3.1 * k, y2), TMP.b:set(x + 14.9 * k, y1), HAIR, k)
       x = x + 18 * k
@@ -15207,6 +15255,7 @@ float4 main(PS_IN pin) {
       else
         for n, r in ipairs(list) do if r.index == sim.focusedCar then fixed, fixedK = r, n end end
       end
+      columns(list, fixed, k)
       if fixed then x = item(x, y1, k, fixed, list, fixedK, multi, true, phaseGap, ended) end
       local now = state.ui.clock
       if #list > 0 and x < w then
@@ -15262,7 +15311,7 @@ float4 main(PS_IN pin) {
       return string.format('%s|%s|%s|%s|%d|%d|%s|%s|%s|%s|%d|%s|%s|%s|%s|%d|%d', o.place, o.legend, o.fix, o.time, math.floor(o.op), o.bar and 1 or 0, o.logos,
         tostring(o.defSet or ''), c.mode, tostring(c.set or ''), c.cam or -1, c.free and '1' or '0', wt.on and '1' or '0', wt.mode, tostring(wt.set or ''),
         wt.cam or -1, math.floor(wt.secs or 8)) .. '|' .. tostring((ac.getCar(sim.focusedCar) or {}).sessionID or -1) .. '|' .. table.concat(BC.classKeys or {}, ',') .. '|'
-        .. BroadcastAlerts.tyres
+        .. BroadcastAlerts.tyres .. '|' .. math.floor(BC.opt.cycle or 0)
     end
     function BC.camsText()
       local out = {}
