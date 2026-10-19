@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V201 - 2026.10.19'
+local RC_VERSION = 'V202 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2573,6 +2573,12 @@ do
       config.eventRaces = tonumber(body:match('races=(%d+)')) or 1
       config.raceOverTime = tonumber(body:match('raceOverTime=(%d+)')) or config.raceOverTime
       config.raceNo = tonumber(body:match('raceNo=(%d+)'))
+      local cc = body:match('carClasses=([^|]*)')
+      if cc and cc ~= '' and cc ~= config.carClassesText then
+        local t = {}
+        for m, c in cc:gmatch('([^,:]+):([^,]+)') do t[m:lower()] = c end
+        config.carClasses, config.carClassesText = t, cc
+      end
       local nums = body:match('numbers=([%d,]*)')
       if nums and nums ~= '' and nums ~= config.slotNumbersText then
         local list, k = {}, 0
@@ -9289,7 +9295,8 @@ do
     end
   end
   function RaceTable.classOf(i)
-    return classes[tostring(ac.getCarID(i) or ''):lower()]
+    local id = tostring(ac.getCarID(i) or ''):lower()
+    return (config.carClasses or {})[id] or classes[id]
   end
   local STOPS_KEY = 'rc.stops'
   local function stopsSave()
@@ -15307,7 +15314,13 @@ float4 main(PS_IN pin) {
       end
       scrollT = now
       local sy1, sy2 = h - 20 * k, h
-      local logoW = 10 * k + 15 * k * 640 / 172 + 26 * k
+      local ls = id.logoStrip
+      if BC.stripUrl ~= ls then BC.stripUrl, BC.stripAr = ls, nil end
+      if ls and ls ~= '' and not BC.stripAr then
+        local isz = ui.imageSize(ls)
+        if isz.y > 0 then BC.stripAr = isz.x / isz.y end
+      end
+      local logoW = 20 * k * (BC.stripAr or 640 / 172)
       local sx1, sx2 = w - w * 0.42, w - logoW
       local q = 10 * k
       local cols = math.max(math.floor((sx2 - sx1) / q), 0)
@@ -15320,9 +15333,8 @@ float4 main(PS_IN pin) {
         end
       end
       rect(sx2, sy1, w, sy2, LOGOBG)
-      local ls = id.logoStrip
       if ls and ls ~= '' then
-        ui.drawImage(ls, TMP.a:set(sx2 + 10 * k, sy1 + 2.5 * k), TMP.b:set(w - 26 * k, sy1 + 17.5 * k), WHITE, UV0, UV1, ui.ImageFit.Fit)
+        ui.drawImage(ls, TMP.a:set(sx2, sy1), TMP.b:set(w, sy2), WHITE, UV0, UV1, ui.ImageFit.Fit)
       end
     end
     function BC.stateText()
