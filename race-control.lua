@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V216 - 2026.10.19'
+local RC_VERSION = 'V217 - 2026.10.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2638,7 +2638,13 @@ do
       local st = body:match('\nSTART|([^\r\n]*)')
       if st then
         local k = 0
-        for v in (st .. ','):gmatch('([^,]*),') do F.starts[k] = v:match('^%d+:%d+$') and v or nil; k = k + 1 end
+        for v in (st .. ','):gmatch('([^,]*),') do
+          local hh, mm = v:match('^(%d+):(%d+)$')
+          local ss = hh and ac.getSession(k)
+          local t = hh and (tonumber(hh) * 60 + tonumber(mm) + math.ceil((ss and config.pit.closedSeconds[ss.type] or 0) / 60)) % 1440
+          F.starts[k] = t and string.format('%02d:%02d', math.floor(t / 60), t % 60) or nil
+          k = k + 1
+        end
       end
     end)
   end
@@ -7705,6 +7711,11 @@ do
   local LOCK_MAX_SECONDS = 86400
   local MENU_FREE_MINUTES = 5
   local MENU_MAX_MINUTES = 60
+  function RcCommand.toPits()
+    state.tow.ownJumpUntil = state.ui.clock + 2
+    state.list.jumped = true
+    physics.teleportCarTo(0, ac.SpawnSet.Pits, true)
+  end
   local function isMine(id)
     if #id >= 17 then return id == tostring(ac.getUserSteamID() or '') end
     return tonumber(id) == ac.getCar(0).sessionID
@@ -7770,9 +7781,7 @@ do
       startHold(seconds, why)
       done(string.format('Hold %d s', seconds), why)
     elseif what == 'TELEPORT' then
-      state.tow.ownJumpUntil = state.ui.clock + 2
-      state.list.jumped = true
-      physics.teleportCarTo(0, ac.SpawnSet.Pits, true)
+      RcCommand.toPits()
       done('Teleport to the pits', why)
     elseif what == 'DSQ' then
       carDsq(1, why)
@@ -13410,7 +13419,8 @@ float4 main(PS_IN pin) {
           local at = n == 1 and starts and starts[i] or nil
           if not at and on and not Session.beforeStart() then
             local t = (CarRead.num(sim.timeHours) * 3600 + CarRead.num(sim.timeMinutes) * 60 + CarRead.num(sim.timeSeconds)
-              - math.floor(sessionElapsedMs('raw') / 1000 * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
+              - math.floor((sessionElapsedMs('raw') - (config.pit.closedSeconds[ss.type] or 0) * 1000) / 1000
+                * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
             at = string.format('%02d:%02d', math.floor(t / 3600), math.floor(t / 60) % 60)
           end
           if n == 2 and not at and firstAt and ss.durationMinutes and ss.durationMinutes > 0 then
@@ -14735,6 +14745,12 @@ float4 main(PS_IN pin) {
       if Session.ready and BC.startKey ~= sk and sim.isInMainMenu then
         BC.startKey = sk
         if not ac.tryToStart(true) then ac.log('race-control: broadcast: the start of the pits menu did not take') end
+      end
+      local car = ac.getCar(0)
+      if Session.ready and sim.raceSessionType == ac.SessionType.Race and BC.pitKey ~= sk and not sim.isInMainMenu and car and not car.isInPitlane then
+        BC.pitKey = sk
+        RcCommand.toPits()
+        ac.log('race-control: broadcast: the car taken from the grid to the pits')
       end
     end
     local sets = nil
