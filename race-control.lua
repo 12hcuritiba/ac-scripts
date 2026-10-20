@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V224 - 2026.10.20'
+local RC_VERSION = 'V225 - 2026.10.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2570,6 +2570,7 @@ do
           config.staffPits.org, config.staffPits.tv))
         config.staffPits.org, config.staffPits.tv = org, tv
         CarRead.staffIndex, CarRead.staffLogged = nil, {}
+        CarsTick.driversAgain()
       end
       local bcId = body:match('bcId=([%w%+/=_%-]+)')
       if bcId and bcId ~= config.bcIdentityText then
