@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V220 - 2026.10.20'
+local RC_VERSION = 'V221 - 2026.10.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -18718,7 +18718,7 @@ do
   end
 end
 function CarControls.update(dt)
-  if not CarControls.enabled or CarControls.exempt then return end
+  if not CarControls.enabled or CarControls.exempt or CarRead.isTv(0) then return end
   if sim.isPaused or sim.isReplayActive then return end
   CarControls.timer = CarControls.timer + dt
   if CarControls.timer < CarControls.interval then return end
