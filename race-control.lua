@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V217 - 2026.10.19'
+local RC_VERSION = 'V218 - 2026.10.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -411,16 +411,16 @@ local TEXTS = {
   scrKmrRating = 'KMR rating', scrKmrCrashes = 'KMR crashes', scrKmrInfr = 'KMR infractions', scrKmrKm = 'KMR distance',
   scrKmrNone = 'none yet',
   sessionName = { [ac.SessionType.Practice] = 'PRACTICE', [ac.SessionType.Qualify] = 'QUALIFY', [ac.SessionType.Race] = 'RACE' },
-  edTitle = 'SCREENS', edPitDesk = 'Pit desktop', edDeskOf = 'Desktop %s of %d', edHint = 'drag a screen to its place - title line moves this window',
-  edAll = 'all', edScreens = 'Screens', edReset = 'Reset desktop', edDefault = 'Default desktop',
+  edTitle = 'BOXES', edPitDesk = 'Pit desktop', edDeskOf = 'Desktop %s of %d', edHint = 'drag a box to its place - title line moves this window',
+  edAll = 'all', edScreens = 'Boxes', edReset = 'Reset desktop', edDefault = 'Default desktop',
   edCopy = 'Copy from 1', edDelete = 'Delete desktop',
   edPitOn = 'PIT desktop on', edPitOff = 'PIT desktop off',
   edPitWarning = 'PIT desktop off: nothing more is shown in the pit lane - at your own risk',
-  edButtons = 'Next screen %s - Previous screen %s - Next desktop %s - Previous desktop %s (CSP controls)',
+  edButtons = 'Next box %s - Previous box %s - Next desktop %s - Previous desktop %s (CSP controls)',
   edIndicator = 'DESKTOP %d / %d - %s',
   menuButtons = 'Buttons', navTitle = 'BUTTONS', navOwn = 'RECORDED BY THE TOOL', navCsp = 'CSP CONTROLS',
-  navTabs = { nav = 'Navigation', screens = 'Open / close screens' },
-  navNextScreen = 'Next screen', navPrevScreen = 'Previous screen', navNextDesktop = 'Next desktop',
+  navTabs = { nav = 'Navigation', screens = 'Open / close boxes' },
+  navNextScreen = 'Next box', navPrevScreen = 'Previous box', navNextDesktop = 'Next desktop',
   navPrevDesktop = 'Previous desktop', navShowPanel = 'Show panel (5 s)', navSet = 'Set', navClear = 'Clear', navPress = 'Press a button... %d s',
   navInUseAc = 'in use by the AC: %s - choose another', navInUseOwn = 'in use by %s of this tool - choose another',
   navButton = '%s - button %d', navPov = '%s - D-pad %d deg', navGamepad = 'Gamepad %d - %s', navKey = 'Key %s',
@@ -491,7 +491,7 @@ local TEXTS = {
   cockpitChannels = { engine = 'Engine', transmission = 'Transmission', tyres = 'Tyres', surfaces = 'Surfaces', dirt = 'Dirt',
     wind = 'Wind', opponents = 'Opponents', carComponents = 'Car components', track = 'Track', weather = 'Weather',
     rain = 'Rain', wipers = 'Wipers' },
-  dirLogout = 'LOGOUT', dirLoggedOut = 'Logged out on this screen - the KMR has no logout: it forgets the login when you leave the server',
+  dirLogout = 'LOGOUT', dirLoggedOut = 'Logged out on this box - the KMR has no logout: it forgets the login when you leave the server',
   dirKmrLost = 'KMR login not answered - it fell: log in again',
   dirResetBtn = 'RESET', dirReset = 'Window reset - fields, lists and place back to the start; KMR login checked',
   connLap = 'LAP ', connSector = 'S%d', connSpline = 'SPL %.3f', connPing = 'PING %d ms', connPingNone = 'PING -',
@@ -529,7 +529,7 @@ local TEXTS = {
   auditRating = 'KMR rating %s',
   auditCount = '%d messages', auditEmpty = 'No messages in this session',
   edStrip = 'CONTROLS - MESSAGES (on demand)', edFlagStrip = 'FLAGS (on demand)', edPin = 'Pin to all', edPinned = 'On all desktops', edMode = 'Mode: %s', edRemove = 'Remove',
-  edChoose = 'Click a screen to choose it and drag it to its place',
+  edChoose = 'Click a box to choose it and drag it to its place',
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
     weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit', perf = 'Performance',
@@ -7199,7 +7199,7 @@ do
     local padOn = not PitBox.padFor or PitBox.padFor('pitbox')
     local function hit(name)
       local own = PitBox.ownDir and PitBox.ownDir(name)
-      return (padOn and (PAD[name]:pressed() or own)) or (KEYS[name]:pressed() and PitBox.open)
+      return padOn and (PAD[name]:pressed() or own or (KEYS[name]:pressed() and PitBox.open))
     end
     local up, down, left, right = hit('up'), hit('down'), hit('left'), hit('right')
     if up then PitBox.row = (PitBox.row - 2) % #ROWS + 1 end
