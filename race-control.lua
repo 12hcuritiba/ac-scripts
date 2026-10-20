@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V218 - 2026.10.20'
+local RC_VERSION = 'V219 - 2026.10.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -534,6 +534,7 @@ local TEXTS = {
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
     weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit', perf = 'Performance',
     calc = 'Strategy calculator', report = 'Session report' },
+  iconTips = { settings = 'Menu of the Racing Control', eye = 'Show or hide', ghost = 'Auto-hide', pin = 'Lock the place', reset = 'Every box back to its place' },
   scrTelemetry = 'TELEMETRY',
   scrReport = 'SESSION REPORT',
   rep = { all = 'ALL', me = 'Me', types = { 'Practice', 'Qualifying', 'Race' }, driver = 'Driver', car = 'Car', track = 'Track', type = 'Type', lap = 'Lap',
@@ -3344,7 +3345,7 @@ local function parseGoDuration(text)
 end
 local TrackList = {}
 sessionPart('trackList', TrackList, function()
-  return { since = -1, frozenMs = 0, frozenSince = SESSION_NONE, startMs = SESSION_NONE, sawPre = false }
+  return { since = -1, frozenMs = 0, frozenSince = SESSION_NONE, startMs = SESSION_NONE, sawPre = false, formMs = SESSION_NONE }
 end)
 do
   local function trackBody()
@@ -3366,8 +3367,10 @@ do
       TrackList.frozenSince = now
       ac.log('race-control: pit window clock stopped (red flag)')
     elseif not windowStill() and TrackList.frozenSince then
+      local fromStart = TrackList.startMs and math.floor(TrackList.frozenSince) == math.floor(TrackList.startMs)
       TrackList.frozenMs = TrackList.frozenMs + math.max(now - TrackList.frozenSince, 0)
       TrackList.frozenSince = nil
+      if fromStart and not TrackList.formMs then TrackList.formMs = TrackList.frozenMs end
       ac.log(string.format('race-control: pit window clock goes on (restart, green flag); stood still %.0f s in total',
         TrackList.frozenMs / 1000))
     end
@@ -3420,6 +3423,7 @@ do
     TrackList.frozenMs = tonumber(frozen) or 0
     TrackList.frozenSince = (frozenSince or '') ~= '' and tonumber(frozenSince) or nil
     if (startMs or '') ~= '' then TrackList.startMs = tonumber(startMs) end
+    if TrackList.startMs and not TrackList.formMs and not TrackList.frozenSince and state.startHold ~= true then TrackList.formMs = TrackList.frozenMs end
     TrackList.since = since
     return true
   end
@@ -3549,7 +3553,7 @@ do
   local function newInfo() return { crash = 0, cut = 0, spin = 0, pen = {} } end
   sessionPart('lap', Lap, function()
     return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false }, last = SESSION_NONE, others = {}, passT = {},
-      best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false }
+      best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false, baseDone = false, baseBusy = false, baseTries = 0 }
   end, { 'splits' })
   local P = {}
   sessionPart('lapWay', P, function()
@@ -3832,6 +3836,23 @@ do
     end
     return b
   end
+  local function otherKeep(i, n, best, sec, last, lastOk)
+    local o = Lap.others[i]
+    if not o then
+      o = { n = 0, best = 0, last = 0, lastOk = false, s = {}, t = state.ui.clock }
+      Lap.others[i] = o
+    end
+    local recent = n >= o.n
+    if n > o.n then o.n = n end
+    if best > 0 and (o.best == 0 or best < o.best) then
+      o.best = best
+      for q in pairs(o.s) do o.s[q] = nil end
+      local k = 0
+      for v in tostring(sec or ''):gmatch('%d+') do o.s[k], k = tonumber(v), k + 1 end
+    end
+    if last > 0 and recent then o.last, o.lastOk = last, lastOk end
+    o.t = state.ui.clock
+  end
   local sendLap = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.lap'),
     lapN = ac.StructItem.uint16(),
@@ -3841,11 +3862,34 @@ do
     lapOk = ac.StructItem.uint8(),
   }, function(sender, msg)
     if not sender or sender.index == 0 then return end
-    local s, k = {}, 0
-    for v in tostring(msg.lapSec or ''):gmatch('%d+') do s[k], k = tonumber(v), k + 1 end
-    Lap.others[sender.index] = { n = tonumber(msg.lapN) or 0, best = tonumber(msg.lapBest) or 0, last = tonumber(msg.lapLast) or 0, lastOk = tonumber(msg.lapOk) == 1,
-      s = s, t = state.ui.clock }
+    otherKeep(sender.index, tonumber(msg.lapN) or 0, tonumber(msg.lapBest) or 0, msg.lapSec, tonumber(msg.lapLast) or 0, tonumber(msg.lapOk) == 1)
   end, nil, nil, { processPostponed = true })
+  local BASE_TRIES = 3
+  RecordSync.base.beat[#RecordSync.base.beat + 1] = function()
+    if Lap.baseDone or Lap.baseBusy or Lap.baseTries >= BASE_TRIES or not Session.ready or not Session.loading or not Session.id or config.baseUrl == '' then return end
+    local sid = Session.id
+    Lap.baseBusy, Lap.baseTries = true, Lap.baseTries + 1
+    WebQueue.request('GET', string.format('%s/v1/timing?session=%d&sid=%d', config.baseUrl, Session.index, sid), nil, nil, function(err, res)
+      if sid ~= Session.id then return end
+      Lap.baseBusy = false
+      if err or not res or tonumber(res.status) ~= 200 then return end
+      local ok, data = pcall(JSON.parse, tostring(res.body or ''))
+      if not ok or type(data) ~= 'table' or type(data.cars) ~= 'table' then return end
+      Lap.baseDone = true
+      local mine, slotOf = ac.getCar(0).sessionID, ac.getCar.serverSlot
+      local n = 0
+      for _, c in ipairs(data.cars) do
+        local slot = tonumber(c.slot)
+        local car = slotOf and slot and slot ~= mine and slotOf(slot) or nil
+        if car and car.index ~= 0 then
+          otherKeep(car.index, tonumber(c.laps) or 0, tonumber(c.best) or 0, type(c.bestS) == 'table' and table.concat(c.bestS, '/') or '',
+            tonumber(c.last) or 0, c.lastValid ~= false)
+          n = n + 1
+        end
+      end
+      ac.log(string.format('race-control: laps of %d other cars from the base (session id %d)', n, sid))
+    end)
+  end
   local noBest = { ms = 0, lapS = {} }
   function Lap.tell()
     local all = Lap.ownBestAll and Lap.ownBestAll() or noBest
@@ -4603,7 +4647,12 @@ local function sessionElapsedMs(kind, s)
   local e = s.durationMinutes > 0 and s.durationMinutes * 60000 - sim.sessionTimeLeft or sim.time - s.startTime
   if kind == 'raw' then return e end
   if not Session.ready or Session.beforeStart() then return 0 end
-  local shown = math.max(e - closed, 0)
+  local from = closed
+  if s.type == ac.SessionType.Race then
+    if not TrackList.formMs then return 0 end
+    from = TrackList.formMs
+  end
+  local shown = math.max(e - from, 0)
   return total and math.min(shown, total) or shown
 end
 local function isPitClosed()
@@ -7907,7 +7956,11 @@ do
       end
     end
   end
-  table.insert(RecordSync.base.beat, 1, function() if Broadcast and Broadcast.on() then RcCommand.tv(); if Broadcast.drive then Broadcast.drive() end end end)
+  table.insert(RecordSync.base.beat, 1, function()
+    if not Broadcast then return end
+    if Broadcast.on() then RcCommand.tv() end
+    if Broadcast.drive and CarRead.isStaff(0) then Broadcast.drive() end
+  end)
 end
 local function startSlowdown(zone, r, lapCount)
   local toPay = math.max(r.param, 0)
@@ -10453,7 +10506,7 @@ do
   local function pitDefault()
     return { pitbox = { x = 0, y = 0, mode = 'auto' }, status = { x = 0, y = 0, mode = 'auto' },
       setup = { x = 0, y = 0, mode = 'auto' }, standings = { x = 0, y = 0, mode = 'auto' },
-      share = { x = 26, y = 689, mode = 'visible' } }
+      share = { x = 26, y = 689, mode = 'visible' }, report = { x = 0, y = 0, mode = 'auto' } }
   end
   Desktop.trackDefault, Desktop.pitDefault = trackDefault, pitDefault
   local function defaults()
@@ -10473,12 +10526,12 @@ do
         parts[#parts + 1] = string.format('%s:%s:%d:%d:%s', tostring(d), g, math.floor(e.x), math.floor(e.y), e.mode)
       end
     end
-    ac.storage[STORAGE_KEY] = string.format('2|%d|%d|%d|%s', Desktop.current, Desktop.count, Desktop.pitOn and 1 or 0,
+    ac.storage[STORAGE_KEY] = string.format('3|%d|%d|%d|%s', Desktop.current, Desktop.count, Desktop.pitOn and 1 or 0,
       table.concat(parts, ';'))
   end
   local function load()
     local text = ac.storage[STORAGE_KEY]
-    local ver, cur, count, pit, body = tostring(text or ''):match('^([12])|(%d+)|(%d+)|(%d)|(.*)$')
+    local ver, cur, count, pit, body = tostring(text or ''):match('^([123])|(%d+)|(%d+)|(%d)|(.*)$')
     if not cur then
       defaults()
       return
@@ -10495,6 +10548,7 @@ do
       end
     end
     if ver == '1' then Desktop.place.track = trackDefault() end
+    if ver ~= '3' and not Desktop.place.pit.report then Desktop.place.pit.report = { x = 0, y = 0, mode = 'auto' } end
   end
   load()
   function Desktop.has(g)
@@ -11231,27 +11285,29 @@ do
     growZone(g, p1, p2)
   end
   function Drag.zone(group, p1, p2) growZone(group, p1, p2) end
-  local function icon(id, x, y, size, color, action)
+  local function icon(id, x, y, size, color, action, tip)
     local p1, p2 = vec2(x, y), vec2(x + size, y + size)
     ui.drawRectFilled(vec2(p1.x - 1, p1.y - 1), vec2(p2.x + 1, p2.y + 1), rgbm(0.04, 0.04, 0.05, 0.85), 2)
     ui.drawIcon(id, p1, p2, color)
-    buttons[#buttons + 1] = { p1 = p1, p2 = p2, action = action }
+    buttons[#buttons + 1] = { p1 = p1, p2 = p2, action = action, tip = tip }
   end
   function Drag.icons(group, p1, p2, s)
     local size, gap = ICON_SIZE * s, ICON_GAP * s
     local row = {}
-    if group == 'panel' then
+    local panel = group == 'panel'
+    local tips = TEXTS.iconTips
+    if panel then
       row[#row + 1] = { ui.Icons.Settings, (Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen or Desktop.cockpitOpen)
         and ICON_ON or ICON_COLOR,
-        function() Desktop.menu = not Desktop.menu end }
-      row[#row + 1] = { ui.Icons.Monitor, ICON_COLOR, function() Desktop.go(1) end }
+        function() Desktop.menu = not Desktop.menu end, tips.settings }
+      row[#row + 1] = { ui.Icons.Monitor, ICON_COLOR, function() Desktop.go(1) end, TEXTS.navNextDesktop }
       for _, it in ipairs({ { ui.Icons.Sliders, 'setup' }, { ui.Icons.PitStop, 'pitbox' },
           { ui.Icons.CarFront, 'status' }, { ui.Icons.Flag, 'race' }, { ui.Icons.List, 'laps' },
           { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
-          { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.Weather, 'weather' },
+          { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.WeatherOvercastClouds, 'weather' },
           { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' }, { ui.Icons.VideoCamera, 'share' },
           { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' }, { ui.Icons.Calculator, 'calc' }, { ui.Icons.Search, 'report' } }) do
-        row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2] }
+        row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2], TEXTS.screenNames[it[2]] }
       end
     end
     if Desktop.TITLE_HIDE[group] then
@@ -11259,15 +11315,15 @@ do
         function() Desktop.toggleTitle(group) end }
     end
     local m = Drag.mode(group)
-    row[#row + 1] = { m == 'hidden' and ui.Icons.Hide or ui.Icons.Eye, m == 'hidden' and ICON_OFF or ICON_COLOR, 'eye:' .. group }
-    row[#row + 1] = { ui.Icons.Ghost, m == 'auto' and ICON_COLOR or ICON_OFF, 'ghost:' .. group }
-    row[#row + 1] = { ui.Icons.Pin, pins[group] and ICON_ON or ICON_COLOR, 'pin:' .. group }
-    if group == 'panel' then row[#row + 1] = { ui.Icons.Reset, ICON_COLOR, 'reset' } end
+    row[#row + 1] = { m == 'hidden' and ui.Icons.Hide or ui.Icons.Eye, m == 'hidden' and ICON_OFF or ICON_COLOR, 'eye:' .. group, panel and tips.eye or nil }
+    row[#row + 1] = { ui.Icons.Ghost, m == 'auto' and ICON_COLOR or ICON_OFF, 'ghost:' .. group, panel and tips.ghost or nil }
+    row[#row + 1] = { ui.Icons.Pin, pins[group] and ICON_ON or ICON_COLOR, 'pin:' .. group, panel and tips.pin or nil }
+    if panel then row[#row + 1] = { ui.Icons.Reset, ICON_COLOR, 'reset', tips.reset } end
     local y = p1.y - size - gap
     local x = p2.x - #row * size - (#row - 1) * gap
     growZone(group, zoneKept.at:set(x, y), p2)
     if not hover[group] then return end
-    for i, it in ipairs(row) do icon(it[1], x + (i - 1) * (size + gap), y, size, it[2], it[3]) end
+    for i, it in ipairs(row) do icon(it[1], x + (i - 1) * (size + gap), y, size, it[2], it[3], it[4]) end
   end
   local function save(g)
     stored[g .. 'Pin'] = pins[g]
@@ -11343,6 +11399,7 @@ do
         if inside(m, b.p1, b.p2) then
           ui.setMouseCursor(ui.MouseCursor.Hand)
           ui.captureMouse(true)
+          if b.tip then ui.setTooltip(b.tip) end
           if ui.mouseClicked() then
             if type(b.action) == 'function' then b.action() else press(b.action) end
           end
@@ -14740,9 +14797,17 @@ float4 main(PS_IN pin) {
     end
     function BC.on() return CarRead.isTv(0) end
     function BC.drive()
-      if Session.ready then BC.entered = true end
+      local tv = BC.on()
+      if tv and Session.ready then BC.entered = true end
+      if tv and BC.waitGen ~= Session.gen then
+        BC.waitGen = Session.gen
+        BC.wait.on, BC.wait.at, BC.wait.k = true, 0, 0
+        if BC.cam.mode == 'wait' or BC.cam.mode == 'waitset' then BC.cam.mode = 'set' end
+        BC.stateDirty = true
+        ac.log('race-control: broadcast: turn of the session, the waiting mode on')
+      end
       local sk = tostring(Session.id or 0) .. ':' .. tostring(Session.index or -1)
-      if Session.ready and BC.startKey ~= sk and sim.isInMainMenu then
+      if tv and Session.ready and BC.startKey ~= sk and sim.isInMainMenu then
         BC.startKey = sk
         if not ac.tryToStart(true) then ac.log('race-control: broadcast: the start of the pits menu did not take') end
       end
@@ -14750,7 +14815,8 @@ float4 main(PS_IN pin) {
       if Session.ready and sim.raceSessionType == ac.SessionType.Race and BC.pitKey ~= sk and not sim.isInMainMenu and car and not car.isInPitlane then
         BC.pitKey = sk
         RcCommand.toPits()
-        ac.log('race-control: broadcast: the car taken from the grid to the pits')
+        if tv and BC.wait.on and (BC.cam.mode == 'wait' or BC.cam.mode == 'waitset') then BC.cam.mode = 'set' end
+        ac.log('race-control: ' .. (tv and 'broadcast' or 'organization') .. ': the car taken from the grid to the pits')
       end
     end
     local sets = nil
