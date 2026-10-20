@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V222 - 2026.10.20'
+local RC_VERSION = 'V223 - 2026.10.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -558,7 +558,9 @@ local TEXTS = {
     raceN = 'Race %d', classOf = 'class %s', lap = 'lap %d', sessEnd = 'End of %s', next = 'Next: %s', laps = '%d L',
     cars = '%d cars',
     thTimes = 'Times', thFight = 'Battle', thClass = 'Class', lastLap = 'Last lap', bestLap = 'Best lap', ahead = 'Ahead', behind = 'Behind', classK = 'Class',
-    classPos = 'Class position', narrator = 'Narrator', commentator = 'Commentator' }, evStops = 'Pit stops required', evSwaps = 'Driver swaps required',
+    classPos = 'Class position', narrator = 'Narrator', commentator = 'Commentator',
+    setF1 = 'Car (F1)', setF6 = 'Car onboard (F6)', f1Cams = { 'Cockpit', 'Chase', 'Far chase', 'Bonnet', 'Bumper', 'Dash' } },
+  evStops = 'Pit stops required', evSwaps = 'Driver swaps required',
   evStint = 'Stint', evOrder = 'Pit stop order', evPitSpeed = 'Pit lane speed', evRating = 'KMR rating',
   flagRed = 'RED FLAG',
   flagRedLine = 'Slow down - no overtaking - complete the lap on track, then the pits',
@@ -14872,6 +14874,8 @@ float4 main(PS_IN pin) {
         sets[#sets + 1] = set
       end
       ac.log(string.format('race-control: broadcast: %d sets of cameras of the track read', #sets))
+      local f1, f6 = BroadcastCams.sets(#sets)
+      sets[#sets + 1], sets[#sets + 2] = f1, f6
       return sets
     end
     function BC.setByName(name)
@@ -14885,13 +14889,15 @@ float4 main(PS_IN pin) {
       grab = nil
     end
     local function trackMode(k)
+      local s = k and setOf(k)
+      if s and s.car then return BroadcastCams.put(s, BC.cam.set == k and BC.cam.cam or 0) end
       ac.setCurrentCamera(ac.CameraMode.Track)
       if k then ac.setCurrentTrackCamera(k) end
     end
     local function putCam(setK, camK, why)
       local s = setOf(setK)
       local c = s and s.cams[(tonumber(camK) or -1) + 1]
-      if not c then return false end
+      if not c or s.car then return false end
       release()
       trackMode(s.index)
       local g, err = ac.grabCamera('race-control broadcast')
@@ -14943,6 +14949,9 @@ float4 main(PS_IN pin) {
         if not i then return false end
         ac.focusCar(i)
         BC.sel = i
+        local s = BC.cam.set and setOf(BC.cam.set)
+        if s and s.car and (BC.cam.mode == 'cam' or BC.cam.mode == 'set') then BroadcastCams.put(s, BC.cam.cam) end
+        BC.camsDirty = true
       elseif a == 'SET' then
         local s = setOf(w[2])
         if not s then return false end
@@ -14953,13 +14962,20 @@ float4 main(PS_IN pin) {
         if BC.cam.free then
           local s = setOf(w[2])
           local c = s and s.cams[(tonumber(w[3]) or -1) + 1]
-          if not c then return false end
+          if not c or s.car then return false end
           ac.setCameraPosition(c.pos)
           ac.setCameraDirection(c.fwd, vec3(0, 1, 0))
           BC.cam.freeFov = c.maxFov or BC.cam.freeFov or 40
           ac.setCameraFOV(BC.cam.freeFov)
           BC.cam.set, BC.cam.cam = s.index, c.idx
-        elseif not putCam(w[2], w[3], 'cam') then return false end
+        else
+          local s = setOf(w[2])
+          if s and s.car then
+            release()
+            BC.cam.mode, BC.cam.set, BC.cam.cam, BC.cam.free = 'cam', s.index, math.max(math.floor(tonumber(w[3]) or 0), 0), false
+            if not BroadcastCams.put(s, BC.cam.cam) then return false end
+          elseif not putCam(w[2], w[3], 'cam') then return false end
+        end
       elseif a == 'AUTO' then
         release()
         trackMode(BC.cam.set)
@@ -16023,7 +16039,7 @@ float4 main(PS_IN pin) {
       local out = {}
       for _, s in ipairs(BC.sets()) do
         local cams = {}
-        for _, c in ipairs(s.cams) do
+        for _, c in ipairs(BroadcastCams.list(s)) do
           cams[#cams + 1] = string.format('%d:%s:%.4f:%.4f:%d', c.idx, (c.name:gsub('[:;|\n]', ' ')), c.inP, c.outP, c.fixed and 1 or 0)
         end
         out[#out + 1] = string.format('%d:%s|%s', s.index, (s.name:gsub('[:;|\n]', ' ')), table.concat(cams, ';'))
@@ -16124,6 +16140,40 @@ do
   function BroadcastAlerts.beat()
     BroadcastAlerts.tyres = tyres()
     BroadcastAlerts.text = alerts()
+  end
+end
+BroadcastCams = {}
+do
+  local DRIVABLE_LAST = 4
+  local function count() return math.floor(CarRead.num((ac.getCar(sim.focusedCar) or {}).carCamerasCount)) end
+  function BroadcastCams.sets(n)
+    local f1 = { index = n, name = TEXTS.bc.setF1, car = 'F1', cams = {} }
+    for k, nm in ipairs(TEXTS.bc.f1Cams) do f1.cams[k] = { idx = k - 1, name = nm, inP = 0, outP = 0, fixed = false } end
+    return f1, { index = n + 1, name = TEXTS.bc.setF6, car = 'F6', cams = {} }
+  end
+  function BroadcastCams.list(s)
+    if s.car ~= 'F6' then return s.cams end
+    local out = {}
+    for i = 1, count() do out[i] = { idx = i - 1, name = tostring(i), inP = 0, outP = 0, fixed = false } end
+    return out
+  end
+  function BroadcastCams.put(s, k)
+    k = math.max(math.floor(tonumber(k) or 0), 0)
+    if s.car == 'F1' then
+      if k == 0 then
+        ac.setCurrentCamera(ac.CameraMode.Cockpit)
+        return true
+      end
+      if not ac.setCurrentDrivableCamera then return false end
+      ac.setCurrentCamera(ac.CameraMode.Drivable)
+      ac.setCurrentDrivableCamera(math.min(k - 1, DRIVABLE_LAST))
+      return true
+    end
+    local n = count()
+    if n <= 0 or not ac.setCurrentCarCamera then return false end
+    ac.setCurrentCamera(ac.CameraMode.Car)
+    ac.setCurrentCarCamera(math.min(k, n - 1))
+    return true
   end
 end
 local KmrEvents = (function()
