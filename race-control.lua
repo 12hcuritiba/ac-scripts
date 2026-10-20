@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V223 - 2026.10.20'
+local RC_VERSION = 'V224 - 2026.10.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -6763,7 +6763,7 @@ do
     showNotice(TEXTS.rcTitle, TEXTS.sgServiced, sg)
   end
   local function raceEnd(car)
-    if PitStops.endChecked or sim.raceSessionType ~= ac.SessionType.Race or not car.isRaceFinished then return end
+    if PitStops.endChecked or sim.raceSessionType ~= ac.SessionType.Race or not car.isRaceFinished or CarRead.isStaff(0) then return end
     PitStops.endChecked = true
     local why
     local req = config.swapRequiredNow() or 0
@@ -6859,7 +6859,7 @@ do
     end
     raceEnd(car)
     local ss, se = PitStops.stopWindow()
-    if ss and config.pitStopsEnabled and config.stopsRequired() > 0 and not Session.beforeStart()
+    if ss and config.pitStopsEnabled and config.stopsRequired() > 0 and not Session.beforeStart() and not CarRead.isStaff(0)
         and not state.pit.stopDone and not state.pit.stopMissed
         and PitStops.windowTime() > se and not (inPit and PitStops.passInStopWindow) then
       state.pit.stopMissed = true
@@ -6869,7 +6869,7 @@ do
       if not Rules.dsqOn() then carDsq(1, TEXTS.stopWindowDsq) end
     end
     local s, e = PitStops.window()
-    if not s or not config.swapOn() or Session.beforeStart() or state.pit.done or state.pit.missed
+    if not s or not config.swapOn() or Session.beforeStart() or state.pit.done or state.pit.missed or CarRead.isStaff(0)
       or PitStops.windowTime() <= e then
       return
     end
@@ -19102,7 +19102,7 @@ function script.update(dt)
   local sw = state.swap
   local parked = car.isInPit
   if sw.prevInPit and not parked and sw.remaining and sw.remaining - (state.ui.clock - sw.remainingT) > 0
-      and not Rules.dsqOn() then
+      and not Rules.dsqOn() and not CarRead.isStaff(0) then
     ac.log(string.format('race-control: DSQ, left the pits %.1f s before the driver swap time',
       sw.remaining - (state.ui.clock - sw.remainingT)))
     sw.remaining = nil
