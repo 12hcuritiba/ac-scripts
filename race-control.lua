@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V219 - 2026.10.20'
+local RC_VERSION = 'V220 - 2026.10.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -9746,10 +9746,11 @@ do
         end
         local compound = tostring(ac.getTyresName and ac.getTyresName(0, CarRead.num(car.compoundIndex)) or CarRead.num(car.compoundIndex)):gsub('[|,;]', ' ')
         local l = laps[#laps]
-        state.lapOut[#state.lapOut + 1] = string.format('L4|%d|%d|%d|%d|%s|%.2f|%.3f|%s|%s|%.1f|%.1f|%.0f|%s|%s|%s|%s|%s|%s', l.lap, l.ms,
+        state.lapOut[#state.lapOut + 1] = string.format('L5|%d|%d|%d|%d|%s|%.2f|%.3f|%s|%s|%.1f|%.1f|%.0f|%s|%s|%s|%s|%s|%d|%s', l.lap, l.ms,
           l.valid and 1 or 0, l.pit and 1 or 0, table.concat(l.s, '/'), CarRead.num(car.fuel), CarRead.num(car.fuelPerLap),
           table.concat(life, ','), table.concat(vkm, ','), CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature),
-          CarRead.num(sim.roadGrip) * 100, RecordSync.base.trackKey(), RecordSync.base.carKey(), infoText(l), compound, table.concat(press, ','), l.driver)
+          CarRead.num(sim.roadGrip) * 100, RecordSync.base.trackKey(), RecordSync.base.carKey(), infoText(l), compound, table.concat(press, ','),
+          math.floor(L and L.t or 0), l.driver)
         local data, n, dt = LapTrace.close(l.ms)
         if data then RecordSync.base.traceAdd(l.lap, data, n, dt) end
         if #state.lapOut > 200 then table.remove(state.lapOut, 1) end
