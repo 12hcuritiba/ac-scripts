@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V221 - 2026.10.20'
+local RC_VERSION = 'V222 - 2026.10.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -649,6 +649,8 @@ local TEXTS = {
   baseDownWarn = 'Base of the event not answering - the data are kept in the car',
   appMissing = 'Racing Control app not running - install it from the event page - the game closes in %d s',
   cspOld = 'CSP 4130 required - install it with the 12h app - the game closes in %d s',
+  lookWarn = 'Settings of the event not applied: %s - enter through the 12h app',
+  lookWeather = 'Weather FX with Pure', lookPhysics = 'extended physics', lookFilter = 'Pure filter (PPF)',
   teamSetup = 'Setup from your team: %s - open the setup menu in the pits to apply or refuse it',
   remotePitStart = 'Your team started the pit stop from the Racing Room: stop at your pit place',
   realNameMissing = 'Registration incomplete - you cannot take part in this session - missing: %s - complete it in the 12h Curitiba app',
@@ -2965,6 +2967,33 @@ do
       AppLink.closed = true
       ac.shutdownAssettoCorsa()
     end
+  end
+  local LOOK_SECONDS = 20
+  local STOCK_FILTERS = { [''] = true, default = true, default_bright = true, default_dark = true, natural = true, photographic = true, movie = true,
+    vintage = true, sepia = true, ['b&w'] = true, blue_steel = true }
+  local function iniText(ini, sec, key)
+    local ok, v = pcall(function() return ini:get(sec, key, '') end)
+    return ok and tostring(v or '') or ''
+  end
+  local lookDone = false
+  RecordSync.base.beat[#RecordSync.base.beat + 1] = function()
+    if lookDone or sim.isInMainMenu then return end
+    lookDone = true
+    local miss = {}
+    local okW, wfx = pcall(ac.INIConfig.cspModule, ac.CSPModuleID.WeatherFX)
+    if okW and wfx and (iniText(wfx, 'BASIC', 'ENABLED') ~= '1' or iniText(wfx, 'BASIC', 'IMPLEMENTATION') ~= 'Pure LCS') then miss[#miss + 1] = TEXTS.lookWeather end
+    local okG, gen = pcall(ac.INIConfig.cspModule, ac.CSPModuleID.General)
+    if okG and gen and iniText(gen, 'PHYSICS_EXPERIMENTS', 'EXTENDED_PHYSICS') ~= '1' then miss[#miss + 1] = TEXTS.lookPhysics end
+    local okV, vid = pcall(ac.INIConfig.videoConfig)
+    if okV and vid and (iniText(vid, 'POST_PROCESS', 'ENABLED') == '0' or STOCK_FILTERS[iniText(vid, 'POST_PROCESS', 'FILTER'):lower()]) then
+      miss[#miss + 1] = TEXTS.lookFilter
+    end
+    if #miss == 0 then
+      ac.log('race-control: settings of the event loaded by the CSP (weather, physics, filter)')
+      return
+    end
+    ac.log('race-control: settings of the event not applied: ' .. table.concat(miss, ', '))
+    showNotice(TEXTS.rcTitle, string.format(TEXTS.lookWarn, table.concat(miss, ', ')), nil, LOOK_SECONDS)
   end
   local COCKPIT_REQUEST = 'amxracing.race-control.cockpit'
   local COCKPIT_ANSWER = 'amxracing.race-control.cockpit.state'
