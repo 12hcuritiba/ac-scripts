@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V228 - 2026.10.22'
+local RC_VERSION = 'V229 - 2026.10.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1767,8 +1767,9 @@ end
 local OnlineQueue = { lastT = -1e9, chatT = -1e9 }
 sessionPart('onlineQueue', OnlineQueue, function() return { items = {} } end, { 'lastT', 'chatT', 'web' })
 do
-  local GAP_ONLINE = 0.25
-  local GAP_CHAT = 1
+  local GAP_ONLINE = 0.2
+  local GAP_CHAT = 0.5
+  local RETRIES = 2
   function OnlineQueue.push(send, msg, target, again)
     for _, x in ipairs(OnlineQueue.items) do
       if x.send == send and x.target == target then
@@ -1794,7 +1795,15 @@ do
         OnlineQueue.lastT = now
         table.remove(OnlineQueue.items, i)
         if not e.send(e.msg, e.again, e.target) then
-          ac.log(string.format('race-control: online message refused by the game, left out (stamp %.3f #%d)', e.t, e.n))
+          local newer = false
+          for _, x in ipairs(OnlineQueue.items) do if x.send == e.send and x.target == e.target then newer = true break end end
+          e.tries = (e.tries or 1) + 1
+          local again = not newer and e.tries <= RETRIES
+          if again then
+            e.t, e.n = state.chat.stamp()
+            OnlineQueue.items[#OnlineQueue.items + 1] = e
+          end
+          ac.log(string.format('race-control: online message refused by the game, %s (stamp %.3f #%d)', again and 'tried again' or 'left out', e.t, e.n))
         end
       end
     end
@@ -3403,7 +3412,10 @@ do
       local fromStart = TrackList.startMs and math.floor(TrackList.frozenSince) == math.floor(TrackList.startMs)
       TrackList.frozenMs = TrackList.frozenMs + math.max(now - TrackList.frozenSince, 0)
       TrackList.frozenSince = nil
-      if fromStart and not TrackList.formMs then TrackList.formMs = TrackList.frozenMs end
+      if fromStart and not TrackList.formMs then
+        TrackList.formMs = TrackList.frozenMs
+        if TrackList.onForm then TrackList.onForm(TrackList.formMs) end
+      end
       ac.log(string.format('race-control: pit window clock goes on (restart, green flag); stood still %.0f s in total',
         TrackList.frozenMs / 1000))
     end
@@ -3434,6 +3446,10 @@ do
   function TrackList.clockMs()
     if not TrackList.startMs then return nil end
     return serverTimeMs() - TrackList.startMs - TrackList.frozenNowMs()
+  end
+  function TrackList.leaderForm(ms, from)
+    if TrackList.formMs ~= ms then ac.log(string.format('race-control: formation lap %.1f s from the leader (car %d)', ms / 1000, from)) end
+    TrackList.formMs = ms
   end
   local function trackApply(body, source)
     local kind, since, red, reason, rt, frozen, frozenSince, postRed, lights, startMs =
@@ -4435,6 +4451,16 @@ do
     end
     return line, false
   end
+  function Start.leader()
+    local lead = byPlace()[1]
+    if not lead then
+      for i = 0, (sim.carsCount or 1) - 1 do
+        local c = ac.getCar(i)
+        if c and (i == 0 or c.isConnected) and CarRead.num(c.racePosition) == 1 and not CarRead.isStaff(i) then lead = i end
+      end
+    end
+    return lead
+  end
   function Start.update(car)
     if (Start.phase == 'formation' or Start.phase == 'release') and next(Start.locked) == nil then
       local list = {}
@@ -4446,13 +4472,7 @@ do
       for k, x in ipairs(list) do Start.locked[x.i] = k end
     end
     if Start.phase == 'release' then
-      local lead = byPlace()[1]
-      if not lead then
-        for i = 0, (sim.carsCount or 1) - 1 do
-          local c = ac.getCar(i)
-          if c and (i == 0 or c.isConnected) and CarRead.num(c.racePosition) == 1 and not CarRead.isStaff(i) then lead = i end
-        end
-      end
+      local lead = Start.leader()
       local lc = lead and ac.getCar(lead)
       if lc and (lead == 0 or lc.isConnected) and not lc.isInPitlane and CarRead.num(lc.splinePosition) >= Start.GREEN_SPLINE then
         phaseTo('go', string.format('the leader at %.2f of the lap', CarRead.num(lc.splinePosition)))
@@ -8947,12 +8967,20 @@ do
   local sendT0 = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.start'),
     startMs = ac.StructItem.uint32(),
+    formMs = ac.StructItem.uint32(),
+    formSid = ac.StructItem.uint32(),
   }, function(sender, msg)
-    if sender and sender.index ~= 0 and Formation.phase == 'end' and not Formation.t0 then
+    if not sender or sender.index == 0 then return end
+    if (tonumber(msg.formMs) or 0) > 0 and tonumber(msg.formSid) == (Session.id or 0) then TrackList.leaderForm(tonumber(msg.formMs), sender.index) end
+    if (tonumber(msg.startMs) or 0) > 0 and Formation.phase == 'end' and not Formation.t0 then
       Formation.t0 = tonumber(msg.startMs)
       ac.log('race-control: standing start: lights at session time ' .. math.floor(Formation.t0) .. ' (from car ' .. sender.index .. ')')
     end
   end, nil, nil, { processPostponed = true })
+  TrackList.onForm = function(ms)
+    local leader = Formation.on() and Formation.leader or Start.leader()
+    if leader == 0 and Session.id then OnlineQueue.push(sendT0, { formMs = math.floor(ms), formSid = Session.id }, nil, true) end
+  end
   local function rule() return config.formation end
   function Formation.on()
     local p = rule().procedure
