@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V229 - 2026.10.22'
+local RC_VERSION = 'V230 - 2026.10.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -3601,7 +3601,7 @@ do
   local SPIN_SETTLE = 1
   local function newInfo() return { crash = 0, cut = 0, spin = 0, pen = {} } end
   sessionPart('lap', Lap, function()
-    return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false }, last = SESSION_NONE, others = {}, passT = {},
+    return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false }, last = SESSION_NONE, others = {},
       best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false, baseDone = false, baseBusy = false, baseTries = 0 }
   end, { 'splits' })
   local P = {}
@@ -3877,8 +3877,9 @@ do
     lapSec = ac.StructItem.string(48),
     lapLast = ac.StructItem.uint32(),
     lapOk = ac.StructItem.uint8(),
+    lapSid = ac.StructItem.uint32(),
   }, function(sender, msg)
-    if not sender or sender.index == 0 then return end
+    if not sender or sender.index == 0 or tonumber(msg.lapSid) ~= (Session.id or 0) then return end
     otherKeep(sender.index, tonumber(msg.lapN) or 0, tonumber(msg.lapBest) or 0, msg.lapSec, tonumber(msg.lapLast) or 0, tonumber(msg.lapOk) == 1)
   end, nil, nil, { processPostponed = true })
   local BASE_TRIES = 3
@@ -3919,7 +3920,7 @@ do
       parts[#parts + 1] = tostring(math.floor(v))
     end
     local msg = { lapN = math.min(n, 65535), lapBest = math.floor(best), lapSec = table.concat(parts, '/'),
-      lapLast = Lap.last and math.max(math.floor(Lap.last.ms or 0), 0) or 0, lapOk = Lap.last and Lap.last.valid and 1 or 0 }
+      lapLast = Lap.last and math.max(math.floor(Lap.last.ms or 0), 0) or 0, lapOk = Lap.last and Lap.last.valid and 1 or 0, lapSid = Session.id or 0 }
     Lap.sentBest, Lap.sentT = { n = n, ms = best, lap = all.lap, msg = msg }, state.ui.clock
     OnlineQueue.push(sendLap, msg, nil, true)
   end
