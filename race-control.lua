@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V226 - 2026.10.22'
+local RC_VERSION = 'V227 - 2026.10.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1893,11 +1893,11 @@ do
   local sendMenu = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.menu'),
     mnOpen = ac.StructItem.uint8(),
-    mnSpare = ac.StructItem.uint32(),
+    mnSpare = ac.StructItem.uint8(),
   }, function(sender, msg)
     if not sender or sender.index == 0 then return end
     Connection.menu[sender.index] = { open = msg.mnOpen > 0, box = msg.mnOpen == 2, t = state.ui.clock }
-  end)
+  end, nil, nil, { processPostponed = true })
   local ownOpen = 0
   local function ownMenu(code)
     if code == ownOpen then return end
