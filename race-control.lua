@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V227 - 2026.10.22'
+local RC_VERSION = 'V228 - 2026.10.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -3703,38 +3703,6 @@ do
       if p0 < b and b <= p1 then P.secT[k] = at(b) end
     end
     if P.start then binsAlong(p0, p1, t0, t1, P.trace, P.start) end
-  end
-  function Lap.passAt(i, sp, now)
-    local o = Lap.passT[i]
-    if not o then
-      o = { at = {} }
-      Lap.passT[i] = o
-    end
-    if o.sp ~= nil and not Session.beforeStart() then
-      local d, crossT = stepOf(o.sp, o.t, sp, now)
-      if crossT then
-        binsAlong(o.sp, 1, o.t, crossT, o.at, 0)
-        binsAlong(0, sp, crossT, now, o.at, 0)
-      elseif d > 0 then
-        binsAlong(o.sp, sp, o.t, now, o.at, 0)
-      end
-    end
-    o.sp, o.t = sp, now
-  end
-  ac.onCarJumped(-1, function(i)
-    local o = Lap.passT[i]
-    if o then o.sp = nil end
-  end)
-  function Lap.gapAt(b, a)
-    local ob, oa = Lap.passT[b], Lap.passT[a]
-    if not ob or not oa or ob.sp == nil then return nil end
-    local x = ob.sp * BINS
-    local k = math.floor(x)
-    local t0 = oa.at[k >= 1 and k or BINS]
-    if not t0 then return nil end
-    local t1 = k + 1 <= BINS and oa.at[k + 1] or nil
-    local ta = (t1 and t1 >= t0) and (t0 + (t1 - t0) * (x - k)) or t0
-    return math.max(ob.t - ta, 0) / 1000
   end
   local function close(car, t, viaPit)
     Lap.count = Lap.count + 1
@@ -9482,7 +9450,7 @@ do
     local session = ac.getSession(Session.index)
     local board = session and session.leaderboard
     local rows, byIndex, absent, added = {}, {}, {}, false
-    local now = serverTimeMs()
+    local race = sim.raceSessionType == ac.SessionType.Race
     if board then
       for k = 0, #board do
         local e = board[k]
@@ -9504,7 +9472,7 @@ do
           r.number, r.name, r.team, r.laps, r.best = t.number, t.name, t.team, laps, best
           r.spline, r.inPit, r.connected, r.stops, r.absent = CarRead.num(c.splinePosition), c.isInPitlane, c.isConnected, RaceTable.stops[c.index] or 0, nil
           r.pos, r.classPos, r.order = nil, nil, nil
-          Lap.passAt(c.index, r.spline, now)
+          if race then Relative.track(r, c, n, state.ui.clock) end
           if RaceTable.seen[c.index] or laps > 0 or best > 0 or inBoard then
             rows[#rows + 1] = r
           else
@@ -9521,9 +9489,19 @@ do
       table.sort(rows, bestOrder)
     end
     local classPos2 = {}
+    local classLead, classAhead = {}, {}
     for k, r in ipairs(rows) do
       if r.class then classPos2[r.class] = (classPos2[r.class] or 0) + 1 end
       r.pos, r.classPos = k, r.class and classPos2[r.class] or nil
+      if race then
+        r.gapS, r.gapL = Relative.gap(r, k > 1 and rows[k - 1] or nil)
+        r.leadS, r.leadL = Relative.gap(r, k > 1 and rows[1] or nil)
+        local cl = r.class or ''
+        r.cGapS, r.cGapL = Relative.gap(r, classAhead[cl])
+        r.cLeadS, r.cLeadL = Relative.gap(r, classLead[cl])
+        classLead[cl] = classLead[cl] or r
+        classAhead[cl] = r
+      end
     end
     RaceTable.present = #rows
     for _, r in ipairs(absent) do rows[#rows + 1] = r end
@@ -9910,6 +9888,11 @@ do
     if d > 0.5 then return d - 1 elseif d < -0.5 then return d + 1 end
     return d
   end
+  function Relative.lineWait(st, sp, n)
+    if st.sp and sp < st.sp and wrap(sp - st.sp) > 0 and n == st.n then st.pending = n end
+    if st.pending ~= nil and n ~= st.pending then st.pending = nil end
+    st.sp, st.n = sp, n
+  end
   local function sample(i, c, clock)
     local st = R.cars[i]
     if not st then
@@ -9920,11 +9903,7 @@ do
     st.place = ac.worldCoordinateToTrackProgress(c.position)
     st.kmh = kmh
     st.stopped = Flags.stillUpdate(st, c.position, kmh, clock)
-    local sp = CarRead.num(c.splinePosition)
-    local n = Lap.of(i)
-    if st.sp and sp < st.sp and wrap(sp - st.sp) > 0 and n == st.n then st.pending = n end
-    if st.pending ~= nil and n ~= st.pending then st.pending = nil end
-    st.sp, st.n = sp, n
+    Relative.lineWait(st, CarRead.num(c.splinePosition), Lap.of(i))
   end
   function Relative.update()
     local clock = state.ui.clock
@@ -9948,6 +9927,21 @@ do
       laps = math.floor((o.n + o.sp) - (me.n + me.sp) - wrap(o.sp - me.sp) + 0.5)
     end
     return d, sec, laps
+  end
+  function Relative.gap(b, a)
+    if not a or not b or a.pending ~= nil or b.pending ~= nil or not a.n or not b.n then return nil, nil end
+    local d = (a.n + a.sp) - (b.n + b.sp)
+    if d < 0 then return nil, nil end
+    if d >= 1 then return nil, math.floor(d) end
+    local len = CarRead.num(sim.trackLengthM)
+    if a.stopped or (a.kmh or 0) <= 0 or len <= 0 then return nil, 0 end
+    return d * len / (a.kmh / 3.6), 0
+  end
+  function Relative.track(r, c, n, clock)
+    r.hist, r.odo = r.hist or {}, r.odo or 0
+    Relative.lineWait(r, CarRead.num(c.splinePosition), n)
+    r.kmh = CarRead.num(c.speedKmh)
+    r.stopped = c.position and Flags.stillUpdate(r, c.position, r.kmh, clock) or false
   end
 end
 local function applyKMR(car, r)
@@ -12464,6 +12458,11 @@ local drawRaceScreens = (function()
     local s = ms / 1000
     return string.format('%d:%06.3f', math.floor(s / 60), s % 60)
   end
+  local function gapText(sec, laps, secFmt, lapsFmt, dash)
+    if laps and laps >= 1 then return string.format(lapsFmt, laps) end
+    if sec then return string.format(secFmt, sec) end
+    return dash
+  end
   local function hms(ms)
     local t = math.max(math.floor((ms or 0) / 1000), 0)
     return string.format('%d:%02d:%02d', math.floor(t / 3600), math.floor(t / 60) % 60, t % 60)
@@ -12615,13 +12614,12 @@ local drawRaceScreens = (function()
     y = y + ROW * s
     local leader = list[1]
     local sessionBest = Lap.sessionBest()
-    local function gapTo(r, front)
+    local byClass = filter.standings ~= 'ALL'
+    local function gapTo(r, front, lead)
       if not front or r == front then return '-' end
-      local dl = front.laps - r.laps
-      if dl >= 1 then return string.format(TEXTS.lapsShort, dl) end
       if sim.raceSessionType == ac.SessionType.Race then
-        local g = Lap.gapAt(r.index, front.index)
-        return g and string.format('%.1f', g) or '-'
+        if lead then return gapText(byClass and r.cLeadS or r.leadS, byClass and r.cLeadL or r.leadL, '%.1f', TEXTS.lapsShort, '-') end
+        return gapText(byClass and r.cGapS or r.gapS, byClass and r.cGapL or r.gapL, '%.1f', TEXTS.lapsShort, '-')
       end
       return string.format('%.1f', math.abs(ac.getGapBetweenCars(r.index, front.index)))
     end
@@ -12637,7 +12635,7 @@ local drawRaceScreens = (function()
       row(p1, y, s, {
         { tostring(r.pos), 32, col, true }, { tostring(r.classPos or '-'), 52, COLOR_DIM, true },
         { '#' .. r.number, 58, col }, { r.name, 88, col, false, me and FONT_TITLE or FONT_TEXT },
-        { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 270, col, true }, { gapTo(r, leader), 306, col, true },
+        { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 270, col, true }, { gapTo(r, leader, true), 306, col, true },
         { gapTo(r, list[i - 1]), 346, col, true },
         { lapTime(r.best), 398, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
         { tostring(r.stops or 0), 424, col, true },
@@ -13252,12 +13250,14 @@ float4 main(PS_IN pin) {
     return true
   end
   Desktop.radarZoom = Radar.zoomStep
+  function Radar.pauseStep() Radar.paused = not Radar.paused and Radar.lastK or nil end
   function Radar.draw(a, side, s, fc, big)
     local half = Radar.half()
     local zoom = half <= 2500 and 'track' or 'wide'
     local FL = Radar.fixed(fc).fl
     local H = Radar.windowStart(FL)
-    local k = math.floor(state.ui.clock) % Radar.WINDOW_SEGS
+    local k = Radar.paused or (math.floor(state.ui.clock) % Radar.WINDOW_SEGS)
+    Radar.lastK = k
     local t = H + k * 10
     local sl = Radar.segAt(FL, t)
     local minute = t % 1440
@@ -13331,7 +13331,7 @@ float4 main(PS_IN pin) {
   end
   local wxRow = 1
   local function wxRowList()
-    if (filter.weather or 'forecast') == 'map' then return { 'mode', 'zoom', 'size' } end
+    if (filter.weather or 'forecast') == 'map' then return { 'mode', 'zoom', 'pause', 'size' } end
     local fc = Weather.forecast or RecordSync.base.forecast.list or {}
     local segs = #fc > 0 and Radar.textSegments(fc) or {}
     return #segs > WX_PAGE and { 'mode', 'page' } or { 'mode' }
@@ -13346,7 +13346,8 @@ float4 main(PS_IN pin) {
     if what == 'mode' then Desktop.weatherMode(dir < 0 and 'forecast' or 'map')
     elseif what == 'zoom' then Radar.zoomStep(dir)
     elseif what == 'size' then filter.radarBig = not (filter.radarBig ~= false)
-    elseif what == 'page' then Desktop.weatherStep(dir) end
+    elseif what == 'page' then Desktop.weatherStep(dir)
+    elseif what == 'pause' then Radar.pauseStep() end
   end
   local function wxMark(what, a, b, s)
     local list = wxRowList()
@@ -13408,6 +13409,12 @@ float4 main(PS_IN pin) {
         zx = zb.x + 4 * s
       end
       wxMark('zoom', vec2(p1.x + 10 * s, y), vec2(zx - 4 * s, y + 13 * s), s)
+      local pa, pb = vec2(zx, y), vec2(zx + 13 * s, y + 13 * s)
+      ui.drawRect(pa, pb, TMP.edge30, 2 * s)
+      ui.drawIcon(Radar.paused and ui.Icons.Play or ui.Icons.Pause, vec2(pa.x + 2.5 * s, pa.y + 2.5 * s), vec2(pb.x - 2.5 * s, pb.y - 2.5 * s), Radar.paused and YELLOW or COLOR_DIM)
+      Drag.clickable(pa, pb, Radar.pauseStep)
+      wxMark('pause', pa, pb, s)
+      zx = pb.x + 4 * s
       local st = big and TEXTS.scrRadarSmall or TEXTS.scrRadarBig
       local sw = textWidth(st, FONT_MONO, 9 * s)
       local sa, sb = vec2(p2.x - 10 * s - sw - 8 * s, y), vec2(p2.x - 10 * s, y + 13 * s)
@@ -13794,14 +13801,11 @@ float4 main(PS_IN pin) {
     local function gapRow(label, r)
       local gap = '-'
       if me and r and r ~= me then
-        local dl = math.abs(r.laps - me.laps)
-        if dl >= 1 then
-          gap = '+' .. string.format(TEXTS.lapsShort, dl)
-        elseif sim.raceSessionType == ac.SessionType.Race then
+        if sim.raceSessionType == ac.SessionType.Race then
           local ahead = (r.pos or 0) < (me.pos or 0)
-          local g
-          if ahead then g = Lap.gapAt(0, r.index) else g = Lap.gapAt(r.index, 0) end
-          gap = g and string.format('%+.3f', ahead and -g or g) or '-'
+          if r == rows[1] then gap = gapText(me.leadS and -me.leadS, me.leadL, '%+.3f', '-' .. TEXTS.lapsShort, '-')
+          elseif ahead then gap = gapText(me.gapS and -me.gapS, me.gapL, '%+.3f', '-' .. TEXTS.lapsShort, '-')
+          else gap = gapText(r.gapS, r.gapL, '%+.3f', '+' .. TEXTS.lapsShort, '-') end
         else
           gap = string.format('%+.3f', -ac.getGapBetweenCars(0, r.index))
         end
@@ -15340,24 +15344,18 @@ float4 main(PS_IN pin) {
       end
       return out, #BC.classKeys > 1
     end
-    local function timeText(r, list, k, phaseGap, ended)
+    local function timeText(r, list, k, phaseGap, ended, byClass)
       local T = TEXTS.bc
+      local cls = byClass or placeNow() ~= 'ALL'
       if ended and sim.raceSessionType == ac.SessionType.Race then
         if k == 1 then return string.format(T.laps, r.laps or 0) end
-        local ahead = list[k - 1]
-        if (ahead.laps or 0) > (r.laps or 0) then return '+' .. string.format(T.laps, (ahead.laps or 0) - (r.laps or 0)) end
-        local g = Lap.gapAt(r.index, ahead.index)
-        return g and string.format('+%.3f', g) or '-'
+        return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-')
       end
       if phaseGap then
-        local behind = list[k + 1]
-        if not behind then return '---' end
-        if sim.raceSessionType == ac.SessionType.Race then
-          if (behind.laps or 0) < (r.laps or 0) then return '+' .. string.format(T.laps, (r.laps or 0) - (behind.laps or 0)) end
-          local g = Lap.gapAt(behind.index, r.index)
-          return g and string.format('+%.3f', g) or '---'
-        end
-        return (r.best > 0 and behind.best > 0) and string.format('+%.3f', (behind.best - r.best) / 1000) or '---'
+        local ahead = list[k - 1]
+        if not ahead then return '---' end
+        if sim.raceSessionType == ac.SessionType.Race then return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '---') end
+        return (r.best > 0 and ahead.best > 0) and string.format('+%.3f', (r.best - ahead.best) / 1000) or '---'
       end
       local _, _, ms, ok = Lap.of(r.index)
       if (ms or 0) > 0 then return lapTime(ms), not ok end
@@ -15444,7 +15442,7 @@ float4 main(PS_IN pin) {
     end
     local function item(x, y1, k, r, list, i, multi, sel, phaseGap, ended, measure, tw, byClass)
       local pos = (byClass or placeNow() ~= 'ALL') and (r.classPos or i) or (r.pos or i)
-      local tt, bad = timeText(r, list, i, phaseGap, ended)
+      local tt, bad = timeText(r, list, i, phaseGap, ended, byClass)
       local nm = nameOf(r)
       local num = '#' .. tostring(r.number or '')
       local team = teamOf(r)
@@ -15661,9 +15659,7 @@ float4 main(PS_IN pin) {
     local function gapOf(a, b, sign)
       if not a or not b then return '-', nil end
       if sim.raceSessionType == ac.SessionType.Race then
-        if (b.laps or 0) > (a.laps or 0) then return sign .. string.format(TEXTS.bc.laps, (b.laps or 0) - (a.laps or 0)), nil end
-        local g = Lap.gapAt(a.index, b.index)
-        return g and string.format('%s%.3f', sign, g) or '-', g and 's' or nil
+        return gapText(a.gapS, a.gapL, sign .. '%.3f', sign .. TEXTS.bc.laps, '-'), a.gapS and 's' or nil
       end
       if (a.best or 0) > 0 and (b.best or 0) > 0 then return string.format('%s%.3f', sign, math.abs(a.best - b.best) / 1000), 's' end
       return '-', nil
@@ -16103,7 +16099,7 @@ do
         local a, b = rows[k], rows[k + 1]
         if not a.absent and not b.absent and not a.inPit and not b.inPit then
           local key = a.index * 1000 + b.index
-          local g = Lap.gapAt(b.index, a.index)
+          local g = (b.gapL or 0) == 0 and b.gapS or nil
           local d = duels[key]
           local way = (b.laps or 0) + (b.spline or 0)
           if g and g < 1.0 then
