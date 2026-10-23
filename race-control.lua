@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V234 - 2026.10.23'
+local RC_VERSION = 'V235 - 2026.10.23'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -13523,7 +13523,7 @@ float4 main(PS_IN pin) {
       drawText(string.format('%s %.0f-%.0f km/h', compass(sl.dir), sl.vmin * 3.6, sl.vmax * 3.6),
         FONT_MONO, 9 * s, TMP.a:set(w.x + 18 * s, w.y - 6 * s), rgbm(1, 1, 1, 1))
     else
-      drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 9 * s, TMP.a:set(a.x + 5 * s, b.y - 14 * s), YELLOW)
+      drawText(hhmm(minute), FONT_MONO, 9 * s, TMP.a:set(a.x + 5 * s, b.y - 14 * s), YELLOW)
       local x1, x2 = a.x + 46 * s, b.x - 6 * s
       ui.drawRect(vec2(x1, b.y - 9 * s), vec2(x2, b.y - 5 * s), rgbm(0.35, 0.35, 0.35, 1))
       ui.drawRectFilled(vec2(x1, b.y - 9 * s), vec2(x1 + (x2 - x1) * k / (Radar.WINDOW_SEGS - 1), b.y - 5 * s), YELLOW)
@@ -13588,7 +13588,7 @@ float4 main(PS_IN pin) {
       local m = math.floor(math.abs(off) / 60 + 0.5)
       utc = string.format(' UTC%s%d', off < 0 and '-' or '+', math.floor(m / 60)) .. (m % 60 > 0 and string.format(':%02d', m % 60) or '')
     end
-    local clock = string.format('%02d:%02d', CarRead.num(sim.timeHours), CarRead.num(sim.timeMinutes)) .. utc
+    local clock = hhmm(CarRead.num(sim.timeHours) * 60 + CarRead.num(sim.timeMinutes)) .. utc
     if mode == 'map' then
       drawText(clock, FONT_MONO, 11 * s, TMP.a:set(p1.x + 14 * s + textWidth(TEXTS.scrWeather, FONT_TITLE, 12 * s) + 10 * s, p1.y + 5 * s),
         COLOR_TITLE)
@@ -13638,7 +13638,7 @@ float4 main(PS_IN pin) {
       wxMark('size', sa, sb, s)
       local minute, sl = Radar.draw(vec2(p1.x + 10 * s, y + 18 * s), side, s, fc, big)
       if big then
-        drawText(string.format('%02d:%02d', math.floor(minute / 60) % 24, minute % 60), FONT_MONO, 10 * s, TMP.a:set(zx + 6 * s, y), YELLOW)
+        drawText(hhmm(minute), FONT_MONO, 10 * s, TMP.a:set(zx + 6 * s, y), YELLOW)
         local wet = sl.mmh >= 0.01
         local xr = sa.x - 6 * s
         local xc = xr - textWidth('0.00 mm/h', FONT_MONO, 9 * s) - 6 * s
@@ -13706,7 +13706,7 @@ float4 main(PS_IN pin) {
         for k = (wxPage - 1) * WX_PAGE + 1, math.min(wxPage * WX_PAGE, #segs) do
           local f = segs[k]
           local sky = Radar.skyOf(f)
-          row(p1, y, s, { { string.format('%02d:%02d', math.floor(f.minute / 60) % 24, f.minute % 60), 14 }, { sky, 70 },
+          row(p1, y, s, { { hhmm(f.minute), 14 }, { sky, 70 },
             { string.format(TEXTS.wxProb, math.floor(f.chance * 100 + 0.5)), 210, nil, true },
             { string.format('%.0f', f.air), 240, nil, true }, { string.format('%.0f', f.road), 286, nil, true } })
           y = y + ROW * s
@@ -13733,13 +13733,13 @@ float4 main(PS_IN pin) {
             local t = (CarRead.num(sim.timeHours) * 3600 + CarRead.num(sim.timeMinutes) * 60 + CarRead.num(sim.timeSeconds)
               - math.floor((sessionElapsedMs('raw') - (config.pit.closedSeconds[ss.type] or 0) * 1000) / 1000
                 * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
-            at = string.format('%02d:%02d', math.floor(t / 3600), math.floor(t / 60) % 60)
+            at = hhmm(math.floor(t / 60))
           end
           if n == 2 and not at and firstAt and ss.durationMinutes and ss.durationMinutes > 0 then
             local hh, mm = firstAt:match('^(%d+):(%d+)')
             if hh then
               local t = (tonumber(hh) * 60 + tonumber(mm) + math.floor(ss.durationMinutes) + math.ceil((tonumber(config.raceOverTime) or 0) / 60)) % 1440
-              at = string.format('%02d:%02d', math.floor(t / 60), t % 60)
+              at = hhmm(t)
             end
           end
           if n == 1 then firstAt = at end
@@ -15535,7 +15535,7 @@ float4 main(PS_IN pin) {
       local cls = place ~= 'ALL' and (' · ' .. string.format(T.classOf, (classStyle(place)))) or ''
       local lead = RaceTable.rows and RaceTable.rows[1]
       local lapTxt = type == ac.SessionType.Race and lead and lead.laps and lead.laps > 0 and (' · ' .. string.format(T.lap, lead.laps + 1)) or ''
-      local total = ss and ss.durationMinutes and ss.durationMinutes > 0 and hms(sessionElapsedMs('total', ss)) or (ss and ss.laps and ss.laps > 0 and tostring(ss.laps)) or '-'
+      local total = ss and ss.durationMinutes and ss.durationMinutes > 0 and hms(sessionElapsedMs('total', ss)) or (ss and ss.laps and ss.laps > 0 and string.format(TEXTS.lapsShort, ss.laps)) or '-'
       return name .. cls .. lapTxt, hms(sessionElapsedMs()), total, name
     end
     local function nextLine()
@@ -15877,7 +15877,8 @@ float4 main(PS_IN pin) {
       if not BC.opt.rs then R.at = nil return nil end
       local showing = Session.phase == 'resultados'
       if showing and not R.at and R.sid ~= Session.id then
-        R.at, R.sid, R.rows, R.name = state.ui.clock, Session.id, CR.resTake(), select(4, sessionLine())
+        local _, _, total, name = sessionLine()
+        R.at, R.sid, R.rows, R.name, R.total = state.ui.clock, Session.id, CR.resTake(), name, total
         R.pages = { 'ALL' }
         if BC.opt.rc and #(BC.classKeys or {}) > 1 then for _, key in ipairs(BC.classKeys) do R.pages[#R.pages + 1] = key end end
       end
@@ -15919,7 +15920,7 @@ float4 main(PS_IN pin) {
       rect(x1, y1, x2, y1 + total, BAR)
       rect(x1, y1, x2, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x1 + 520 * k, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
-      local sname = R.name or select(4, sessionLine())
+      local sname = (R.name or select(4, sessionLine())) .. ' · ' .. (R.total or select(3, sessionLine()))
       local pageName = page == 'ALL' and T.resAll or (classStyle(page))
       drawText(Lang.letters.upper(T.resK .. ' · ' .. pageName), F.resK, 14 * k, TMP.a:set(x1 + 26 * k, y1 + 12 * k), DIMW)
       drawText(Lang.letters.upper(sname), F.resV, 30 * k, TMP.a:set(x1 + 26 * k, y1 + 26 * k), PAPER)
@@ -16075,13 +16076,11 @@ float4 main(PS_IN pin) {
       end
       return hh
     end
-    function CR.dateOf(s) local y, m, d = tostring(s or ''):match('^(%d+)-(%d+)-(%d+)') return y and string.format('%s/%s/%s', d, m, y) or nil end
-    function CR.hourOf(s) local hh, mm = tostring(s or ''):match('T(%d+):(%d+)') return hh and (hh .. ':' .. mm) or nil end
-    function CR.addMin(hhmm, minutes)
-      local hh, mm = tostring(hhmm or ''):match('^(%d+):(%d+)$')
-      if not hh then return nil end
-      local t = (tonumber(hh) * 60 + tonumber(mm) + math.floor(tonumber(minutes) or 0)) % (24 * 60)
-      return string.format('%02d:%02d', math.floor(t / 60), t % 60)
+    function CR.epochOf(s)
+      local y, mo, d, hh, mm = tostring(s or ''):match('^(%d+)-(%d+)-(%d+)T(%d+):(%d+)')
+      if not y then return nil end
+      local t = os.time({ year = tonumber(y), month = tonumber(mo), day = tonumber(d), hour = tonumber(hh), min = tonumber(mm), sec = 0 })
+      return t and t + (os.time() - os.time(os.date('!*t'))) or nil
     end
     function CR.eventBody(k)
       local T = TEXTS.bc
@@ -16100,13 +16099,7 @@ float4 main(PS_IN pin) {
         yy = yy + 20 * k
         local det = type(ev.detail) == 'table' and ev.detail or {}
         local sess = {}
-        for _, s in ipairs(type(det.sessions) == 'table' and det.sessions or {}) do
-          if s.on ~= false then
-            local at = type(det.starts) == 'table' and det.starts[#sess + 1] and det.starts[#sess + 1].at or nil
-            local name = (s.kind == 'practice' and T.sess[1]) or (s.kind == 'qualify' and T.sess[2]) or (s.kind == 'race' and T.sess[3]) or tostring(s.name or s.kind or '')
-            sess[#sess + 1] = { name, string.format(T.minutes, math.floor(tonumber(s.minutes) or 0)), at and string.format(T.opFrom, at, CR.addMin(at, s.minutes) or '') or '' }
-          end
-        end
+        for _, l in ipairs(eventLines()) do sess[#sess + 1] = { l[1], l[2] } end
         local ru = type(ev.rules) == 'table' and ev.rules or {}
         local rules = {}
         local dmin, dmax = tonumber(ru.minDrivers), tonumber(ru.maxDrivers)
@@ -16125,11 +16118,11 @@ float4 main(PS_IN pin) {
           CR.box(x + bw + 18 * k, yy, bw, k, T.opRules, rules, true)
         end
         yy = yy + bh + 18 * k
-        local d1, d2 = CR.dateOf(ev.start), CR.dateOf(ev['end'])
-        local h1, h2 = CR.hourOf(ev.start), CR.hourOf(ev['end'])
+        local e1, e2 = CR.epochOf(ev.start), CR.epochOf(ev['end'])
+        local d1, d2 = e1 and os.date('%d/%m/%Y', e1), e2 and os.date('%d/%m/%Y', e2)
         yy = yy + CR.grid4(x, yy, cw, k, { { T.opDate, (d1 and d2 and d1 ~= d2) and (d1 .. ' - ' .. d2) or (d1 or '-') },
           { T.opTrack, tr.name or ac.getTrackName(), tr.description }, { T.opLayout, (tr.layout and tr.layout ~= '') and tr.layout or '-' },
-          { T.opTime, h1 and string.format(T.opFrom, h1, h2 or '') or '-' } }, draw)
+          { T.opTime, e1 and string.format(T.opFrom, os.date('%H:%M', e1), e2 and os.date('%H:%M', e2) or '') or '-' } }, draw)
         return yy - y
       end
     end
