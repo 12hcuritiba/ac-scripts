@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V231 - 2026.10.23'
+local RC_VERSION = 'V232 - 2026.10.23'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1126,6 +1126,7 @@ local state = {
   pitPassServiced = false,
   pitPassSgPaid = nil,
   pitPassReverse = nil,
+  pitExitDriven = nil,
   swapInvalid = nil,
   startHold = false,
   postRed = nil,
@@ -1231,7 +1232,7 @@ sessionPart('state', state, function()
   return {
     prevInPitlane = {}, cutPassPenalized = {}, zonePass = {}, zoneRef = {}, cutChecks = {}, pitDsqActive = false, dtDsqActive = false,
     kmrMessages = {}, tyreLaps = { [0] = 0, 0, 0, 0 }, tyreKm = { [0] = 0, 0, 0, 0 }, tyreLineKm = { [0] = 0, 0, 0, 0 },
-    pitPassServiced = false, pitPassSgPaid = SESSION_NONE, pitPassReverse = SESSION_NONE, swapInvalid = SESSION_NONE, startHold = false,
+    pitPassServiced = false, pitPassSgPaid = SESSION_NONE, pitPassReverse = SESSION_NONE, pitExitDriven = SESSION_NONE, swapInvalid = SESSION_NONE, startHold = false,
     postRed = SESSION_NONE, rcCommands = {}, pitService = SESSION_NONE, repair = { class = 'normal' }, slowdowns = {}, rcOut = {}, lapOut = {},
     dsqFlagPutBack = SESSION_NONE, code80 = SESSION_NONE, code80Ended = false, hold = SESSION_NONE, pit = { done = false, missed = false },
     redFlag = SESSION_NONE, restart = SESSION_NONE, lights = SESSION_NONE, redTow = SESSION_NONE, redFuelOk = false, redCommitted = SESSION_NONE,
@@ -3105,22 +3106,24 @@ function PitRecord.save()
   local sv = state.pitService
   local rt = state.redTow
   local inv = state.swapInvalid
-  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s|%s|%d', PitRecord.stops, PitRecord.last,
+  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s|%s|%d|%s', PitRecord.stops, PitRecord.last,
     h and math.floor(h.untilMs) or 0, text,
     sv and string.format('%d/%d/%s', math.floor(sv.startMs), math.floor(sv.untilMs), sv.plan) or '-',
     state.pitPassServiced and 1 or 0, rt and string.format('%d/%.4f/%.4f/%.2f', rt.tow, rt.damage.powertrain,
     rt.damage.suspension, rt.damage.body) or '', state.pitPassSgPaid or 0,
     inv and string.format('%d/%d%s', inv.driver, math.floor(inv.since), inv.reverse and '/1' or '') or '',
-    h and tostring(h.cause or ''):gsub('[|]', '/') or '', state.pitPassReverse or 0))
+    h and tostring(h.cause or ''):gsub('[|]', '/') or '', state.pitPassReverse or 0,
+    state.pitExitDriven == nil and '' or state.pitExitDriven and '1' or '0'))
 end
 function PitRecord.apply(body, seq, newConnection)
   local f = {}
   for v in (tostring(body) .. '|'):gmatch('([^|]*)|') do f[#f + 1] = v end
-  local stops, last, untilMs, text, service, serviced, redTow, sgPaid, invalid, cause, reverse =
-    f[1], f[2] or '', f[3], f[4] or '', f[5] or '', f[6] or '', f[7] or '', f[8] or '', f[9] or '', f[10] or '', f[11] or ''
+  local stops, last, untilMs, text, service, serviced, redTow, sgPaid, invalid, cause, reverse, driven =
+    f[1], f[2] or '', f[3], f[4] or '', f[5] or '', f[6] or '', f[7] or '', f[8] or '', f[9] or '', f[10] or '', f[11] or '', f[12] or ''
   if not (stops and tonumber(stops) and untilMs and tonumber(untilMs)) then return end
   if tonumber(sgPaid or '') and tonumber(sgPaid) ~= 0 then state.pitPassSgPaid = tonumber(sgPaid) end
   if tonumber(reverse or '') and tonumber(reverse) ~= 0 then state.pitPassReverse = tonumber(reverse) end
+  if driven == '1' or driven == '0' then state.pitExitDriven = driven == '1' end
   local invDriver, invSince, invRev = tostring(invalid or ''):match('^(%d+)/(%d+)/?(%d?)$')
   if invDriver and not state.swapInvalid then
     state.swapInvalid = { driver = tonumber(invDriver), since = tonumber(invSince), reverse = invRev == '1' or nil }
@@ -7760,7 +7763,10 @@ do
         local base = TEXTS.kmrReasons[cat]
         if cat == 'K3' then Audit.kmrPointsReset() end
         if cat == 'K1' then laps = 0 end
-        if cat ~= 'K1' and (laps == 'next race' or sim.raceSessionType ~= ac.SessionType.Race) then
+        if cat == 'K1' and state.pitExitDriven == false then
+          ac.log('race-control: KMR drive-through of the pit exit line with the car out of the pit lane without driving, not in the list: ' .. text)
+          rcLog(TEXTS.rc.dtRelaxed, base .. ' - pit exit line with the car out of the pit lane without driving, not carried over by Racing Control' .. via)
+        elseif cat ~= 'K1' and (laps == 'next race' or sim.raceSessionType ~= ac.SessionType.Race) then
           ac.log('race-control: KMR drive-through relaxed (' .. cat .. '): ' .. text)
           rcLog(TEXTS.rc.dtRelaxed, base .. ' - issued by KMR for the next race, not carried over by Racing Control' .. via)
         elseif not Rules.dsqOn() then
@@ -10013,10 +10019,16 @@ local function checkPitExit(i, closed, r, dt)
   local inPitlane = car.isInPitlane
   local was = state.prevInPitlane[i]
   state.prevInPitlane[i] = inPitlane
-  if was == true and inPitlane == false and closed then
+  if was == true and inPitlane == false then
     local m = CarRead.motion
-    if i == 0 and (m.dist == 0 or m.dist > CarRead.num(car.speedKmh) / 3.6 * dt * 1.5 + 1) then
-      ac.log(string.format('race-control: pit lane left by a teleport of the game (%.1f m in the frame at %.0f km/h): not an exit',
+    local jumped = i == 0 and (m.dist == 0 or m.dist > CarRead.num(car.speedKmh) / 3.6 * dt * 1.5 + 1)
+    if i == 0 and state.pitExitDriven ~= not jumped then
+      state.pitExitDriven = not jumped
+      PitRecord.save()
+    end
+    if not closed then return end
+    if jumped then
+      ac.log(string.format('race-control: pit lane left without driving (%.1f m in the frame at %.0f km/h): not an exit',
         m.dist, CarRead.num(car.speedKmh)))
       return
     end
