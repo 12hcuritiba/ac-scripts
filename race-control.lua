@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V233 - 2026.10.23'
+local RC_VERSION = 'V234 - 2026.10.23'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -15174,7 +15174,6 @@ float4 main(PS_IN pin) {
       keep()
       BC.stateDirty = true
     end
-    local ORG_WORDS = { BAR = true, PEN = true, RES = true, OPEN = true, SNAME = true, VOICE = true, IDENT = true }
     local CREDIT_KEYS = { ['PEN BADGE'] = 'pb', ['PEN TEXT'] = 'pt', ['PEN TEXTS'] = 'pts', ['PEN BOX'] = 'px', ['PEN BOXS'] = 'pxs', ['RES SHOW'] = 'rs', ['RES ALLS'] = 'rsg',
       ['RES CLASS'] = 'rc', ['RES CLASSS'] = 'rcs', ['OPEN EVENT'] = 'oe', ['OPEN EVENTS'] = 'oes', ['OPEN TRACK'] = 'ot', ['OPEN TRACKS'] = 'ots', ['OPEN LIST'] = 'oi',
       ['OPEN LISTS'] = 'ois', ['SNAME TURN'] = 'sv', ['SNAME TURNS'] = 'svs', ['SNAME OPEN'] = 'so', ['SNAME OPENS'] = 'sos', ['SNAME NOWS'] = 'sns' }
@@ -15184,7 +15183,7 @@ float4 main(PS_IN pin) {
       local a = (w[1] or ''):upper()
       if not BC.on() then
         if a == 'ORG' then BC.orgSet(w[2] == '1') return true end
-        if not BC.orgOn() or not ORG_WORDS[a] then return true end
+        if not BC.orgOn() then return true end
       end
       if a == 'FOCUS' then
         local i = slotCar(tonumber(w[2]))
@@ -15337,13 +15336,15 @@ float4 main(PS_IN pin) {
     end
     local escWas = false
     function BC.update()
-      if not BC.on() then return end
-      local esc = ac.isKeyDown(KEY_ESC) == true
-      if esc and not escWas then
-        ac.log('race-control: broadcast: ESC, the game closed')
-        ac.shutdownAssettoCorsa()
+      if not BC.on() and not BC.orgOn() then return end
+      if BC.on() then
+        local esc = ac.isKeyDown(KEY_ESC) == true
+        if esc and not escWas then
+          ac.log('race-control: broadcast: ESC, the game closed')
+          ac.shutdownAssettoCorsa()
+        end
+        escWas = esc
       end
-      escWas = esc
       if BC.cam.mode == 'start' then
         BC.cam.mode = 'set'
         local s = BC.setByName('12hTV Fixed')
@@ -16011,14 +16012,6 @@ float4 main(PS_IN pin) {
       rect(x1, y, x2, y + k, HAIR)
       strip(x1, x2, y, k, id.logoStrip)
     end
-    function CR.conditions()
-      local T = TEXTS.bc
-      local list = RecordSync.base.forecast and RecordSync.base.forecast.list
-      local now = list and list[1]
-      return { { T.opGrip, tostring(TEXTS.trackGrip[CarRead.gripName(CarRead.num(sim.roadGrip) * 100)] or '-') },
-        { T.opAir, string.format('%.0f °C', CarRead.num(sim.ambientTemperature)) }, { T.opRoad, string.format('%.0f °C', CarRead.num(sim.roadTemperature)) },
-        { T.opNow, now and tostring(now.sky or '-') or '-' }, { T.opRain, (now and now.rain) and string.format('%d%%', math.floor(now.rain + 0.5)) or '-' } }, list
-    end
     function CR.wrap(text, font, size, width, n)
       local out, cur = {}, ''
       for word in tostring(text or ''):gmatch('%S+') do
@@ -16144,22 +16137,26 @@ float4 main(PS_IN pin) {
       local T = TEXTS.bc
       return function(x, y, cw, draw)
         local tr = BroadcastEvent.track or {}
-        local cond, list = CR.conditions()
+        local fc = Weather.forecast or RecordSync.base.forecast.list or {}
+        local segs = #fc > 0 and Radar.textSegments(fc) or {}
+        local now = segs[2] or segs[1]
         local yy = y
         if draw then drawText(Lang.letters.upper(T.opTrackK), F.ck, 15 * k, TMP.a:set(x, yy), DIMW) end
         yy = yy + 22 * k
         if draw then drawText(fitText(Lang.letters.upper(tostring(tr.name or ac.getTrackName() or '')), F.cbig, 54 * k, cw, '.'), F.cbig, 54 * k, TMP.a:set(x, yy), PAPER) end
         yy = yy + 66 * k
-        yy = yy + CR.grid4(x, yy, cw, k, { cond[1], cond[2], cond[3], cond[5] }, draw)
+        yy = yy + CR.grid4(x, yy, cw, k, { { T.opGrip, tostring(TEXTS.trackGrip[CarRead.gripName(CarRead.num(sim.roadGrip) * 100)] or '-') },
+          { T.opAir, string.format('%.0f °C', CarRead.num(sim.ambientTemperature)) }, { T.opRoad, string.format('%.0f °C', CarRead.num(sim.roadTemperature)) },
+          { T.opRain, now and string.format(TEXTS.wxProb, math.floor(now.chance * 100 + 0.5)) or '-' } }, draw)
         local fw = (cw - 3 * 10 * k) / 4
-        if list then
-          for i = 1, math.min(#list, 4) do
-            local s = list[i]
+        if now then
+          for i, s in ipairs({ segs[2] or segs[1], segs[4], segs[6], segs[7] }) do
             local fx = x + (i - 1) * (fw + 10 * k)
-            if draw then
+            if draw and s then
               rect(fx, yy + 16 * k, fx + fw, yy + 16 * k + 58 * k, BOX_TINT)
-              drawText(tostring(s.time or ''), F.rb, 20 * k, TMP.a:set(fx + 12 * k, yy + 24 * k), PAPER)
-              drawText(fitText(tostring(s.sky or ''), F.saySm, 15 * k, fw - 24 * k, '.'), F.saySm, 15 * k, TMP.a:set(fx + 12 * k, yy + 48 * k), DIMW)
+              drawText(hhmm(s.minute), F.rb, 20 * k, TMP.a:set(fx + 12 * k, yy + 24 * k), PAPER)
+              local sky = Radar.skyOf(s) .. ' · ' .. string.format(TEXTS.wxProb, math.floor(s.chance * 100 + 0.5))
+              drawText(fitText(sky, F.saySm, 15 * k, fw - 24 * k, '.'), F.saySm, 15 * k, TMP.a:set(fx + 12 * k, yy + 48 * k), DIMW)
             end
           end
           yy = yy + 16 * k + 58 * k
@@ -16267,7 +16264,12 @@ float4 main(PS_IN pin) {
       local line = Lang.letters.upper(total .. (proc and (' · ' .. proc) or ''))
       local big = Lang.letters.upper(sname)
       local kk = Lang.letters.upper(tostring((BroadcastEvent.ev or {}).name or T.snK))
-      local cond = CR.conditions()
+      local fc = Weather.forecast or RecordSync.base.forecast.list or {}
+      local segs = #fc > 0 and Radar.textSegments(fc) or {}
+      local now = segs[2] or segs[1]
+      local cond = { { T.opGrip, tostring(TEXTS.trackGrip[CarRead.gripName(CarRead.num(sim.roadGrip) * 100)] or '-') },
+        { T.opAir, string.format('%.0f °C', CarRead.num(sim.ambientTemperature)) }, { T.opRoad, string.format('%.0f °C', CarRead.num(sim.roadTemperature)) },
+        { T.opNow, now and Radar.skyOf(now) or '-' }, { T.opRain, now and string.format(TEXTS.wxProb, math.floor(now.chance * 100 + 0.5)) or '-' } }
       local cw = math.max(640 * k, textWidth(big, F.snBig, 46 * k) + 72 * k, textWidth(line, F.snLine, 19 * k) + 72 * k)
       local cellW = 0
       for _, c in ipairs(cond) do cellW = cellW + math.max(textWidth(c[2], F.rb, 20 * k), textWidth(Lang.letters.upper(c[1]), F.lab, 12 * k)) + 22 * k end
