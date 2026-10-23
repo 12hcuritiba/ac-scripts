@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V230 - 2026.10.22'
+local RC_VERSION = 'V231 - 2026.10.23'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -10004,7 +10004,7 @@ local function onPitViolation(car, r)
   end
   ac.log(string.format('race-control: pit car.index=%d sessionID=%d %s', car.index, car.sessionID, r.penalty))
 end
-local function checkPitExit(i, closed, r)
+local function checkPitExit(i, closed, r, dt)
   local car = ac.getCar(i)
   if not car or not car.isConnected then
     state.prevInPitlane[i] = nil
@@ -10014,6 +10014,12 @@ local function checkPitExit(i, closed, r)
   local was = state.prevInPitlane[i]
   state.prevInPitlane[i] = inPitlane
   if was == true and inPitlane == false and closed then
+    local m = CarRead.motion
+    if i == 0 and (m.dist == 0 or m.dist > CarRead.num(car.speedKmh) / 3.6 * dt * 1.5 + 1) then
+      ac.log(string.format('race-control: pit lane left by a teleport of the game (%.1f m in the frame at %.0f km/h): not an exit',
+        m.dist, CarRead.num(car.speedKmh)))
+      return
+    end
     onPitViolation(car, r)
   end
 end
@@ -19176,7 +19182,7 @@ function script.update(dt)
   if pitRule then
     local closed = isPitClosed()
     if config.mode == 'CSP' then
-      checkPitExit(0, closed, pitRule)
+      checkPitExit(0, closed, pitRule, dt)
     elseif config.isRaceControl and CarsTick.frame then
       for _, r in ipairs(CarsTick.rows) do
         checkPitExit(r.i, closed, pitRule)
