@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V238 - 2026.10.24'
+local RC_VERSION = 'V239 - 2026.10.24'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -9120,7 +9120,8 @@ do
     return { phase = SESSION_NONE, locked = {}, leader = SESSION_NONE, prog = 0, lastSp = SESSION_NONE, endT = SESSION_NONE, overSince = SESSION_NONE,
       slowSince = SESSION_NONE, overDone = false, slowDone = false, giveBack = {}, side = {}, k = SESSION_NONE, aligned = false, t0 = SESSION_NONE,
       t0Sent = -1e9, firstAligned = SESSION_NONE, pitStart = false, missed = false, armed = false, goT = SESSION_NONE, gridAt = SESSION_NONE,
-      leftGrid = false, speedWarn = SESSION_NONE, trackSent = SESSION_NONE, trackT = -1e9, logged = false, pitPass = false, spun = false, limitDone = false, late = {}, out = {} }
+      leftGrid = false, speedWarn = SESSION_NONE, trackSent = SESSION_NONE, trackT = -1e9, logged = false, pitPass = false, spun = false, limitDone = false, late = {}, out = {},
+      lineJump = false, lineCrossed = false }
   end)
   local function tag(i) return string.format('#%s', tostring(CarRead.number(i))) end
   local function lapLen() return tonumber(sim.trackLengthM) or 0 end
@@ -9220,7 +9221,12 @@ do
     local gap = gapM(c, prev)
     return gap > r.passFarM or (kmh < r.slowFarKmh and gap > r.slowFarM)
   end
-  local function lapRules(car)
+  local function lineJump(text)
+    if Formation.lineJump then return end
+    Formation.lineJump = true
+    penalty('JSS', config.restart.jumpLaps, text)
+  end
+  local function lapRules(car, start)
     local r = rule()
     local clock = state.ui.clock
     if car.isInPitlane or Rules.dsqOn() then
@@ -9232,7 +9238,7 @@ do
     local lost = Lap.lostControl()
     if lost then Formation.spun = true end
     Formation.speedWarn = nil
-    if kmh > r.maxKmh and not lost then
+    if not start and kmh > r.maxKmh and not lost then
       Formation.overSince = Formation.overSince or clock
       if not Formation.overDone and clock - Formation.overSince > r.overSeconds then
         Formation.overDone = true
@@ -9244,7 +9250,7 @@ do
     else
       Formation.overSince = nil
     end
-    if not Formation.leftGrid or lost then
+    if start or not Formation.leftGrid or lost then
       Formation.slowSince = nil
     elseif kmh < r.minKmh then
       Formation.slowSince = Formation.slowSince or clock
@@ -9271,6 +9277,9 @@ do
         Formation.giveBack[i] = nil
         ac.log(string.format('race-control: formation lap: place given back to car %d', i))
         showNotice(TEXTS.rcTitle, string.format(TEXTS.fmGivenBack, tag(i)))
+      elseif start then
+        Formation.giveBack[i] = nil
+        lineJump(string.format('car %d passed and the place not given back at the green (jump start)', i))
       elseif clock - t >= r.giveBackSeconds then
         Formation.giveBack[i] = nil
         penalty('FP', r.passLaps, string.format('car %d passed and the place not given back in %d s', i, r.giveBackSeconds))
@@ -9287,7 +9296,9 @@ do
         if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
         local side = d > 0 and 1 or -1
         if Formation.side[i] == -1 and side == 1 and math.abs(d) < PASS_SPLINE and not Formation.giveBack[i] then
-          if passAllowed(i, p, at) then
+          if start then
+            if not Flags.lostControl(i) then lineJump(string.format('car %d passed between the green and the line (jump start)', i)) end
+          elseif passAllowed(i, p, at) then
             ac.log(string.format('race-control: formation lap: car %d passed, allowed (the exceptions of the KMR)', i))
           else
             Formation.giveBack[i] = clock
@@ -9366,6 +9377,7 @@ do
     if rule().procedure == 'ROLLING' and (Formation.phase == 'pre' or Formation.phase == 'lap') then ev = 'hold:rolling' end
     if Formation.goT and state.ui.clock - Formation.goT < config.flags.greenSeconds then ev = 'go' end
     state.startHold = ev == 'hold:rolling' or (rule().procedure == 'STANDING' and Formation.phase ~= nil and Formation.phase ~= 'done')
+      or (rule().procedure == 'ROLLING' and Formation.phase == 'done' and Formation.goT ~= nil and not Formation.lineCrossed)
     if ev ~= Formation.trackSent or (ev ~= 'off' and state.ui.clock - Formation.trackT >= 2) then
       Formation.trackSent, Formation.trackT = ev, state.ui.clock
       ac.broadcastSharedEvent(TRACK_EVENT, ev)
@@ -9455,6 +9467,16 @@ do
           rcLog(TEXTS.rc.standingStart, Formation.pitStart and 'start from the pit lane' or 'to the grid')
         end
       end
+    end
+    if r.procedure == 'ROLLING' and Formation.phase == 'done' and Formation.goT and Lap.number() < 1 then lapRules(car, true) end
+    if r.procedure == 'ROLLING' and Formation.phase == 'done' and Formation.goT and not Formation.lineCrossed then
+      local lc = Formation.leader and alive(Formation.leader)
+      local sp = lc and not lc.isInPitlane and CarRead.num(lc.splinePosition)
+      if not sp or green or (Formation.lastSp and Formation.lastSp > 0.9 and sp < 0.1) then
+        Formation.lineCrossed = true
+        ac.log('race-control: rolling start: the leader on the line, the clock of the race starts')
+      end
+      Formation.lastSp = sp or Formation.lastSp
     end
     if r.procedure == 'STANDING' and Formation.k and not car.isInPitlane and limitPart() and (Formation.spun or Lap.lostControl()) then
       local after = afterLine(car, Formation.locked[0])
