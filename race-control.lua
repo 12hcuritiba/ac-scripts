@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V236 - 2026.10.24'
+local RC_VERSION = 'V237 - 2026.10.24'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1246,7 +1246,7 @@ sessionPart('state', state, function()
     redFlag = SESSION_NONE, restart = SESSION_NONE, lights = SESSION_NONE, redTow = SESSION_NONE, redFuelOk = false, redCommitted = SESSION_NONE,
     pitPaid = SESSION_NONE, menuFreeUntil = SESSION_NONE,
   }
-end, { 'onJumped', 'ui', 'chat', 'swap', 'list', 'tow', 'sessionParts', 'kmrAdmin', 'dsqOn', 'formationStart', 'formationAbort', 'directionAnswer', 'outDirty' })
+end, { 'onJumped', 'ui', 'chat', 'swap', 'list', 'tow', 'sessionParts', 'kmrAdmin', 'dsqOn', 'formationStart', 'formationAbort', 'formationPitHeld', 'directionAnswer', 'outDirty' })
 sessionPart('list', state.list, function()
   return { items = {}, curLap = 0, seq = 0, inPitNow = false, jumped = false, endOfLap = {}, lastLap = 0, prevGame = { t = 0, p = 0 }, prevInPit = false,
     owner = SESSION_NONE, dsq = 0, dsqStage = 0, dsqUntil = 0, dsqLap = 0, dsqReason = SESSION_NONE, wrong = SESSION_NONE }
@@ -4716,7 +4716,6 @@ end
 local PitStops
 local Rules = {}
 sessionPart('rules', Rules, function() return { endTimeDone = false } end, { 'catalog' })
-Rules.startHeld = function() return false end
 function Rules.itemEncode(it)
   return string.format('%s,%s,%d,%d,%d,%d,%d,%d,%s', it.cat, it.kind, it.laps, it.givenLap, it.expireLap, it.seq,
     it.dt0OnTrack and 1 or 0, it.id or it.seq, it.why or '')
@@ -5094,7 +5093,7 @@ end
 function Rules.finalize()
   listSort()
   local dt0 = pendingDT0()
-  if #dt0 >= 2 and not state.code80 and not Rules.startHeld() then
+  if #dt0 >= 2 and not state.code80 and not (state.formationPitHeld and state.formationPitHeld()) then
     if config.sg then
       Rules.sgForm()
     else
@@ -5120,7 +5119,7 @@ function Rules.line(viaPit, g, lapCount)
   end
   local before = listDump()
   l.curLap = lapCount
-  local startHeld = Rules.startHeld()
+  local startHeld = state.formationPitHeld ~= nil and state.formationPitHeld()
   local frozen = (state.code80 ~= nil and config.code80Freeze) or state.redFlag ~= nil or state.restart ~= nil or startHeld
   if viaPit then
     if state.code80 and l.items[1] then
@@ -7561,7 +7560,7 @@ do
       end
       return
     end
-    if state.code80 or state.redFlag or state.restart or Rules.startHeld() or StopAndGo.serviced or not CarRead.parked(car) then return end
+    if state.code80 or state.redFlag or state.restart or (state.formationPitHeld and state.formationPitHeld()) or StopAndGo.serviced or not CarRead.parked(car) then return end
     if not (StopAndGo.drove or StopAndGo.resume) then return end
     StopAndGo.stopping = true
     StopAndGo.base = sgFields(sg)
@@ -9575,7 +9574,7 @@ do
   Flags.formation = Formation
   state.formationStart = Formation.startNow
   state.formationAbort = Formation.abort
-  Rules.startHeld = Formation.pitHeld
+  state.formationPitHeld = Formation.pitHeld
 end
 local PassMirror = {}
 sessionPart('passMirror', PassMirror, function() return { seq = 0, loaded = 0, last = SESSION_NONE, red = SESSION_NONE } end)
