@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V237 - 2026.10.24'
+local RC_VERSION = 'V238 - 2026.10.24'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2147,7 +2147,7 @@ do
     end
     local car = ac.getCar(0)
     if car then beatPush('sp', string.format('%.4f|%d', CarRead.num(car.splinePosition), car.isInPitlane and 1 or 0)) end
-    if Broadcast and Broadcast.on() then
+    if Broadcast and (Broadcast.on() or Broadcast.orgOn()) then
       BroadcastAlerts.beat()
       if Broadcast.camsDirty or beatSent.tvcams == nil then Broadcast.camsDirty = false beatPush('tvcams', Broadcast.camsText()) end
       beatPush('tvstate', Broadcast.stateText())
@@ -9788,6 +9788,7 @@ do
     for k, r in ipairs(rows) do
       if r.class then classPos2[r.class] = (classPos2[r.class] or 0) + 1 end
       r.pos, r.classPos = k, r.class and classPos2[r.class] or nil
+      if (r.laps or 0) > 0 then rows.anyLap = true end
       if race then
         r.gapS, r.gapL = Relative.gap(r, k > 1 and rows[k - 1] or nil)
         r.leadS, r.leadL = Relative.gap(r, k > 1 and rows[1] or nil)
@@ -15748,6 +15749,7 @@ float4 main(PS_IN pin) {
       return iw
     end
     local function fixedOf(list)
+      if not (RaceTable.rows or {}).anyLap then return nil end
       if BC.opt.fix == 'LEAD' then return (RaceTable.rows or {})[1], 1 end
       if BC.opt.fix == 'CLASSLEAD' then return list[1], 1 end
       local fixed, fixedK = nil, nil
@@ -17041,7 +17043,7 @@ end)()
 BroadcastAlerts = { text = '', tyres = '', tyreOf = {} }
 do
   local duels, pits, pitWas = {}, {}, {}
-  local ALERT_OF = { slow = 'slow', stopped = 'stop', broken = 'broken', oil = 'oil' }
+  local ALERT_OF = { slow = 'slow', stopped = 'stop', broken = 'broken', oil = 'oil', spin = 'spin' }
   local tyresBuf, seen = {}, {}
   local function slotOf(i)
     local c = ac.getCar(i)
