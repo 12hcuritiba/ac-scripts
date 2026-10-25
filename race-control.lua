@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V239 - 2026.10.24'
+local RC_VERSION = 'V240 - 2026.10.24'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -8259,12 +8259,18 @@ do
     return string.format('#%d', CarRead.number(i))
   end
   local SWAP_RESEND = 5
+  local LAST_S = 4294967295
   local sendRedSwap = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.redorder'),
     swapS = ac.StructItem.uint32(),
   }, function(sender, msg)
     if sender and sender.index ~= 0 and Flags.restartUntil then Flags.redSwaps[sender.index] = tonumber(msg.swapS) end
   end, nil, nil, { processPostponed = true })
+  local function backS()
+    if Rules.dsqOn() then return LAST_S end
+    if state.hold and state.hold.untilMs then return math.floor(state.hold.untilMs / 1000) end
+    return Flags.mySwapMs and math.floor(Flags.mySwapMs / 1000) or nil
+  end
   local placeSeq, placeK, placeAhead, placeList = nil, nil, nil, {}
   local function placeOrder(a, b)
     if (a.sw ~= nil) ~= (b.sw ~= nil) then return a.sw == nil end
@@ -8282,7 +8288,7 @@ do
         local e = list[n] or {}
         list[n] = e
         e.i, e.pos = r.i, CarRead.num(r.c.racePosition)
-        e.sw = r.i == 0 and Flags.mySwapMs and math.floor(Flags.mySwapMs / 1000) or Flags.redSwaps[r.i]
+        e.sw = r.i == 0 and backS() or Flags.redSwaps[r.i]
       end
     end
     for k = #list, n + 1, -1 do list[k] = nil end
@@ -8319,9 +8325,10 @@ do
         Flags.restartUntil, Flags.redSwaps, Flags.mySwapMs = nil, {}, nil
       end
     end
-    if Flags.mySwapMs and Flags.restartUntil and clock - Flags.swapSentT >= SWAP_RESEND then
+    local back = Flags.restartUntil and backS()
+    if back and clock - Flags.swapSentT >= SWAP_RESEND then
       Flags.swapSentT = clock
-      OnlineQueue.push(sendRedSwap, { swapS = math.floor(Flags.mySwapMs / 1000) }, nil)
+      OnlineQueue.push(sendRedSwap, { swapS = back }, nil)
     end
   end
   local function pick(car)
@@ -8847,6 +8854,7 @@ do
     local gridAt, lightsAt, step, offAt = timeline(r.t0, r.start)
     local releaseAt = lightsAt + (c.releaseLight - 1) * step
     local swap = Flags.mySwapMs ~= nil
+    local held = state.hold ~= nil
     if d >= offAt then
       sr.go, sr.goT = true, clock
       if sr.relPos then
@@ -8867,6 +8875,8 @@ do
       sr.placed = true
       if swap then
         rcLog(TEXTS.rc.standingRestart, 'driver swap: leaves the pit lane at the green')
+      elseif held then
+        rcLog(TEXTS.rc.standingRestart, 'held at the pits: leaves at the end of the hold')
       elseif not Rules.dsqOn() and ((car.isInPitlane and not r.start) or Flags.onGrid) then
         place(r.start and r.k or nil, not r.start)
       end
