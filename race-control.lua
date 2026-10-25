@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V243 - 2026.10.25'
+local RC_VERSION = 'V244 - 2026.10.25'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -12847,9 +12847,9 @@ local drawRaceScreens = (function()
   local ORANGE = rgbm(1, 0.54, 0.11, 1)
   local ROW = 13
   local FS = 10
-  local PLACE = { relative = { 1572, 380, 330 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 200 },
+  local PLACE = { relative = { 1572, 380, 330 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 210 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 510 }, event = { 770, 200, 380 },
-    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 600 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 },
+    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 616 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 },
     calc = { 380, 110, 380 }, report = { 660, 110, 600 } }
   local filter = Desktop.filter
   local function lapTime(ms)
@@ -13146,7 +13146,7 @@ local drawRaceScreens = (function()
     local ds = Delta.sectors(ref)
     for k = 0, 2 do
       local v = ds[k]
-      cells[#cells + 1] = { v and string.format('%+.2f', v) or '-', 94 + k * 46, v and (v > 0 and RED or GREEN) or nil, true }
+      cells[#cells + 1] = { v and string.format('%+.2f', v) or '-', 104 + k * 46, v and (v > 0 and RED or GREEN) or nil, true }
     end
     row(p1, y, s, cells)
     Drag.icons('delta', p1, p2, s)
@@ -14342,7 +14342,7 @@ float4 main(PS_IN pin) {
     end)
     local barW, barGap = (small and 6 or 14) * s, (small and 9 or 22) * s
     local r = (GH / 2 - (small and 3 or 6)) * s
-    local right = (small and 8 or 14) * s + 2 * r + (small and 6 or 10) * s + 4 * barGap + (small and 4 or 0) * s
+    local right = (small and 8 or 14) * s + 2 * r + (small and 6 or 10) * s + 4 * barGap + (small and 4 or 16) * s
     local gx1, gy1 = p1.x + (small and 8 or 14) * s, y + 2 * s
     local gx2, gy2 = p2.x - right, y + (GH - 2) * s
     ui.drawRectFilled(vec2(gx1, gy1), vec2(gx2, gy2), rgbm(1, 1, 1, 0.04), 2 * s)
@@ -14390,7 +14390,7 @@ float4 main(PS_IN pin) {
     local st = small and tostring(kmh) or string.format('%d km/h', kmh)
     local ssz = (small and 6.5 or 9) * s
     local sw = textWidth(st, FONT_MONO, ssz)
-    drawText(st, FONT_MONO, ssz, TMP.a:set(c.x - sw / 2, small and (c.y + 4 * s) or (c.y - r + 8 * s)), COLOR_DIM)
+    drawText(st, FONT_MONO, ssz, TMP.a:set(c.x - sw / 2, small and (c.y + 4 * s) or (c.y - r + 11 * s)), COLOR_DIM)
     Drag.icons('telemetry', p1, p2, s)
   end
   local Perf = { fps = 0, cpu = 0, gpu = 0, top = 60 }
