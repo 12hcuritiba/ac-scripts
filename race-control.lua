@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V244 - 2026.10.25'
+local RC_VERSION = 'V245 - 2026.10.25'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -533,7 +533,7 @@ local TEXTS = {
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
     weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit', perf = 'Performance',
-    calc = 'Strategy calculator', report = 'Session report' },
+    calc = 'Strategy calculator', report = 'Session report', carradar = 'Car radar' },
   iconTips = { settings = 'Menu of the Racing Control', eye = 'Show or hide', ghost = 'Auto-hide', pin = 'Lock the place', reset = 'Every box back to its place' },
   scrTelemetry = 'TELEMETRY',
   scrReport = 'SESSION REPORT',
@@ -1661,6 +1661,7 @@ do
         if on ~= r.on then stale[i] = true end
         r.c, r.on, r.sp = c, on, CarRead.num(c.splinePosition)
         if CarRead.num(c.speedKmh) >= 5 then r.movedT = now end
+        if CarRadar.on then CarRadar.read(i, r, c) end
         if stale[i] or (on and r.name == '') then
           stale[i] = nil
           driver(r)
@@ -9866,6 +9867,11 @@ do
             absent[#absent + 1] = r
           end
           byIndex[c.index] = r
+        elseif t and c.index == 0 and CarRead.isOrg(0) then
+          local o = RaceTable.org or { index = 0, pos = '-' }
+          RaceTable.org = o
+          o.number, o.name, o.laps = t.number, t.name, Lap.of(0) or 0
+          o.spline, o.inPit = CarRead.num(c.splinePosition), c.isInPitlane
         end
       end
     end
@@ -10898,7 +10904,7 @@ local Desktop = { current = 1, count = 1, pitOn = true, place = {}, focus = nil,
   indicatorUntil = 0, drawnOrder = {}, wasInPit = nil }
 do
   local SCREENS = { 'pitbox', 'setup', 'status', 'race', 'laps', 'standings', 'relative', 'laptime', 'delta', 'event',
-    'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'report' }
+    'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'carradar' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local STORAGE_KEY = 'rc.desktops'
   local OFF_KEY = 'rc.desktopsOff'
@@ -10928,12 +10934,13 @@ do
     return { standings = { x = -697, y = -450, mode = 'visible' }, laptime = { x = -1564, y = 30, mode = 'visible' },
       relative = { x = -1174, y = 290, mode = 'visible' }, telemetry = { x = 350, y = -78, mode = 'visible' },
       delta = { x = 466, y = -237, mode = 'visible' }, pitbox = { x = 0, y = 0, mode = 'visible' },
-      race = { x = 1524, y = 0, mode = 'visible' } }
+      race = { x = 1524, y = 0, mode = 'visible' },
+      carradar = { x = 0, y = 0, mode = 'auto' } }
   end
   local function pitDefault()
     return { pitbox = { x = 0, y = 0, mode = 'auto' }, status = { x = 0, y = 0, mode = 'auto' },
       setup = { x = 0, y = 0, mode = 'auto' }, standings = { x = 0, y = 0, mode = 'auto' },
-      share = { x = 26, y = 689, mode = 'visible' }, report = { x = 0, y = 0, mode = 'auto' } }
+      share = { x = 26, y = 689, mode = 'visible' } }
   end
   Desktop.trackDefault, Desktop.pitDefault = trackDefault, pitDefault
   local function defaults()
@@ -10953,12 +10960,12 @@ do
         parts[#parts + 1] = string.format('%s:%s:%d:%d:%s', tostring(d), g, math.floor(e.x), math.floor(e.y), e.mode)
       end
     end
-    ac.storage[STORAGE_KEY] = string.format('3|%d|%d|%d|%s', Desktop.current, Desktop.count, Desktop.pitOn and 1 or 0,
+    ac.storage[STORAGE_KEY] = string.format('4|%d|%d|%d|%s', Desktop.current, Desktop.count, Desktop.pitOn and 1 or 0,
       table.concat(parts, ';'))
   end
   local function load()
     local text = ac.storage[STORAGE_KEY]
-    local ver, cur, count, pit, body = tostring(text or ''):match('^([123])|(%d+)|(%d+)|(%d)|(.*)$')
+    local ver, cur, count, pit, body = tostring(text or ''):match('^([1234])|(%d+)|(%d+)|(%d)|(.*)$')
     if not cur then
       defaults()
       return
@@ -10975,7 +10982,10 @@ do
       end
     end
     if ver == '1' then Desktop.place.track = trackDefault() end
-    if ver ~= '3' and not Desktop.place.pit.report then Desktop.place.pit.report = { x = 0, y = 0, mode = 'auto' } end
+    if ver ~= '4' then
+      for _, list in pairs(Desktop.place) do list.report = nil end
+      Desktop.place.track.carradar = Desktop.place.track.carradar or { x = 0, y = 0, mode = 'auto' }
+    end
   end
   load()
   function Desktop.has(g)
@@ -11148,8 +11158,6 @@ do
       Desktop.cockpitStep(dir)
     elseif g == 'calc' then
       Desktop.calcStep(dir)
-    elseif g == 'report' then
-      Desktop.reportStep(dir)
     end
   end
   local WX_KEY = 'rc.weatherMode'
@@ -11169,8 +11177,6 @@ do
   Desktop.cockpitMove = function() end
   Desktop.calcStep = function() end
   Desktop.calcMove = function() end
-  Desktop.reportStep = function() end
-  Desktop.reportMove = function() end
   Desktop.shareStep = function(dir) RecordSync.base.rrShare(dir > 0) end
   Desktop.shareMove = function() end
   function Desktop.padFor(g)
@@ -11464,10 +11470,6 @@ do
         if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.calcMove(-1) end
         if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.calcMove(1) end
       end
-      if g == 'report' then
-        if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.reportMove(-1) end
-        if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.reportMove(1) end
-      end
     end
   end
 end
@@ -11644,8 +11646,8 @@ Lang.hooks[#Lang.hooks + 1] = commandTexts
 local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
-    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'report' }
-  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden', calc = 'hidden', report = 'hidden' }
+    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'carradar' }
+  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden', calc = 'hidden' }
   local MODES = { visible = true, auto = true, hidden = true }
   Drag.EYE_NEXT = { visible = 'hidden', auto = 'hidden', hidden = 'visible' }
   Drag.GHOST_NEXT = { visible = 'auto', auto = 'visible', hidden = 'auto' }
@@ -11724,7 +11726,8 @@ do
     local panel = group == 'panel'
     local tips = TEXTS.iconTips
     if panel then
-      row[#row + 1] = { ui.Icons.Settings, (Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen or Desktop.cockpitOpen)
+      row[#row + 1] = { ui.Icons.Settings, (Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen or Desktop.cockpitOpen
+        or Desktop.reportOpen)
         and ICON_ON or ICON_COLOR,
         function() Desktop.menu = not Desktop.menu end, tips.settings }
       row[#row + 1] = { ui.Icons.Monitor, ICON_COLOR, function() Desktop.go(1) end, TEXTS.navNextDesktop }
@@ -11733,7 +11736,7 @@ do
           { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
           { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.WeatherOvercastClouds, 'weather' },
           { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' }, { ui.Icons.VideoCamera, 'share' },
-          { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' }, { ui.Icons.Calculator, 'calc' }, { ui.Icons.Search, 'report' } }) do
+          { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' }, { ui.Icons.Calculator, 'calc' }, { ui.Icons.Crosshair, 'carradar' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2], TEXTS.screenNames[it[2]] }
       end
     end
@@ -11779,6 +11782,27 @@ do
     save(g)
   end
   local function inside(m, a, b) return m.x >= a.x and m.x <= b.x and m.y >= a.y and m.y <= b.y end
+  local function pressButtons(m)
+    for bi = #buttons, 1, -1 do
+      local b = buttons[bi]
+      if inside(m, b.p1, b.p2) then
+        ui.setMouseCursor(ui.MouseCursor.Hand)
+        ui.captureMouse(true)
+        if b.tip then ui.setTooltip(b.tip) end
+        if ui.mouseClicked() then
+          if type(b.action) == 'function' then b.action() else press(b.action) end
+        end
+        return true
+      end
+    end
+    return false
+  end
+  function Drag.press()
+    local m = ui.mousePos()
+    if m.x >= 0 then pressButtons(m) end
+    buttons = {}
+    Drag.modal = nil
+  end
   Drag.panelExtra = 0
   function Drag.fitPanel(top, height, h)
     top = math.min(math.max(top, 0), math.max(h - height, 0))
@@ -11820,20 +11844,7 @@ do
       ui.setMouseCursor(ui.MouseCursor.ResizeAll)
       ui.captureMouse(true)
     elseif ok then
-      local done = false
-      for bi = #buttons, 1, -1 do
-        local b = buttons[bi]
-        if inside(m, b.p1, b.p2) then
-          ui.setMouseCursor(ui.MouseCursor.Hand)
-          ui.captureMouse(true)
-          if b.tip then ui.setTooltip(b.tip) end
-          if ui.mouseClicked() then
-            if type(b.action) == 'function' then b.action() else press(b.action) end
-          end
-          done = true
-          break
-        end
-      end
+      local done = pressButtons(m)
       local modal = Drag.modal and inside(m, Drag.modal[1], Drag.modal[2])
       if not done and not modal then
         for g, r in pairs(rects) do
@@ -12181,6 +12192,106 @@ local function drawTextRight(text, font, size, xRight, y, color)
   ui.pushDWriteFont(font)
   ui.dwriteDrawText(text, size, TMP.text:set(px(xRight - tw), px(y)), color)
   ui.popDWriteFont()
+end
+CarRadar = { on = false, PLACE = { 888, 364, 145 } }
+do
+  local EDGE, SOLID, RISK, CONTACT = 7 * 3.5 / 3, 2.0 * 7 / 3, 1.5, 0.75
+  local ZONE = { rgbm(0.12, 0.77, 0.23, 1), rgbm(1, 0.54, 0.11, 1), rgbm(0.88, 0.09, 0.09, 1) }
+  local near, nearN = {}, 0
+  local my = { p = vec3(), f = vec3(), rt = vec3(), w = 2, l = 4.6, ok = false }
+  local img = { size = 0 }
+  local V = { a = vec2(), b = vec2(), c = vec2() }
+  local COL, GLOW = rgbm(1, 1, 1, 1), rgbm(1, 1, 1, 1)
+  local function setCol(c, r, g, b, m) c.r, c.g, c.b, c.mult = r, g, b, m return c end
+  local function fade(d) return d <= SOLID and 1 or math.max(0, (EDGE - d) / (EDGE - SOLID)) end
+  function CarRadar.read(i, r, c)
+    local p = c.position
+    if i == 0 then
+      nearN = 0
+      local wh = c.wheels
+      my.ok = p ~= nil and wh ~= nil and wh[0] ~= nil and wh[1] ~= nil
+      if not my.ok then return end
+      local a, b = wh[0].position, wh[1].position
+      my.p:set(p.x, p.y, p.z)
+      my.f:set(c.look.x, c.look.y, c.look.z)
+      my.rt:set(b.x - a.x, b.y - a.y, b.z - a.z):normalize()
+      local sz = c.aabbSize
+      my.w, my.l = sz and sz.x or 2, sz and sz.z or 4.6
+      return
+    end
+    if not my.ok or not p or not r.on or r.staff or c.isInPitlane then return end
+    local dx, dy, dz = p.x - my.p.x, p.y - my.p.y, p.z - my.p.z
+    local rx = dx * my.rt.x + dy * my.rt.y + dz * my.rt.z
+    local rz = dx * my.f.x + dy * my.f.y + dz * my.f.z
+    if rx * rx + rz * rz > EDGE * EDGE then return end
+    local lk, sz = c.look, c.aabbSize
+    r.rx, r.rz = rx, rz
+    r.rh = math.atan2(lk.x * my.rt.x + lk.y * my.rt.y + lk.z * my.rt.z, lk.x * my.f.x + lk.y * my.f.y + lk.z * my.f.z)
+    r.rw, r.rl = sz and sz.x or my.w, sz and sz.z or my.l
+    nearN = nearN + 1
+    near[nearN] = r
+  end
+  local function images(size)
+    if img.bg then img.bg:dispose(); img.cross:dispose() end
+    img.size, img.bg, img.cross = size, ui.ExtraCanvas(vec2(size, size)), ui.ExtraCanvas(vec2(size, size))
+    local r = size / 2
+    local c, k = vec2(r, r), r / EDGE
+    img.bg:clear(rgbm(0, 0, 0, 0))
+    img.bg:update(function()
+      for d = 1, math.floor(r) do ui.drawCircle(c, d, rgbm(0.043, 0.047, 0.059, 0.88 * fade(d / k)), 64, 1.5) end
+      for n, m in ipairs({ 3, 5, 7 }) do ui.drawCircle(c, m * k, rgbm(1, 1, 1, 0.13 - (n - 1) * 0.03), 64, 1) end
+    end)
+    img.cross:clear(rgbm(0, 0, 0, 0))
+    img.cross:update(function()
+      local a, b = vec2(), vec2()
+      for x = 0, size - 2, 2 do
+        local col = rgbm(1, 1, 1, 0.7 * fade(math.abs(x + 1 - r) / k))
+        ui.drawLine(a:set(x, r), b:set(x + 2, r), col, 1)
+        ui.drawLine(a:set(r, x), b:set(r, x + 2), col, 1)
+      end
+    end)
+  end
+  local CORNERS = { { 1, 1, -math.pi / 2 }, { 1, -1, 0 }, { -1, -1, math.pi / 2 }, { -1, 1, math.pi } }
+  local function path(x, y, wd, ln, hd)
+    local cs, sn, rr = math.cos(hd), math.sin(hd), math.min(wd, ln) * 0.22
+    for _, q in ipairs(CORNERS) do
+      local lx, ly = q[1] * (wd / 2 - rr), q[2] * (ln / 2 - rr)
+      ui.pathArcTo(V.c:set(x + lx * cs + ly * sn, y + lx * sn - ly * cs), rr, hd + q[3], hd + q[3] + math.pi / 2, 4)
+    end
+  end
+  local function frameOf(x, y, wd, ln, hd, col, glow, s)
+    if glow then
+      setCol(GLOW, col.r, col.g, col.b, col.mult * 0.3)
+      path(x, y, wd, ln, hd)
+      ui.pathStroke(GLOW, true, 4 * s)
+    end
+    path(x, y, wd, ln, hd)
+    ui.pathStroke(col, true, 1.6 * s)
+  end
+  function CarRadar.draw(w, h, s)
+    local pl = CarRadar.PLACE
+    local size = math.floor(pl[3] * s)
+    if img.size ~= size then images(size) end
+    local o = Drag.offset('carradar', h)
+    local p1 = V.a:set(math.floor(pl[1] * h / 1080 + o.x), math.floor(pl[2] * h / 1080 + o.y))
+    local p2 = V.b:set(p1.x + size, p1.y + size)
+    Drag.group = 'carradar'
+    Drag.hit(p1, p2)
+    ui.drawImage(img.bg, p1, p2, setCol(COL, 1, 1, 1, Desktop.opacity))
+    ui.drawImage(img.cross, p1, p2)
+    local cx, cy, m = p1.x + size / 2, p1.y + size / 2, size / 2 / EDGE
+    for k = 1, nearN do
+      local r = near[k]
+      local a = fade(math.sqrt(r.rx * r.rx + r.rz * r.rz))
+      if a > 0 then
+        local gap = math.sqrt(math.max(0, math.abs(r.rx) - (my.w + r.rw) / 2) ^ 2 + math.max(0, math.abs(r.rz) - (my.l + r.rl) / 2) ^ 2)
+        local z = gap <= CONTACT and 3 or gap <= RISK and 2 or 1
+        frameOf(cx + r.rx * m, cy - r.rz * m, r.rw * m, r.rl * m, r.rh, setCol(COL, ZONE[z].r, ZONE[z].g, ZONE[z].b, a), z > 1, s)
+      end
+    end
+    frameOf(cx, cy, my.w * m, my.l * m, 0, PANEL_COLORS.yellow, false, s)
+    Drag.icons('carradar', p1, p2, s)
+  end
 end
 local drawPitBox
 do
@@ -12850,7 +12961,7 @@ local drawRaceScreens = (function()
   local PLACE = { relative = { 1572, 380, 330 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 210 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 510 }, event = { 770, 200, 380 },
     weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 616 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 },
-    calc = { 380, 110, 380 }, report = { 660, 110, 600 } }
+    calc = { 380, 110, 380 } }
   local filter = Desktop.filter
   local function lapTime(ms)
     if not ms or ms <= 0 then return '-' end
@@ -12945,7 +13056,7 @@ local drawRaceScreens = (function()
     end
   end
   local function relativeScreen(car, w, h, s)
-    local me = RaceTable.byIndex[0]
+    local me = RaceTable.byIndex[0] or RaceTable.org
     if not me then return end
     Relative.update()
     local list = {}
@@ -13971,6 +14082,13 @@ float4 main(PS_IN pin) {
     drawPanel(p1, p2, BORDER_YELLOW, s)
     drawText(eventTitle(), FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     drawTextRight(TEXTS.scrEventInfo, FONT_MONO, 11 * s, p2.x - 14 * s, p1.y + 5 * s, COLOR_TITLE)
+    local bt = TEXTS.screenNames.report
+    local bw = textWidth(bt, FONT_MONO, 9 * s)
+    local ix = p2.x - 14 * s - textWidth(TEXTS.scrEventInfo, FONT_MONO, 11 * s) - 8 * s
+    Desktop.eventReport = Desktop.eventReport or { vec2(), vec2() }
+    local a, b = Desktop.eventReport[1]:set(ix - bw - 6 * s, p1.y + 5 * s), Desktop.eventReport[2]:set(ix, p1.y + 18 * s)
+    if Desktop.reportOpen then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
+    drawText(bt, FONT_MONO, 9 * s, TMP.a:set(a.x + 3 * s, a.y + 1 * s), Desktop.reportOpen and TMP.dark or COLOR_DIM)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     eventDraw(p1, p2, p1.y + 26 * s, s)
     return p2.y
@@ -14859,7 +14977,7 @@ float4 main(PS_IN pin) {
       Drag.icons('calc', p1, p2, s)
     end
   end)()
-  local reportScreen = (function()
+  do
     local P = { page = 'search', f = { driver = 1, car = 1, track = 1, type = 1 }, sel = 1, top = 0, busy = false, err = false, L = {}, over = true,
       mark = tonumber(ac.storage['rc.reportMark'] or '') }
     local FILTERS = { 'driver', 'car', 'track', 'type' }
@@ -14971,24 +15089,6 @@ float4 main(PS_IN pin) {
       P.f[k] = (math.min(P.f[k], n) - 1 + dir) % n + 1
       search()
     end
-    local function open(it)
-      if not it then return end
-      if it.filter then stepFilter(it.filter, 1)
-      elseif it.sess then openSession(it.sess.key)
-      elseif it.drv then openDriver(it.drv)
-      elseif it.lap then openLap(it.lap.id)
-      elseif it.best then local b = P.best and P.best[it.best]; if b then openLap(b.id) end end
-    end
-    Desktop.reportMove = function(dir)
-      local n = #items()
-      if n > 0 then P.sel = (P.sel - 1 + dir) % n + 1 end
-    end
-    Desktop.reportStep = function(dir)
-      local it = items()[P.sel]
-      if it and it.filter then stepFilter(it.filter, dir)
-      elseif dir > 0 then open(it)
-      else back() end
-    end
     local function timeAt(L, d)
       local D, T = L.cols.dist, L.cols.time
       if d <= D[1] then return T[1] end
@@ -15066,7 +15166,7 @@ float4 main(PS_IN pin) {
     end
     local function cell(v) return (v ~= nil and tostring(v) ~= '') and tostring(v):gsub(',', ' ') or '-' end
     local function when(ms) return ms and os.date('%d/%m %H:%M', math.floor(tonumber(ms) / 1000)) or '-' end
-    return function(car, w, h, s)
+    local function layout()
       if P.page == 'search' and not P.sessions and not P.busy and not P.err then search() end
       local list = items()
       P.sel = math.max(1, math.min(P.sel, math.max(#list, 1)))
@@ -15077,10 +15177,12 @@ float4 main(PS_IN pin) {
         if P.sel - fixed <= P.top then P.top = P.sel - fixed - 1 end
       end
       P.top = math.max(0, math.min(P.top, math.max(#list - fixed - LIST, 0)))
-      local rows = P.page == 'lap' and 24 or (fixed + 2 + math.max(shownRows, 1) + 1)
-      local p1, p2, y = frame('report', w, h, s, rows, TEXTS.scrReport, nil)
-      local focus = Desktop.focus == 'report'
-      local x = p2.x - 14 * s
+      return list, fixed, P.page == 'lap' and 24 or (fixed + 2 + math.max(shownRows, 1) + 1)
+    end
+    Desktop.reportRows = function() return select(3, layout()) end
+    Desktop.reportBody = function(p1, p2, y, s, right)
+      local list, fixed = layout()
+      local x = right
       if P.page ~= 'search' then x = chip('<', x, p1.y, s, false, back) end
       if P.page == 'lap' then
         x = chip(TEXTS.rep.mark, x, p1.y, s, P.mark == P.lapId, function() setMark(P.mark ~= P.lapId and P.lapId or nil) end)
@@ -15089,7 +15191,6 @@ float4 main(PS_IN pin) {
       drawTextRight(TEXTS.rep.pages[P.page], FONT_MONO, 9 * s, x - 4 * s, p1.y + 6 * s, COLOR_DIM)
       local function line(i, cells, fn, mark)
         local on = P.sel == i
-        if on and focus then ui.drawRectFilled(vec2(p1.x + 6 * s, y), vec2(p2.x - 6 * s, y + ROW * s), rgbm(1, 1, 1, 0.07), 2 * s) end
         for _, c in ipairs(cells) do if on and not c[3] then c[3] = YELLOW end end
         row(p1, y, s, cells)
         if fn then Drag.clickable(vec2(p1.x + 6 * s, y), vec2(p2.x - (mark and 40 or 6) * s, y + ROW * s), function() P.sel = i; fn() end) end
@@ -15190,9 +15291,8 @@ float4 main(PS_IN pin) {
         stepBox('-', vec2(p2.x - 48 * s, y), s, function() P.top = math.max(P.top - LIST, 0); P.sel = fixed + P.top + 1 end)
         stepBox('+', vec2(p2.x - 30 * s, y), s, function() P.top = P.top + LIST; P.sel = math.min(fixed + P.top + 1, #list) end)
       end
-      Drag.icons('report', p1, p2, s)
     end
-  end)()
+  end
   ;(function()
     Broadcast = Broadcast or {}
     local BC = Broadcast
@@ -17128,7 +17228,8 @@ float4 main(PS_IN pin) {
     if shown('cockpit', car.isInPitlane) then cockpitScreen(car, w, h, s) end
     if shown('perf', false) then perfScreen(car, w, h, s) end
     if shown('calc', false) then calcScreen(car, w, h, s) end
-    if shown('report', false) then reportScreen(car, w, h, s) end
+    CarRadar.on = shown('carradar', Desktop.close)
+    if CarRadar.on then CarRadar.draw(w, h, s) end
   end
 end)()
 BroadcastAlerts = { text = '', tyres = '', tyreOf = {} }
@@ -17936,7 +18037,7 @@ local drawDesktopUI = (function()
   end
   local function closeWindows()
     Desktop.editor, Audit.open, Desktop.buttons, Desktop.settingsOpen, Desktop.redOpen = false, false, false, false, false
-    Desktop.cockpitOpen = false
+    Desktop.cockpitOpen, Desktop.reportOpen = false, false
   end
   local function menu(w, h, s)
     local pr = Drag.lastRects.panel
@@ -17946,6 +18047,9 @@ local drawDesktopUI = (function()
       { TEXTS.menuButtons, function() closeWindows(); Desktop.buttons = true end },
       { TEXTS.menuSettings, function() closeWindows(); Desktop.settingsOpen = true end },
       { TEXTS.menuCockpit, function() closeWindows(); Desktop.cockpitOpen = true end } }
+    if ac.getCar(0).isInPit then
+      items[#items + 1] = { TEXTS.screenNames.report, function() closeWindows(); Desktop.reportOpen = true end }
+    end
     if config.role then
       items[#items + 1] = { TEXTS.menuRedFlag, function() closeWindows(); Desktop.redOpen = true end }
     end
@@ -17979,6 +18083,19 @@ local drawDesktopUI = (function()
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.cockpitOpen = false end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     Desktop.cockpitBody(ac.getCar(0), p1, p2, p1.y + 26 * s, s, false)
+  end
+  local function reportWindow(w, h, s)
+    if not ac.getCar(0).isInPit then Desktop.reportOpen = false return end
+    local p1, p2 = windowAt('report', 600, 28 + Desktop.reportRows() * 13, w, h, s)
+    Drag.group = nil
+    Drag.modal = { p1, p2 }
+    local m = ui.mousePos()
+    if m.x >= p1.x and m.x <= p2.x and m.y >= p1.y and m.y <= p2.y then ui.captureMouse(true) end
+    drawPanel(p1, p2, BORDER_BASE, s)
+    drawText(TEXTS.scrReport, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
+    chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.reportOpen = false end)
+    drawSeparator(p1, p2, p1.y + 21 * s, s)
+    Desktop.reportBody(p1, p2, p1.y + 26 * s, s, p2.x - 34 * s)
   end
   local AUDIT_ROWS = 16
   local SRC_COLOR = { KMR = PANEL_COLORS.yellow, ACSM = PANEL_COLORS.blue }
@@ -19304,6 +19421,12 @@ local drawDesktopUI = (function()
     lobbyAt(vec2(math.floor(right - LOBBY_W * s), math.floor((bottom or top) + 8 * s)), s)
     local m = ui.mousePos()
     local a, b = vec2(right - LOBBY_W * s, top), vec2(right, bottom or top)
+    local eb = Desktop.eventReport
+    if not lobbyGrab and eb and m.x >= eb[1].x and m.x <= eb[2].x and m.y >= eb[1].y and m.y <= eb[2].y then
+      ui.setMouseCursor(ui.MouseCursor.Hand)
+      if ui.mouseClicked() then Desktop.reportOpen = not Desktop.reportOpen end
+      return
+    end
     if lobbyGrab then
       ui.setMouseCursor(ui.MouseCursor.ResizeAll)
       local nx = math.min(math.max(m.x - lobbyGrab.x, 0), w - LOBBY_W * s)
@@ -19354,6 +19477,7 @@ local drawDesktopUI = (function()
           local sm = math.min(math.max((size.y / 1080) ^ 0.3, 1), 1.3)
           Desktop.text.minPx = Desktop.text.min * sm
           lobby(size.x, size.y, sm)
+          if Desktop.reportOpen then reportWindow(size.x, size.y, sm); Drag.press() end
           return Desktop.sessionFinale()
         end
         local free = state.menuFreeUntil and state.ui.clock < state.menuFreeUntil
@@ -19466,6 +19590,7 @@ local drawDesktopUI = (function()
     if Desktop.settingsOpen then settingsWindow(w, h, s) else Settings.shown = false end
     if Desktop.redOpen and config.role then redWindow(w, h, s) else Direction.openSeen = false end
     if Desktop.cockpitOpen then cockpitWindow(w, h, s) end
+    if Desktop.reportOpen and not sim.isInMainMenu then reportWindow(w, h, s) end
     if sim.isInMainMenu then lobby(w, h, s) end
     if Desktop.menu then menu(w, h, s) end
     if state.ui.clock < Desktop.indicatorUntil then indicator(w, h, s) end
@@ -19533,7 +19658,7 @@ function script.drawUI(exclusive)
   Drag.zone('panel', panelPlace[1], panelPlace[2])
   local forced = Drag.hovered('panel') or ac.getCar(0).isInPit or state.ui.clock < Desktop.panelUntil
     or Desktop.menu or Desktop.editor or Audit.open or Desktop.buttons or Desktop.settingsOpen or Desktop.redOpen
-    or Desktop.cockpitOpen
+    or Desktop.cockpitOpen or Desktop.reportOpen
   local stackOn = pm ~= 'hidden' or forced
   if intro or (Intro.done and (pm == 'visible' or (pm == 'auto' and (anyOn or text)) or forced)) then
     local p1 = vec2(x, yMsg)
