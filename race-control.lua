@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V242 - 2026.10.24'
+local RC_VERSION = 'V243 - 2026.10.25'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -622,7 +622,7 @@ local TEXTS = {
   srTitle = 'STANDING RESTART', srGrid = 'Grid P%d - controls locked', srGridFree = 'Grid P%d', srGridSoon = 'Grid in %d s - stay at your pit place',
   srSwap = 'Driver swap: leave the pit lane at the green', srLightsIn = 'Lights in %d s', srLights = 'Lights %d / %d',
   srFree = 'Controls free - do not move before the lights go out', srGo = 'GREEN FLAG - GO GO',
-  srGoLine = 'Standing restart', srCancelled = 'Standing restart cancelled - red flag',
+  srGoLine = 'Standing restart', ssGoLine = 'Standing start - racing', srCancelled = 'Standing restart cancelled - red flag',
   srGridLocked = 'Stay on the grid - controls locked', srNoNode = 'no grid place AC_START_%d on this track',
   dirStanding = 'STANDING RESTART', dirStandingOff = 'CANCEL RESTART',
   flagRestart = 'Restart P%d - behind %s', flagRestartFirst = 'Restart P%d - first car',
@@ -8462,7 +8462,9 @@ do
     if Flags.lastGroup and Flags.lastGroup <= 2 and not top then Flags.greenUntil = clock + cfg.greenSeconds end
     Flags.lastGroup = top and top[1] or nil
     if not normal and clock < (Flags.srGoUntil or 0) then
-      normal = { 5, 'green', TEXTS.srGo, TEXTS.srGoLine, '', nil, true }
+      local F, sr = Flags.formation, Flags.sr
+      local rolling = F and F.goT and not (sr.goT and sr.goT >= F.goT)
+      normal = { 5, 'green', TEXTS.srGo, rolling and TEXTS.flagStartLine or sr.start and TEXTS.ssGoLine or TEXTS.srGoLine, '', nil, true }
     end
     if not normal and clock < Flags.greenUntil then
       normal = { 5, 'green', TEXTS.flagGreen, TEXTS.flagGreenLine, '' }
@@ -13025,13 +13027,13 @@ local drawRaceScreens = (function()
       local me = r.index == 0
       local col = me and YELLOW or COLOR_TITLE
       if r.absent then
-        row(p1, y, s, { { '#' .. r.number, 58, COLOR_OFF }, { r.name, 88, COLOR_OFF, false, FONT_TEXT },
+        row(p1, y, s, { { '#' .. r.number, 58, COLOR_OFF }, { fitText(r.name, FONT_TEXT, FS * s, 120 * s), 88, COLOR_OFF, false, FONT_TEXT },
           { r.class or '', 214, COLOR_OFF } })
       else
       carClick(r.index, vec2(p1.x + 56 * s, y), vec2(p1.x + 212 * s, y + ROW * s))
       row(p1, y, s, {
         { tostring(r.pos), 32, col, true }, { tostring(r.classPos or '-'), 52, COLOR_DIM, true },
-        { '#' .. r.number, 58, col }, { r.name, 88, col, false, me and FONT_TITLE or FONT_TEXT },
+        { '#' .. r.number, 58, col }, { fitText(r.name, me and FONT_TITLE or FONT_TEXT, FS * s, 120 * s), 88, col, false, me and FONT_TITLE or FONT_TEXT },
         { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 270, col, true }, { gapTo(r, leader, true), 306, col, true },
         { gapTo(r, list[i - 1]), 346, col, true },
         { lapTime(r.best), 398, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
