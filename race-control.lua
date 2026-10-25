@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V241 - 2026.10.24'
+local RC_VERSION = 'V242 - 2026.10.24'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1660,6 +1660,7 @@ do
         local on = i == 0 or c.isConnected == true
         if on ~= r.on then stale[i] = true end
         r.c, r.on, r.sp = c, on, CarRead.num(c.splinePosition)
+        if CarRead.num(c.speedKmh) >= 5 then r.movedT = now end
         if stale[i] or (on and r.name == '') then
           stale[i] = nil
           driver(r)
@@ -8182,6 +8183,7 @@ do
   local INC_EXPIRE = 45
   local STOPPED_KMH = 5
   local STOPPED_SECONDS = 3
+  Flags.stoppedSeconds = STOPPED_SECONDS
   local incNames = { [1] = 'slow', [2] = 'stopped', [3] = 'broken', [4] = 'oil', [5] = 'spin', [6] = 'disqualified' }
   local FLAG_OF = { [INC.slow] = 'white', [INC.stopped] = 'yellow', [INC.broken] = 'yellow', [INC.oil] = 'yellow', [INC.spin] = 'yellow' }
   local sendIncident = ac.OnlineEvent({
@@ -8196,8 +8198,14 @@ do
     if Lap.lostControl() then return INC.spin end
     if car.speedKmh < STOPPED_KMH and not Session.beforeStart() and not state.hold and not state.restart and not Flags.onGrid
         and not (Flags.formation and Flags.formation.phase == 'end') then
-      Flags.ownSince = Flags.ownSince or state.ui.clock
-      if state.ui.clock - Flags.ownSince >= STOPPED_SECONDS then return INC.stopped end
+      local F = Flags.formation
+      local grid = F and F.on() and (F.phase == 'lap' or F.phase == 'done') and not F.leftGrid
+      if grid and not F.myTurnT then
+        Flags.ownSince = nil
+      else
+        Flags.ownSince = math.max(Flags.ownSince or state.ui.clock, grid and F.myTurnT or 0)
+        if state.ui.clock - Flags.ownSince >= STOPPED_SECONDS then return INC.stopped end
+      end
     else
       Flags.ownSince = nil
     end
@@ -8217,6 +8225,7 @@ do
     local oilT = kind == INC.oil and state.ui.clock or (old and old.oilT)
     Flags.incidents[i] = { kind = kind, pos = pos, t = state.ui.clock, oilPos = oilPos, oilT = oilT }
     if old and old.kind == INC.spin and kind ~= INC.spin then Flags.regained(i) end
+    if old and old.kind == INC.stopped and kind == INC.none then Flags.regained(i) end
     if kind ~= INC.none and Flags.formation then Flags.formation.detach(i) end
   end
   function Flags.incidentOf(i)
@@ -8251,6 +8260,7 @@ do
     if kind ~= Flags.sentKind or (kind ~= INC.none and clock - Flags.sentT >= INC_RESEND) then
       if kind ~= Flags.sentKind then
         rcLog(TEXTS.rc.incident, kind == INC.none and 'cleared' or incNames[kind])
+        if Flags.sentKind == INC.stopped and kind == INC.none then Flags.regained(0) end
       end
       Flags.sentKind, Flags.sentT = kind, clock
       if kind ~= INC.none and Flags.formation then Flags.formation.detach(0) end
@@ -8280,6 +8290,11 @@ do
     return Flags.mySwapMs and math.floor(Flags.mySwapMs / 1000) or nil
   end
   local placeSeq, placeK, placeAhead, placeList = nil, nil, nil, {}
+  local function sideOf(car, c)
+    local d = CarRead.num(car.splinePosition) - CarRead.num(c.splinePosition)
+    if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
+    return d
+  end
   local function placeOrder(a, b)
     if (a.sw ~= nil) ~= (b.sw ~= nil) then return a.sw == nil end
     if a.sw and a.sw ~= b.sw then return a.sw < b.sw end
@@ -8295,18 +8310,26 @@ do
         n = n + 1
         local e = list[n] or {}
         list[n] = e
-        e.i, e.pos = r.i, CarRead.num(r.c.racePosition)
+        e.i, e.pos, e.c = r.i, CarRead.num(r.c.racePosition), r.c
         e.sw = r.i == 0 and backS() or Flags.redSwaps[r.i]
       end
     end
     for k = #list, n + 1, -1 do list[k] = nil end
     table.sort(list, placeOrder)
+    local now, holds, queue, back, mine = state.ui.clock, false, state.postRed == true, nil, nil
     for k, e in ipairs(list) do
+      local c, nx = e.c, list[k + 1] and list[k + 1].c
       if e.i == 0 then
-        placeK, placeAhead = k, list[k - 1] and list[k - 1].i
-        break
+        placeK, placeAhead, back, mine = k, list[k - 1] and list[k - 1].i, true, c
+      elseif back and c.isConnected and not c.isInPitlane and not Flags.offField(e.i) and sideOf(c, mine) <= 0 then
+        back = false
       end
+      if queue and not holds then Flags.turnAt[e.i] = Flags.turnAt[e.i] or now end
+      local lost = queue and Flags.turnAt[e.i] ~= nil and now - Flags.turnAt[e.i] >= STOPPED_SECONDS
+      e.holds = (e.i == 0 or c.isConnected) and ((CarRead.parked(c) and not lost) or (c.isInPitlane and nx ~= nil and sideOf(nx, c) > 0))
+      holds = e.holds
     end
+    Flags.backNow = back == true
     return placeK, placeAhead
   end
   Flags.restartPlace = restartPlace
@@ -8330,13 +8353,27 @@ do
       if Flags.restartUntil == math.huge then Flags.restartUntil = clock + RESTART_WAIT end
       if state.code80 then Flags.restartUntil = clock + 1 end
       if clock > Flags.restartUntil then
-        Flags.restartUntil, Flags.redSwaps, Flags.mySwapMs = nil, {}, nil
+        Flags.restartUntil, Flags.redSwaps, Flags.mySwapMs, Flags.turnAt, Flags.pxAhead = nil, {}, nil, {}, nil
       end
     end
     local back = Flags.restartUntil and backS()
     if back and clock - Flags.swapSentT >= SWAP_RESEND then
       Flags.swapSentT = clock
       OnlineQueue.push(sendRedSwap, { swapS = back }, nil)
+    end
+    local a = Flags.pxAhead
+    if a then
+      restartPlace()
+      local c, t = ac.getCar(a), Flags.turnAt[a]
+      if c and c.isConnected and not CarRead.parked(c) then
+        Flags.pxAhead = nil
+        ac.log('race-control: race restart: left the pits before car ' .. a .. ' passed')
+        rcLog(TEXTS.rc.raceRestart, string.format(TEXTS.exitEarlyLog, carTag(a)))
+        Rules.penalty('PX', config.restart.jumpLaps)
+      elseif not (c and c.isConnected) or (t and clock - t >= STOPPED_SECONDS) then
+        Flags.pxAhead = nil
+        ac.log('race-control: race restart: car ' .. a .. ' did not leave in its 3 s: no drive-through')
+      end
     end
   end
   local function pick(car)
@@ -8445,11 +8482,6 @@ do
   local function passAllowed(r)
     return Flags.passAllowed(r.i, CarRead.num(r.c.speedKmh), CarsTick.aheadM(r), config.flags.passSlowKmh, config.flags.passFarM, nil, nil, RED_MOVING_KMH)
   end
-  local function sideOf(car, c)
-    local d = CarRead.num(car.splinePosition) - CarRead.num(c.splinePosition)
-    if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
-    return d
-  end
   local function exitQueue(car)
     if not state.postRed or not car.isInPitlane or sim.raceSessionType ~= ac.SessionType.Race
         or Rules.dsqOn() then
@@ -8457,11 +8489,7 @@ do
       return
     end
     local k, aheadI = restartPlace()
-    local wait = false
-    if k and aheadI then
-      local c = ac.getCar(aheadI)
-      wait = c ~= nil and c.isConnected and (CarRead.parked(c) or (c.isInPitlane and sideOf(car, c) > 0))
-    end
+    local wait = k ~= nil and k > 1 and placeList[k - 1].holds == true
     if CarRead.parked(car) then
       if wait ~= Flags.exitWait then
         ac.log(string.format('race-control: race restart pit exit: %s', wait and ('waits for car ' .. aheadI)
@@ -8472,9 +8500,7 @@ do
         or (aheadI and TEXTS.exitGo or TEXTS.exitFirst)
     elseif Flags.exitWait ~= nil then
       if Flags.exitWait then
-        ac.log('race-control: race restart: left the pits before car ' .. Flags.exitWait .. ' passed')
-        rcLog(TEXTS.rc.raceRestart, string.format(TEXTS.exitEarlyLog, carTag(Flags.exitWait)))
-        Rules.penalty('PX', config.restart.jumpLaps)
+        Flags.pxAhead = Flags.exitWait
       end
       Flags.exitLine, Flags.exitWait = nil, nil
     end
@@ -8757,7 +8783,7 @@ do
     return { incidents = {}, own = 0, ownSince = SESSION_NONE, sentKind = 0, sentT = -1e9, greenUntil = 0, lastGroup = SESSION_NONE,
       sector = SESSION_NONE, lastLap = SESSION_NONE, ending = SESSION_NONE, overLeader = SESSION_NONE, prevPitlane = SESSION_NONE, prevSp = SESSION_NONE,
       timeSeen = false, hudT = 0, redSent = SESSION_NONE, redSentT = -1e9, redLocked = false, redWasUp = false, redSince = SESSION_NONE,
-      redReceived = false, redPrevLane = SESSION_NONE, redSwaps = {}, mySwapMs = SESSION_NONE, restartUntil = SESSION_NONE, swapSentT = -1e9,
+      redReceived = false, redPrevLane = SESSION_NONE, redSwaps = {}, mySwapMs = SESSION_NONE, restartUntil = SESSION_NONE, swapSentT = -1e9, turnAt = {}, pxAhead = SESSION_NONE, backNow = false,
       lightsSent = SESSION_NONE, lightsSentT = -1e9, redOver = false, redOverSince = SESSION_NONE, localYellow = false, giveBack = {},
       yellowOwn = SESSION_NONE, current = SESSION_NONE, exitLine = SESSION_NONE, exitWait = SESSION_NONE, parkedLine = SESSION_NONE,
       sr = {}, onGrid = false, srGoUntil = 0, abortUntil = SESSION_NONE, dtTaking = false }
@@ -8860,7 +8886,7 @@ do
     local swap = Flags.mySwapMs ~= nil
     local held = state.hold ~= nil
     if d >= offAt then
-      sr.go, sr.goT = true, clock
+      sr.go, sr.goT, sr.start = true, clock, r.start == true
       if sr.relPos then
         ac.log(string.format('race-control: standing restart: largest forward movement before the green %.2f m (tolerance %.2f m)',
           sr.creep, config.restart.jumpMeters))
@@ -9062,8 +9088,13 @@ do
   function Flags.parkedUpdate(car)
     local rule = config.parkedCar
     Flags.parkedLine = nil
+    local sr = Flags.sr
     if car.isInPitlane or car.isInPit or CarRead.parked(car) then P.armed = false
-    elseif not P.armed and CarRead.num(car.speedKmh) > ARM_KMH then P.armed = true end
+    elseif not P.armed and (CarRead.num(car.speedKmh) > ARM_KMH or (Flags.formation and Flags.formation.fellBack)
+        or (CarsTick.frame and sr.go and not sr.start and sr.relPos and car.position and state.ui.clock - sr.goT >= Flags.stoppedSeconds
+          and math.sqrt((car.position.x - sr.relPos.x) ^ 2 + (car.position.z - sr.relPos.z) ^ 2) <= 3 and Flags.restartPlace() and Flags.backNow)) then
+      P.armed = true
+    end
     if Lap.lostControl() then P.spun = true elseif CarRead.num(car.speedKmh) > ARM_KMH then P.spun = false end
     if rule.grace < 0 or not watched(car) or not car.position then
       P.slowT, P.elapsed, P.detected, P.hist, P.last = nil, 0, false, {}, nil
@@ -9135,7 +9166,7 @@ do
       slowSince = SESSION_NONE, overDone = false, slowDone = false, giveBack = {}, side = {}, k = SESSION_NONE, aligned = false, t0 = SESSION_NONE,
       t0Sent = -1e9, firstAligned = SESSION_NONE, pitStart = false, missed = false, armed = false, goT = SESSION_NONE, gridAt = SESSION_NONE,
       leftGrid = false, speedWarn = SESSION_NONE, trackSent = SESSION_NONE, trackT = -1e9, logged = false, pitPass = false, spun = false, limitDone = false, late = {}, out = {},
-      lineJump = false, lineCrossed = false }
+      lineJump = false, lineCrossed = false, lockT = SESSION_NONE, turnAt = {}, myTurnT = SESSION_NONE, fellBack = false }
   end)
   local function tag(i) return string.format('#%s', tostring(CarRead.number(i))) end
   local function lapLen() return tonumber(sim.trackLengthM) or 0 end
@@ -9148,6 +9179,10 @@ do
   local function alive(i)
     local c = ac.getCar(i)
     return c and (i == 0 or c.isConnected) and c or nil
+  end
+  local function moved(j)
+    local r = CarsTick.byIndex[j]
+    return r ~= nil and r.movedT ~= nil and Formation.lockT ~= nil and r.movedT >= Formation.lockT
   end
   local function firstConnected(inControl)
     local best, bi = math.huge, nil
@@ -9210,8 +9245,10 @@ do
     for k, j in ipairs(order) do Formation.locked[j] = k end
     Formation.k = Formation.locked[0]
     Formation.side = {}
-    ac.log(string.format('race-control: formation lap: car %d back in control, place P%d -> P%d', i, old, Formation.locked[i]))
-    rcLog(TEXTS.rc.formation, string.format(TEXTS.fmRegained, tag(i), old, Formation.locked[i]))
+    if Formation.locked[i] ~= old then
+      ac.log(string.format('race-control: formation lap: car %d back in control, place P%d -> P%d', i, old, Formation.locked[i]))
+      rcLog(TEXTS.rc.formation, string.format(TEXTS.fmRegained, tag(i), old, Formation.locked[i]))
+    end
   end
   function Formation.detach(i)
     if Formation.on() and Formation.phase ~= nil and Formation.phase ~= 'pre' and not Formation.pitPass and Formation.locked[i] and not Formation.out[i] then
@@ -9245,7 +9282,7 @@ do
     end
     local kmh = CarRead.num(car.speedKmh)
     local lost = Lap.lostControl()
-    if lost then Formation.spun = true end
+    if lost or (Flags.incidentOf(0)) == 'stopped' then Formation.spun = true end
     Formation.speedWarn = nil
     if not start and kmh > r.maxKmh and not lost then
       Formation.overSince = Formation.overSince or clock
@@ -9276,6 +9313,14 @@ do
     local me = Formation.locked[0]
     if not me then return end
     local at = byPlace()
+    if not Formation.leftGrid and Formation.lockT then
+      if not Formation.myTurnT and (me == 1 or not at[me - 1] or not alive(at[me - 1]) or moved(at[me - 1])) then
+        Formation.myTurnT = me == 1 and Formation.lockT or clock
+      end
+      Formation.fellBack = Formation.myTurnT ~= nil and clock - Formation.myTurnT >= Flags.stoppedSeconds and not moved(0) and (at[me + 1] == nil or passedByAll(0))
+    else
+      Formation.fellBack = false
+    end
     for i, t in pairs(Formation.giveBack) do
       local c = alive(i)
       local d = c and (CarRead.num(car.splinePosition) - CarRead.num(c.splinePosition)) or 0
@@ -9286,6 +9331,9 @@ do
         Formation.giveBack[i] = nil
         ac.log(string.format('race-control: formation lap: place given back to car %d', i))
         showNotice(TEXTS.rcTitle, string.format(TEXTS.fmGivenBack, tag(i)))
+      elseif Formation.turnAt[i] and clock - Formation.turnAt[i] >= Flags.stoppedSeconds and not moved(i) then
+        Formation.giveBack[i] = nil
+        ac.log(string.format('race-control: formation lap: car %d did not leave in its 3 s, its place lost: nothing to give back', i))
       elseif start then
         Formation.giveBack[i] = nil
         lineJump(string.format('car %d passed and the place not given back at the green (jump start)', i))
@@ -9301,6 +9349,9 @@ do
     for i, p in pairs(Formation.locked) do
       local c = alive(i)
       if i ~= 0 and p < me and c and not c.isInPitlane then
+        if not Formation.turnAt[i] and Formation.lockT and (p == 1 or not at[p - 1] or not alive(at[p - 1]) or moved(at[p - 1])) then
+          Formation.turnAt[i] = p == 1 and Formation.lockT or clock
+        end
         local d = CarRead.num(car.splinePosition) - CarRead.num(c.splinePosition)
         if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
         local side = d > 0 and 1 or -1
@@ -9428,6 +9479,7 @@ do
       table.sort(list, function(a, b) return a.p < b.p end)
       for k, x in ipairs(list) do Formation.locked[x.i] = k end
       Formation.k = Formation.locked[0]
+      Formation.lockT = state.ui.clock
       Formation.leader = firstConnected()
       Formation.prog, Formation.lastSp = 0, nil
       Formation.gridAt = car.position and { x = car.position.x, z = car.position.z } or nil
@@ -9549,6 +9601,12 @@ do
         end
       end
       if Formation.armed and not state.restart then Formation.phase = 'done' end
+    end
+    local sr = Flags.sr
+    if r.procedure == 'STANDING' and Formation.phase == 'done' and CarsTick.frame and sr.go and sr.start and sr.relPos and car.position then
+      local me = Formation.locked[0]
+      Formation.fellBack = me ~= nil and dist(car.position, sr.relPos) <= ALIGNED_METERS and state.ui.clock - sr.goT >= Flags.stoppedSeconds
+        and (byPlace()[me + 1] == nil or passedByAll(0))
     end
     if Formation.phase == 'done' and not Formation.pitPass then
       local all = true
