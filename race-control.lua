@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V240 - 2026.10.24'
+local RC_VERSION = 'V241 - 2026.10.24'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -8230,10 +8230,18 @@ do
     if not kind or kind == INC.none then return nil end
     return incNames[kind], FLAG_OF[kind], pos, t
   end
-  function Flags.lostControl(i) return i ~= 0 and (Flags.incidentOf(i)) == 'spin' end
   function Flags.offField(i)
     local name, flag = Flags.incidentOf(i)
     return flag == 'yellow' or name == 'disqualified'
+  end
+  function Flags.passAllowed(i, kmh, gapM, slowKmh, slowFarM, farM, leadKmh, stopKmh)
+    if Flags.offField(i) then return true end
+    if not slowKmh then return false end
+    if stopKmh and kmh <= stopKmh then return true end
+    if leadKmh then return kmh < leadKmh end
+    if not gapM then return true end
+    if farM and gapM > farM then return true end
+    return kmh < slowKmh and gapM > slowFarM
   end
   function Flags.regained(i) if Flags.formation then Flags.formation.regained(i) end end
   Lap.onRegained = function() Flags.regained(0) end
@@ -8435,11 +8443,7 @@ do
   local RED_PASS_SPLINE = 0.02
   local RED_MOVING_KMH = 10
   local function passAllowed(r)
-    if Flags.lostControl(r.i) then return true end
-    local kmh = CarRead.num(r.c.speedKmh)
-    if kmh <= RED_MOVING_KMH then return true end
-    if kmh >= config.flags.passSlowKmh then return false end
-    return CarsTick.aheadM(r) > config.flags.passFarM
+    return Flags.passAllowed(r.i, CarRead.num(r.c.speedKmh), CarsTick.aheadM(r), config.flags.passSlowKmh, config.flags.passFarM, nil, nil, RED_MOVING_KMH)
   end
   local function sideOf(car, c)
     local d = CarRead.num(car.splinePosition) - CarRead.num(c.splinePosition)
@@ -9220,16 +9224,11 @@ do
     Rules.penalty(cat, laps)
   end
   local function passAllowed(i, p, at)
-    if Flags.lostControl(i) then return true end
     local r = rule()
     local c = alive(i)
     if not c then return true end
-    local kmh = CarRead.num(c.speedKmh)
-    if p == 1 then return kmh < r.leaderSlowKmh end
-    local prev = at[p - 1] and alive(at[p - 1])
-    if not prev then return true end
-    local gap = gapM(c, prev)
-    return gap > r.passFarM or (kmh < r.slowFarKmh and gap > r.slowFarM)
+    local prev = p > 1 and at[p - 1] and alive(at[p - 1])
+    return Flags.passAllowed(i, CarRead.num(c.speedKmh), prev and gapM(c, prev) or nil, r.slowFarKmh, r.slowFarM, r.passFarM, p == 1 and r.leaderSlowKmh or nil)
   end
   local function lineJump(text)
     if Formation.lineJump then return end
@@ -9307,7 +9306,7 @@ do
         local side = d > 0 and 1 or -1
         if Formation.side[i] == -1 and side == 1 and math.abs(d) < PASS_SPLINE and not Formation.giveBack[i] then
           if start then
-            if not Flags.lostControl(i) then lineJump(string.format('car %d passed between the green and the line (jump start)', i)) end
+            if not Flags.passAllowed(i) then lineJump(string.format('car %d passed between the green and the line (jump start)', i)) end
           elseif passAllowed(i, p, at) then
             ac.log(string.format('race-control: formation lap: car %d passed, allowed (the exceptions of the KMR)', i))
           else
