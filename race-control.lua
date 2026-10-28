@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V245 - 2026.10.25'
+local RC_VERSION = 'V246 - 2026.10.28'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1136,7 +1136,6 @@ local state = {
   pitPassReverse = nil,
   pitExitDriven = nil,
   swapInvalid = nil,
-  startHold = false,
   postRed = nil,
   rcCommands = {},
   pitService = nil,
@@ -1240,7 +1239,7 @@ sessionPart('state', state, function()
   return {
     prevInPitlane = {}, cutPassPenalized = {}, zonePass = {}, zoneRef = {}, cutChecks = {}, pitDsqActive = false, dtDsqActive = false,
     kmrMessages = {}, tyreLaps = { [0] = 0, 0, 0, 0 }, tyreKm = { [0] = 0, 0, 0, 0 }, tyreLineKm = { [0] = 0, 0, 0, 0 },
-    pitPassServiced = false, pitPassSgPaid = SESSION_NONE, pitPassReverse = SESSION_NONE, pitExitDriven = SESSION_NONE, swapInvalid = SESSION_NONE, startHold = false,
+    pitPassServiced = false, pitPassSgPaid = SESSION_NONE, pitPassReverse = SESSION_NONE, pitExitDriven = SESSION_NONE, swapInvalid = SESSION_NONE,
     postRed = SESSION_NONE, rcCommands = {}, pitService = SESSION_NONE, repair = { class = 'normal' }, slowdowns = {}, rcOut = {}, lapOut = {},
     dsqFlagPutBack = SESSION_NONE, code80 = SESSION_NONE, code80Ended = false, hold = SESSION_NONE, pit = { done = false, missed = false },
     redFlag = SESSION_NONE, restart = SESSION_NONE, lights = SESSION_NONE, redTow = SESSION_NONE, redFuelOk = false, redCommitted = SESSION_NONE,
@@ -2308,12 +2307,14 @@ do
     if askRr then B.rrDue(true); asks[#asks + 1] = '"rr":' .. jsonStr(askRr) end
     if askName then B.nameDue(true); asks[#asks + 1] = '"name":' .. jsonStr(askName) end
     if askPush then B.pushDue(true); asks[#asks + 1] = '"push":' .. jsonStr(askPush) end
+    if src.now and B.clockAsk then asks[#asks + 1] = '"clk":' .. jsonStr(B.clockAsk()) end
     B.busy = true
     B.flight = { key = src.key, rc = lines, laps = lapLines, traces = traces }
     local body = '{"key":' .. jsonStr(src.key) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"car":' .. jsonStr(B.carKey()) .. ',"parts":{' .. table.concat(partTexts, ',') .. '}'
       .. (track and (',"track":{"t":' .. track.t .. ',"x":' .. jsonStr(track.x) .. '}') or '') .. exitJson
       .. ',"lines":[' .. table.concat(lineParts, ',') .. '],"laps":[' .. table.concat(lapParts, ',') .. '],"traces":[' .. table.concat(traceParts, ',') .. ']'
-      .. (planDone and (',"planDone":' .. jsonStr(planDone)) or '') .. (#asks > 0 and (',"ask":{' .. table.concat(asks, ',') .. '}') or '') .. '}'
+      .. (planDone and (',"planDone":' .. jsonStr(planDone)) or '') .. (#asks > 0 and (',"ask":{' .. table.concat(asks, ',') .. '}') or '')
+      .. (src.now and B.clockOut and B.clockOut() or '') .. '}'
     WebQueue.request('POST', config.baseUrl .. '/v1/persist', { ['Content-Type'] = 'application/json' }, body,
       function(err, res)
         B.busy, B.flight = false, nil
@@ -2358,6 +2359,8 @@ do
         end
         local plan = tostring(res.body or ''):match('"plan":"(OK|[^"]*)"')
         if plan and src.now then planApply((plan:gsub('\\u003b', ';'):gsub('\\/', '/'))) end
+        local clk = tostring(res.body or ''):match('"clk":"([^"]*)"')
+        if clk and src.now and B.clockRead then B.clockRead(clk) end
         if askRr or askName or askPush then
           local okJ, data = pcall(JSON.parse, tostring(res.body or ''))
           if not okJ or type(data) ~= 'table' then data = {} end
@@ -2365,7 +2368,7 @@ do
           if askName then B.nameRead(true, type(data.name) == 'string' and data.name or nil) end
           if askPush and type(data.push) == 'string' then B.pushRead(data.push) end
         end
-      end, Broadcast and Broadcast.on())
+      end, Broadcast and (Broadcast.on() or Broadcast.orgOn()))
   end
   if ac.onRelease then
     ac.onRelease(function()
@@ -2414,8 +2417,11 @@ do
           for line in tostring(res.body or ''):gmatch('[^\r\n]+') do
             local steam, since, parked, written, win = line:match('^SWAP|(%d*)|(%d+)|(%d)|(%d)|?(%d?)$')
             local lapsBody = line:match('^LAPS|(.*)$')
+            local clockText = line:match('^CLOCK|(.*)$')
             if lapsBody then
               B.lapsBase = lapsBody
+            elseif clockText then
+              if B.clockRead then B.clockRead(clockText) end
             elseif steam then
               B.swapLine = { steam = steam, since = tonumber(since), parked = parked == '1', written = written == '1', win = win == '1' }
               ac.log(string.format('race-control: base online: the line of this car was of %s, %s s ago (%s, exit %s)', steam, since,
@@ -3405,37 +3411,73 @@ local function parseGoDuration(text)
   end
   return found and total or nil
 end
+local Clock = {}
+sessionPart('clock', Clock, function() return { greenMs = SESSION_NONE, text = '', lightsMs = SESSION_NONE } end)
+do
+  local B = RecordSync.base
+  function Clock.ms(kind, s)
+    s = s or ac.getSession(Session.index)
+    if not s then return 0 end
+    local closed = (config.pit.closedSeconds[s.type] or 0) * 1000
+    local total = s.durationMinutes > 0 and math.max(s.durationMinutes * 60000 - closed, 0) or nil
+    if kind == 'total' then return total end
+    if kind == 'raw' then return s.durationMinutes > 0 and s.durationMinutes * 60000 - sim.sessionTimeLeft or sim.time - s.startTime end
+    if not Session.ready or Session.beforeStart() then return 0 end
+    local from = closed
+    if s.type == ac.SessionType.Race then
+      if not Clock.greenMs then return 0 end
+      from = Clock.greenMs
+    end
+    local shown = math.max(serverTimeMs() - from, 0)
+    return total and math.min(shown, total) or shown
+  end
+  function Clock.since()
+    if sim.raceSessionType == ac.SessionType.Race then return Clock.greenMs end
+    return 0
+  end
+  function Clock.lightsOut(ms)
+    if not Clock.lightsMs then Clock.lightsMs = math.floor(ms) end
+  end
+  B.clockRead = function(text)
+    text = tostring(text or '')
+    if text == Clock.text then return end
+    Clock.text = text
+    local ms = tonumber(text)
+    if ms ~= Clock.greenMs then
+      Clock.greenMs = ms
+      ac.log('race-control: start of the race from the base: ' .. (ms and string.format('%.1f s of the session', ms / 1000) or 'not given'))
+    end
+  end
+  B.clockOut = function()
+    return string.format(',"now":%d', math.floor(serverTimeMs())) .. ((Clock.lightsMs and not Clock.greenMs) and string.format(',"go":%d', Clock.lightsMs) or '')
+  end
+  B.clockAsk = function() return Clock.text end
+end
 local TrackList = {}
 sessionPart('trackList', TrackList, function()
-  return { since = -1, frozenMs = 0, frozenSince = SESSION_NONE, startMs = SESSION_NONE, sawPre = false, formMs = SESSION_NONE }
+  return { since = -1, frozenMs = 0, frozenSince = SESSION_NONE }
 end)
 do
   local function trackBody()
     local red = state.redFlag
-    return string.format('%s|%d|%s|%s|%s|%d|%s|%d|%s|%s', state.code80 or 'GREEN', math.floor(TrackList.since),
+    return string.format('%s|%d|%s|%s|%s|%d|%s|%d|%s', state.code80 or 'GREEN', math.floor(TrackList.since),
       red and 'RED' or '-', red and red.reason and (red.reason:gsub('[|\r\n]', ' ')) or '',
       state.restart and math.floor(state.restart.t0) or '', math.floor(TrackList.frozenMs),
-      TrackList.frozenSince and math.floor(TrackList.frozenSince) or '', state.postRed and 1 or 0,
-      state.lights or '', TrackList.startMs and math.floor(TrackList.startMs) or '')
+      TrackList.frozenSince and math.floor(TrackList.frozenSince) or '', state.postRed and 1 or 0, state.lights or '')
   end
   local function trackSave()
     Record.save('track', math.floor(TrackList.since / 1000), trackBody())
   end
   local function windowStill()
-    return state.redFlag ~= nil or state.restart ~= nil or state.postRed == true or state.startHold == true
+    return Clock.since() ~= nil and (state.redFlag ~= nil or state.restart ~= nil or state.postRed == true)
   end
   local function freezeUpdate(now)
     if windowStill() and not TrackList.frozenSince then
       TrackList.frozenSince = now
       ac.log('race-control: pit window clock stopped (red flag)')
     elseif not windowStill() and TrackList.frozenSince then
-      local fromStart = TrackList.startMs and math.floor(TrackList.frozenSince) == math.floor(TrackList.startMs)
       TrackList.frozenMs = TrackList.frozenMs + math.max(now - TrackList.frozenSince, 0)
       TrackList.frozenSince = nil
-      if fromStart and not TrackList.formMs then
-        TrackList.formMs = TrackList.frozenMs
-        if TrackList.onForm then TrackList.onForm(TrackList.formMs) end
-      end
       ac.log(string.format('race-control: pit window clock goes on (restart, green flag); stood still %.0f s in total',
         TrackList.frozenMs / 1000))
     end
@@ -3449,31 +3491,12 @@ do
     trackSave()
   end
   function TrackList.update()
-    if sim.raceSessionType ~= ac.SessionType.Race then return end
-    if Session.beforeStart() then
-      TrackList.sawPre = true
-      return
-    end
-    if not TrackList.startMs and TrackList.sawPre then
-      TrackList.startMs = serverTimeMs()
-      TrackList.frozenMs, TrackList.frozenSince = 0, nil
-      ac.log('race-control: pit window clock started with the clock of the race')
-      TrackList.changed()
-    elseif TrackList.startMs and windowStill() ~= (TrackList.frozenSince ~= nil) then
-      TrackList.changed()
-    end
-  end
-  function TrackList.clockMs()
-    if not TrackList.startMs then return nil end
-    return serverTimeMs() - TrackList.startMs - TrackList.frozenNowMs()
-  end
-  function TrackList.leaderForm(ms, from)
-    if TrackList.formMs ~= ms then ac.log(string.format('race-control: formation lap %.1f s from the leader (car %d)', ms / 1000, from)) end
-    TrackList.formMs = ms
+    if sim.raceSessionType ~= ac.SessionType.Race or Session.beforeStart() then return end
+    if windowStill() ~= (TrackList.frozenSince ~= nil) then TrackList.changed() end
   end
   local function trackApply(body, source)
-    local kind, since, red, reason, rt, frozen, frozenSince, postRed, lights, startMs =
-      tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)|?(%d*)|?(%d*)|?(%d?)|?(%a*)|?(%d*)$')
+    local kind, since, red, reason, rt, frozen, frozenSince, postRed, lights =
+      tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)|?(%d*)|?(%d*)|?(%d?)|?(%a*)|?%d*$')
     since = tonumber(since)
     if not since or since <= TrackList.since then return false end
     local code80 = kind ~= 'GREEN' and kind or nil
@@ -3491,8 +3514,6 @@ do
     state.lights = (lights == 'RED' or lights == 'GREEN') and lights or nil
     TrackList.frozenMs = tonumber(frozen) or 0
     TrackList.frozenSince = (frozenSince or '') ~= '' and tonumber(frozenSince) or nil
-    if (startMs or '') ~= '' then TrackList.startMs = tonumber(startMs) end
-    if TrackList.startMs and not TrackList.formMs and not TrackList.frozenSince and state.startHold ~= true then TrackList.formMs = TrackList.frozenMs end
     TrackList.since = since
     return true
   end
@@ -4508,7 +4529,6 @@ do
     if Start.phase == 'go' and state.ui.clock >= Start.goUntil then Start.phase = nil end
     local ev = (Start.phase == 'rules' or Start.phase == 'formation' or Start.phase == 'release') and 'hold:rolling'
       or (Start.phase == 'go' and 'go' or 'off')
-    state.startHold = ev == 'hold:rolling'
     if ev ~= Start.sent or (ev ~= 'off' and state.ui.clock - Start.sentT >= 2) then
       Start.sent, Start.sentT = ev, state.ui.clock
       ac.broadcastSharedEvent(TRACK_EVENT, ev)
@@ -4686,28 +4706,11 @@ ac.onChatMessage(function(message, senderCarIndex)
   end
   return false
 end)
-local function sessionElapsedMs(kind, s)
-  s = s or ac.getSession(Session.index)
-  if not s then return 0 end
-  local closed = (config.pit.closedSeconds[s.type] or 0) * 1000
-  local total = s.durationMinutes > 0 and math.max(s.durationMinutes * 60000 - closed, 0) or nil
-  if kind == 'total' then return total end
-  local e = s.durationMinutes > 0 and s.durationMinutes * 60000 - sim.sessionTimeLeft or sim.time - s.startTime
-  if kind == 'raw' then return e end
-  if not Session.ready or Session.beforeStart() then return 0 end
-  local from = closed
-  if s.type == ac.SessionType.Race then
-    if not TrackList.formMs then return 0 end
-    from = TrackList.formMs
-  end
-  local shown = math.max(e - from, 0)
-  return total and math.min(shown, total) or shown
-end
 local function isPitClosed()
   local closedSeconds = config.pit.closedSeconds[sim.raceSessionType] or 0
   if closedSeconds <= 0 then return false end
   if Session.beforeStart() then return true end
-  return sessionElapsedMs('raw') < closedSeconds * 1000
+  return Clock.ms('raw') < closedSeconds * 1000
 end
 local function isInZone(zone, p)
   if zone.startPos < zone.endPos then
@@ -6664,7 +6667,10 @@ do
   function PitStops.window() return windowOf(config.swapWindowStart, config.swapWindowEnd) end
   function PitStops.stopWindow() return windowOf(config.pitWindowStart, config.pitWindowEnd) end
   function PitStops.windowTime()
-    return TrackList.clockMs() or (sessionElapsedMs('raw') - TrackList.frozenNowMs())
+    local from = Clock.since()
+    if not from then return 0 end
+    if from == 0 then return Clock.ms('raw') - TrackList.frozenNowMs() end
+    return serverTimeMs() - from - TrackList.frozenNowMs()
   end
   function PitStops.windowOpen()
     local s, e = PitStops.window()
@@ -6689,7 +6695,7 @@ do
     PitStops.pass = nil
     if not p or not config.pitStopsEnabled then return end
     rcLog(TEXTS.rc.pit, string.format(TEXTS.pitStopRowText, p.id, p.stop and tostring(p.stop) or '-',
-      p.entryMs and raceTime(p.entryMs) or TEXTS.pitStopRowInPits, raceTime(sessionElapsedMs('raw')),
+      p.entryMs and raceTime(p.entryMs) or TEXTS.pitStopRowInPits, raceTime(Clock.ms('raw')),
       p.service or TEXTS.pitStopRowNoService, #p.paid > 0 and table.concat(p.paid, ', ') or TEXTS.pitStopRowNoPenalty,
       p.jumped and 'tow' or 'driven', p.raceFlag, p.driverFlag, tostring(ac.getDriverTeam(0) or '-'),
       tostring(ac.getUserSteamID() or '-')))
@@ -6847,7 +6853,7 @@ do
       PitStops.passInWindow = PitStops.windowOpen()
       PitStops.passInStopWindow = PitStops.stopWindowOpen()
       RecordSync.base.exit.win = swapValidNow()
-      openPass(state.list.jumped, sessionElapsedMs('raw'))
+      openPass(state.list.jumped, Clock.ms('raw'))
       if wrongWayNow() and not state.pitPassReverse then
         state.pitPassReverse = nameCode(ac.getDriverName(0))
         PitRecord.save()
@@ -8889,6 +8895,7 @@ do
     local swap = Flags.mySwapMs ~= nil
     local held = state.hold ~= nil
     if d >= offAt then
+      if r.start then Clock.lightsOut(r.t0 + offAt) end
       sr.go, sr.goT, sr.start = true, clock, r.start == true
       if sr.relPos then
         ac.log(string.format('race-control: standing restart: largest forward movement before the green %.2f m (tolerance %.2f m)',
@@ -9141,20 +9148,13 @@ do
   local sendT0 = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.start'),
     startMs = ac.StructItem.uint32(),
-    formMs = ac.StructItem.uint32(),
-    formSid = ac.StructItem.uint32(),
   }, function(sender, msg)
     if not sender or sender.index == 0 then return end
-    if (tonumber(msg.formMs) or 0) > 0 and tonumber(msg.formSid) == (Session.id or 0) then TrackList.leaderForm(tonumber(msg.formMs), sender.index) end
     if (tonumber(msg.startMs) or 0) > 0 and Formation.phase == 'end' and not Formation.t0 then
       Formation.t0 = tonumber(msg.startMs)
       ac.log('race-control: standing start: lights at session time ' .. math.floor(Formation.t0) .. ' (from car ' .. sender.index .. ')')
     end
   end, nil, nil, { processPostponed = true })
-  TrackList.onForm = function(ms)
-    local leader = Formation.on() and Formation.leader or Start.leader()
-    if leader == 0 and Session.id then OnlineQueue.push(sendT0, { formMs = math.floor(ms), formSid = Session.id }, nil, true) end
-  end
   local function rule() return config.formation end
   function Formation.on()
     local p = rule().procedure
@@ -9169,7 +9169,7 @@ do
       slowSince = SESSION_NONE, overDone = false, slowDone = false, giveBack = {}, side = {}, k = SESSION_NONE, aligned = false, t0 = SESSION_NONE,
       t0Sent = -1e9, firstAligned = SESSION_NONE, pitStart = false, missed = false, armed = false, goT = SESSION_NONE, gridAt = SESSION_NONE,
       leftGrid = false, speedWarn = SESSION_NONE, trackSent = SESSION_NONE, trackT = -1e9, logged = false, pitPass = false, spun = false, limitDone = false, late = {}, out = {},
-      lineJump = false, lineCrossed = false, lockT = SESSION_NONE, turnAt = {}, myTurnT = SESSION_NONE, fellBack = false }
+      lineJump = false, lockT = SESSION_NONE, turnAt = {}, myTurnT = SESSION_NONE, fellBack = false }
   end)
   local function tag(i) return string.format('#%s', tostring(CarRead.number(i))) end
   local function lapLen() return tonumber(sim.trackLengthM) or 0 end
@@ -9439,8 +9439,6 @@ do
     local ev = 'off'
     if rule().procedure == 'ROLLING' and (Formation.phase == 'pre' or Formation.phase == 'lap') then ev = 'hold:rolling' end
     if Formation.goT and state.ui.clock - Formation.goT < config.flags.greenSeconds then ev = 'go' end
-    state.startHold = ev == 'hold:rolling' or (rule().procedure == 'STANDING' and Formation.phase ~= nil and Formation.phase ~= 'done')
-      or (rule().procedure == 'ROLLING' and Formation.phase == 'done' and Formation.goT ~= nil and not Formation.lineCrossed)
     if ev ~= Formation.trackSent or (ev ~= 'off' and state.ui.clock - Formation.trackT >= 2) then
       Formation.trackSent, Formation.trackT = ev, state.ui.clock
       ac.broadcastSharedEvent(TRACK_EVENT, ev)
@@ -9466,7 +9464,7 @@ do
       Formation.phase = 'pre'
       return
     end
-    local green = TrackList.formMs ~= nil
+    local green = Clock.greenMs ~= nil
     if Formation.phase == nil and green then
       Formation.phase = 'done'
       ac.log('race-control: formation lap: the start was given before this Racing Control started, no formation lap on this car')
@@ -9533,15 +9531,6 @@ do
       end
     end
     if r.procedure == 'ROLLING' and Formation.phase == 'done' and Formation.goT and Lap.number() < 1 then lapRules(car, true) end
-    if r.procedure == 'ROLLING' and Formation.phase == 'done' and Formation.goT and not Formation.lineCrossed then
-      local lc = Formation.leader and alive(Formation.leader)
-      local sp = lc and not lc.isInPitlane and CarRead.num(lc.splinePosition)
-      if not sp or green or (Formation.lastSp and Formation.lastSp > 0.9 and sp < 0.1) then
-        Formation.lineCrossed = true
-        ac.log('race-control: rolling start: the leader on the line, the clock of the race starts')
-      end
-      Formation.lastSp = sp or Formation.lastSp
-    end
     if r.procedure == 'STANDING' and Formation.k and not car.isInPitlane and limitPart() and (Formation.spun or Lap.lostControl()) then
       local after = afterLine(car, Formation.locked[0])
       if Lap.lostControl() then Formation.spun = after and 'after' or true end
@@ -14016,7 +14005,7 @@ float4 main(PS_IN pin) {
     for i = 0, (sim.sessionsCount or 0) - 1 do
       local ss = ac.getSession(i)
       if ss then
-        local total = ss.durationMinutes and ss.durationMinutes > 0 and hms(sessionElapsedMs('total', ss))
+        local total = ss.durationMinutes and ss.durationMinutes > 0 and hms(Clock.ms('total', ss))
           or (ss.laps and ss.laps > 0 and string.format(TEXTS.lapsShort, ss.laps)) or '-'
         local now = i == sim.currentSessionIndex
         local starts = RecordSync.base.forecast.starts
@@ -14027,7 +14016,7 @@ float4 main(PS_IN pin) {
           local at = n == 1 and starts and starts[i] or nil
           if not at and on and not Session.beforeStart() then
             local t = (CarRead.num(sim.timeHours) * 3600 + CarRead.num(sim.timeMinutes) * 60 + CarRead.num(sim.timeSeconds)
-              - math.floor((sessionElapsedMs('raw') - (config.pit.closedSeconds[ss.type] or 0) * 1000) / 1000
+              - math.floor((Clock.ms('raw') - (config.pit.closedSeconds[ss.type] or 0) * 1000) / 1000
                 * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
             at = hhmm(math.floor(t / 60))
           end
@@ -14040,7 +14029,7 @@ float4 main(PS_IN pin) {
           end
           if n == 1 then firstAt = at end
           local name = races > 1 and string.format(TEXTS.evRaceN, n) or (TEXTS.sessionName[ss.type] or '-')
-          out[#out + 1] = { name .. (at and string.format(TEXTS.evStarts, at) or ''), on and (hms(sessionElapsedMs()) .. ' / ' .. total) or total, on }
+          out[#out + 1] = { name .. (at and string.format(TEXTS.evStarts, at) or ''), on and (hms(Clock.ms()) .. ' / ' .. total) or total, on }
         end
       end
     end
@@ -14304,10 +14293,10 @@ float4 main(PS_IN pin) {
       drawSeparator(p1, p2, y + (SEP / 2 - 2) * s, s)
       y = y + SEP * s
     end
-    local total = session and session.durationMinutes > 0 and hms(sessionElapsedMs('total', session))
+    local total = session and session.durationMinutes > 0 and hms(Clock.ms('total', session))
       or (session and session.laps > 0 and string.format(TEXTS.lapsShort, session.laps)) or nil
     line(TEXTS.scrClock, string.format('%02d:%02d:%02d', CarRead.num(sim.timeHours), CarRead.num(sim.timeMinutes), CarRead.num(sim.timeSeconds)))
-    line(TEXTS.scrTime, hms(sessionElapsedMs()) .. (total and (' / ' .. total) or ''))
+    line(TEXTS.scrTime, hms(Clock.ms()) .. (total and (' / ' .. total) or ''))
     line(TEXTS.scrPosition, me and (('P' .. me.pos) .. (me.class and string.format(TEXTS.posClassFmt, me.classPos, me.class)
       or '')) or '-')
     line(TEXTS.scrLap, tostring(Lap.number() + 1))
@@ -14388,11 +14377,11 @@ float4 main(PS_IN pin) {
     local ss, se = PitStops.stopWindow()
     local rule = config.driverStint
     local life = CarRead.tyreLife(car, 0, state.tyreLineKm[0] or 0)
-    return string.format('%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d', config.pitStopsEnabled and 1 or 0, config.stopsRequired(),
+    return string.format('%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d', config.pitStopsEnabled and 1 or 0, config.stopsRequired(),
       (config.swapOn() and config.swapRequiredNow()) and 1 or 0, config.swapRequiredNow() or 0, rule.minMinutes or 0, rule.maxMinutes or 0,
-      math.floor(ws or 0), math.floor(we or 0), math.floor(math.max(sessionElapsedMs('raw') - PitStops.windowTime(), 0) / 1000) * 1000,
+      math.floor(ws or 0), math.floor(we or 0), math.floor(math.max(Clock.ms('raw') - PitStops.windowTime(), 0) / 1000) * 1000,
       state.tyreLaps[0] or 0, life and math.floor(life) or -1, CarRead.num(sim.rainWetness) > 0.05 and 1 or 0, math.floor(CarRead.num(sim.roadGrip) * 100),
-      math.floor(ss or 0), math.floor(se or 0), math.floor((config.pit.closedSeconds[sim.raceSessionType] or 0) * 1000))
+      math.floor(ss or 0), math.floor(se or 0))
   end
   local Tele = { WINDOW = 8, RATE = 30, n = 0, at = 0, t = -1, buf = {} }
   local TELE_ORDER = { 'thr', 'brk', 'clu', 'str', 'spd', 'gear', 'glat', 'glon' }
@@ -15821,8 +15810,8 @@ float4 main(PS_IN pin) {
       local cls = place ~= 'ALL' and (' · ' .. string.format(T.classOf, (classStyle(place)))) or ''
       local lead = RaceTable.rows and RaceTable.rows[1]
       local lapTxt = type == ac.SessionType.Race and lead and lead.laps and lead.laps > 0 and (' · ' .. string.format(T.lap, lead.laps + 1)) or ''
-      local total = ss and ss.durationMinutes and ss.durationMinutes > 0 and hms(sessionElapsedMs('total', ss)) or (ss and ss.laps and ss.laps > 0 and string.format(TEXTS.lapsShort, ss.laps)) or '-'
-      return name .. cls .. lapTxt, hms(sessionElapsedMs()), total, name
+      local total = ss and ss.durationMinutes and ss.durationMinutes > 0 and hms(Clock.ms('total', ss)) or (ss and ss.laps and ss.laps > 0 and string.format(TEXTS.lapsShort, ss.laps)) or '-'
+      return name .. cls .. lapTxt, hms(Clock.ms()), total, name
     end
     local function nextLine()
       local T = TEXTS.bc
@@ -18680,7 +18669,7 @@ local drawDesktopUI = (function()
   local function sessionLine()
     local session = ac.getSession(sim.currentSessionIndex)
     local parts = { TEXTS.sessionName[sim.raceSessionType] or '-' }
-    parts[#parts + 1] = string.format(TEXTS.dirSessionTime, hms(sessionElapsedMs()), hms(CarRead.num(sim.sessionTimeLeft)))
+    parts[#parts + 1] = string.format(TEXTS.dirSessionTime, hms(Clock.ms()), hms(CarRead.num(sim.sessionTimeLeft)))
     local lead = 0
     for _, r in ipairs(CarsTick.rows) do
       if r.on and not r.staff then lead = math.max(lead, CarRead.num(r.c.lapCount)) end
@@ -20136,8 +20125,9 @@ do
     Session.busy = true
     Session.waitSince = Session.waitSince or state.ui.clock
     local index, gen = Session.index, Session.gen
-    local body = string.format('{"server":"%s:%s","index":%d,"type":%d%s%s}', tostring(ac.getServerIP() or ''), tostring(ac.getServerPortTCP() or ''), index,
-      CarRead.num(sim.raceSessionType), Session.leaving and string.format(',"leaving":%d', Session.leaving) or '', Session.confirm and ',"confirm":1' or '')
+    local body = string.format('{"server":"%s:%s","index":%d,"type":%d,"now":%d%s%s}', tostring(ac.getServerIP() or ''), tostring(ac.getServerPortTCP() or ''), index,
+      CarRead.num(sim.raceSessionType), math.floor(serverTimeMs()), Session.leaving and string.format(',"leaving":%d', Session.leaving) or '',
+      Session.confirm and ',"confirm":1' or '')
     WebQueue.request('POST', config.baseUrl .. '/v1/session', { ['Content-Type'] = 'application/json' }, body, function(err, res)
       if gen ~= Session.gen then return end
       Session.busy = false
