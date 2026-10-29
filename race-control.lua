@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V246 - 2026.10.28'
+local RC_VERSION = 'V247 - 2026.10.29'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -214,6 +214,7 @@ local TEXTS = {
   pitCompound = 'Compound',
   pitTyres = 'Tyres',
   pitTyresByCompound = '4: compound change',
+  pitNoChange = 'No change',
   pitPressureFront = 'Pressure front',
   pitPressureRear = 'Pressure rear',
   pitWing = 'Wing',
@@ -7210,7 +7211,7 @@ do
     local r = carRates()
     local mounted = num(car.compoundIndex)
     local compound = PitBox.compound or mounted
-    local tyres = compound ~= mounted and ALL_TYRES or PitBox.tyres
+    local tyres = PitBox.compound == nil and 1 or compound ~= mounted and ALL_TYRES or PitBox.tyres
     local fuel = PitControl.fuelLocked() and 0 or math.min(PitBox.fuel, math.max(num(car.maxFuel) - num(car.fuel), 0))
     local p = { fuel = fuel, compound = compound, tyres = tyres, repair = {}, times = {} }
     p.times.fuel = fuel * r.fuel
@@ -7257,9 +7258,14 @@ do
       local list = compounds()
       local n = 0
       for _ in pairs(list) do n = n + 1 end
-      if n > 0 then PitBox.compound = ((PitBox.compound or num(car.compoundIndex)) + dir) % n end
+      if n > 0 then
+        local i = ((PitBox.compound or -1) + 1 + dir) % (n + 1) - 1
+        PitBox.compound = i >= 0 and i or nil
+        PitBox.tyres = i >= 0 and ALL_TYRES or 1
+      end
     elseif what == 'tyres' then
-      PitBox.tyres = (PitBox.tyres - 1 + dir) % ALL_TYRES + 1
+      if PitBox.compound ~= num(car.compoundIndex) then return end
+      PitBox.tyres = (PitBox.tyres - 2 + dir) % (ALL_TYRES - 1) + 2
     elseif what == 'mode' then
       PitBox.auto = not PitBox.isAuto()
       return
@@ -7306,6 +7312,9 @@ do
   function PitBox.update(car)
     PitBox.logSpinnersOnce()
     if state.pitService then return end
+    local mounted = num(car.compoundIndex)
+    if PitBox.compound == mounted and PitBox.tyres == 1 then PitBox.compound = nil end
+    if PitBox.compound == nil and PitBox.tyres ~= 1 then PitBox.compound = mounted end
     local spin = 0
     for _, sp in ipairs(CarRead.pitSpinners()) do
       if (sp.type == 'pressure' or sp.type == 'wing') and not sp.readOnly then spin = spin + 1 end
@@ -12321,9 +12330,9 @@ do
       { 'fuel', TEXTS.pitFuel, PitControl.fuelLocked() and TEXTS.pitFuelLocked
         or string.format(TEXTS.pitFuelValue, p.fuel, num(car.fuel) + p.fuel, num(car.maxFuel)), p.times.fuel,
         off = PitControl.fuelLocked() },
-      { 'compound', TEXTS.pitCompound, byCompound and (compoundName(mounted) .. ' → ' .. compoundName(p.compound))
-        or compoundName(p.compound), nil },
-      { 'tyres', TEXTS.pitTyres, nil, p.times.tyres },
+      { 'compound', TEXTS.pitCompound, PitBox.compound == nil and TEXTS.pitNoChange or (compoundName(p.compound) .. (p.compound == mounted and ' *' or '')), nil,
+        change = PitBox.compound ~= nil },
+      { 'tyres', TEXTS.pitTyres, nil, p.times.tyres, off = PitBox.compound == nil },
     }
     local presets = PitBox.presetCount()
     if presets > 1 then
@@ -12460,7 +12469,7 @@ do
         drawText(value, FONT_MONO, fs, TMP.a:set(vx, y), sel and COLOR_SEL or COLOR_TITLE)
         if sel then cursorLine(vx, vx + textWidth(value, FONT_MONO, fs), y) end
       else
-        drawText(r[3], FONT_MONO, fs, TMP.a:set(vx, y), sel and COLOR_SEL or ((r[1] and not r.off) and COLOR_TITLE or COLOR_OFF))
+        drawText(r[3], FONT_MONO, fs, TMP.a:set(vx, y), sel and COLOR_SEL or (r.change and COLOR_SWAP) or ((r[1] and not r.off) and COLOR_TITLE or COLOR_OFF))
         if sel then cursorLine(vx, vx + textWidth(tostring(r[3] or ''), FONT_MONO, fs), y) end
       end
       if r[4] then
