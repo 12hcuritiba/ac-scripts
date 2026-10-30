@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V247 - 2026.10.29'
+local RC_VERSION = 'V248 - 2026.10.29'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16384,7 +16384,7 @@ float4 main(PS_IN pin) {
         yy = yy + 20 * k
         local det = type(ev.detail) == 'table' and ev.detail or {}
         local sess = {}
-        for _, l in ipairs(eventLines()) do sess[#sess + 1] = { l[1], l[2] } end
+        for _, l in ipairs(eventLines()) do if not l then break end sess[#sess + 1] = { l[1], l[2] } end
         local ru = type(ev.rules) == 'table' and ev.rules or {}
         local rules = {}
         local dmin, dmax = tonumber(ru.minDrivers), tonumber(ru.maxDrivers)
