@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V249 - 2026.10.30'
+local RC_VERSION = 'V250 - 2026.10.30'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2649,7 +2649,7 @@ do
   B.forecast = { list = nil, race = nil, session = nil, nextT = 0, busy = false, done = false, ask = 0 }
   function B.forecastNew()
     local F = B.forecast
-    F.list, F.nextT, F.done, F.ask = nil, 0, false, F.ask + 1
+    F.list, F.starts, F.nextT, F.done, F.ask = nil, nil, 0, false, F.ask + 1
   end
   function B.forecastUpdate()
     local F = B.forecast
@@ -2663,7 +2663,7 @@ do
       local body = tostring(res.body or '')
       F.done = true
       local race, session = body:match('^OK|([^|\n]*)|([^|\n]*)')
-      if not race then F.list, F.race, F.session = nil, nil, nil return end
+      if not race then F.list, F.race, F.session, F.starts = nil, nil, nil, nil return end
       local list = {}
       for line in body:gmatch('[^\n]+') do
         local f = {}
@@ -14023,12 +14023,6 @@ float4 main(PS_IN pin) {
         for n = 1, races do
           local on = now and (races == 1 or (config.raceNo or 1) == n)
           local at = n == 1 and starts and starts[i] or nil
-          if not at and on and not Session.beforeStart() then
-            local t = (CarRead.num(sim.timeHours) * 3600 + CarRead.num(sim.timeMinutes) * 60 + CarRead.num(sim.timeSeconds)
-              - math.floor((Clock.ms('raw') - (config.pit.closedSeconds[ss.type] or 0) * 1000) / 1000
-                * (CarRead.num(sim.timeMultiplier) > 0 and CarRead.num(sim.timeMultiplier) or 1))) % 86400
-            at = hhmm(math.floor(t / 60))
-          end
           if n == 2 and not at and firstAt and ss.durationMinutes and ss.durationMinutes > 0 then
             local hh, mm = firstAt:match('^(%d+):(%d+)')
             if hh then
