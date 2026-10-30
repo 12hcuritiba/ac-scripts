@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V250 - 2026.10.30'
+local RC_VERSION = 'V251 - 2026.10.30'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -143,6 +143,7 @@ local TEXTS = {
     command = 'Racing Control command', commandUnread = 'Racing Control command not understood', red = 'Red flag',
     redOff = 'Red flag off', regIncomplete = 'Registration incomplete', repairDone = 'Repair done',
     repairReq = 'Repair required', rollingStart = 'Rolling start', sessionEnd = 'Session end',
+    sessionTypes = { 'Practice', 'Qualifying', 'Race' },
     editedFileDetail = 'record %s - car %d - ban pending',
     standingRestart = 'Standing restart', standingRestartOff = 'Standing restart cancelled',
     standingStart = 'Standing start', start = 'Start', teamSetup = 'Team setup', tow = 'Tow', lights = 'Track lights',
@@ -2448,6 +2449,7 @@ do
       local by = {}
       for slot, x in tostring(res.body or ''):gmatch('(%d+)|([^\r\n]+)') do by[tonumber(slot)] = x end
       D.bySlot = by
+      D.grip = tonumber(tostring(res.body or ''):match('^GRIP|(%d+)'))
     end)
   end
   function B.reportGet(path, params, cb)
@@ -8707,7 +8709,7 @@ do
     end
     if now ~= was then
       Flags.ending = now
-      if now then rcLog(TEXTS.rc.sessionEnd, now) end
+      if now then rcLog(TEXTS.rc.sessionEnd, string.format('%s, id %s - %s', TEXTS.rc.sessionTypes[session.type] or '-', tostring(Session.id or '-'), now)) end
       if now == 'finished' then Lap.finish() end
     end
   end
@@ -15594,7 +15596,7 @@ float4 main(PS_IN pin) {
       elseif a == 'PEN' or a == 'RES' or a == 'OPEN' or a == 'SNAME' then
         local k, v = (w[2] or ''):upper(), w[3] or ''
         local key = CREDIT_KEYS[a .. ' ' .. k]
-        if a == 'OPEN' and k == 'GO' then BC.openAt = state.ui.clock
+        if a == 'OPEN' and k == 'GO' then BC.openAt, BC.openWant = nil, true
         elseif a == 'SNAME' and k == 'NOW' then BC.snameShow(BC.opt.sns)
         elseif a == 'RES' and k == 'END' then BC.opt.re = v:upper() == 'FIX' and 'FIX' or 'TURN'
         elseif key and BOOLS[key] then BC.opt[key] = v == '1'
@@ -15858,7 +15860,7 @@ float4 main(PS_IN pin) {
       local fb, fi = 0, nil
       for _, r in ipairs(RaceTable.rows or {}) do
         if not r.absent and (r.best or 0) > 0 and (fb == 0 or r.best < fb) then fb, fi = r.best, r.index end
-        if not r.absent and (place == 'ALL' or r.class == place) then
+        if place == 'ALL' or r.class == place then
           n = n + 1
           out[n] = r
           local part = parts and parts[r.class]
@@ -15947,7 +15949,7 @@ float4 main(PS_IN pin) {
     local function gapNow()
       return BC.opt.time == 'GAP' or (BC.opt.time == 'ALT' and math.floor(state.ui.clock / 10) % 2 == 1)
     end
-    local function strip(sx1, xr, sy1, k, ls)
+    local function strip(sx1, xr, sy1, k, ls, op)
       if BC.stripUrl ~= ls then BC.stripUrl, BC.stripAr = ls, nil end
       if ls and ls ~= '' and not BC.stripAr then
         local isz = ui.imageSize(ls)
@@ -15959,11 +15961,12 @@ float4 main(PS_IN pin) {
       local qx = sx2 - cols * q
       for c = 0, cols - 1 do
         local fade = math.min(c / math.max(cols * 0.7, 1), 1)
-        STRIP.mult, STRIP_INK.mult = 0.85 * fade, 0.82 * fade
+        STRIP.mult, STRIP_INK.mult = 0.85 * fade, (op or 0.82) * fade
         for rr = 0, 1 do
           rect(qx + c * q, sy1 + rr * q, qx + (c + 1) * q, sy1 + (rr + 1) * q, (c + rr) % 2 == 0 and STRIP or STRIP_INK)
         end
       end
+      LOGOBG.mult = op or 0.82
       rect(sx2, sy1, xr, sy1 + 20 * k, LOGOBG)
       if ls and ls ~= '' then
         ui.drawImage(ls, TMP.a:set(sx2, sy1), TMP.b:set(xr, sy1 + 20 * k), WHITE, UV0, UV1, ui.ImageFit.Fit)
@@ -16296,7 +16299,7 @@ float4 main(PS_IN pin) {
         y = y + runH
       end
       rect(x1, y, x2, y + k, HAIR)
-      strip(x1, x2, y, k, id.logoStrip)
+      strip(x1, x2, y, k, id.logoStrip, RES_BG.mult)
     end
     function CR.wrap(text, font, size, width, n)
       local out, cur = {}, ''
@@ -16322,7 +16325,7 @@ float4 main(PS_IN pin) {
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x1 + 520 * k, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
       body(x1 + 46 * k, y1 + 34 * k, cw - 92 * k, true)
       rect(x1, y1 + ch - 20 * k, x1 + cw, y1 + ch - 19 * k, HAIR)
-      strip(x1, x1 + cw, y1 + ch - 20 * k, k, id.logoStrip)
+      strip(x1, x1 + cw, y1 + ch - 20 * k, k, id.logoStrip, OPEN_BG.mult)
       ui.popClipRect()
     end
     function CR.box(x, y, bw, k, label, lines, draw)
@@ -16383,9 +16386,7 @@ float4 main(PS_IN pin) {
           yy = yy + 25 * k
         end
         yy = yy + 20 * k
-        local det = type(ev.detail) == 'table' and ev.detail or {}
-        local sess = {}
-        for _, l in ipairs(eventLines()) do if not l then break end sess[#sess + 1] = { l[1], l[2] } end
+        local sess = CR.sess or {}
         local ru = type(ev.rules) == 'table' and ev.rules or {}
         local rules = {}
         local dmin, dmax = tonumber(ru.minDrivers), tonumber(ru.maxDrivers)
@@ -16394,9 +16395,10 @@ float4 main(PS_IN pin) {
         if (stops or 0) > 0 then rules[#rules + 1] = { T.opStops, tostring(stops) } end
         local swaps = config.swapRequiredBy and config.swapRequiredBy[ac.SessionType.Race]
         if swaps and swaps > 0 then rules[#rules + 1] = { T.opSwaps, tostring(swaps) } end
-        if tonumber(ru.driveMin) and tonumber(ru.driveMin) > 0 then rules[#rules + 1] = { T.opStint, string.format(T.minutes, tonumber(ru.driveMin)) } end
-        if tonumber(ru.driveMax) and tonumber(ru.driveMax) > 0 then rules[#rules + 1] = { T.opStintMax, string.format(T.minutes, tonumber(ru.driveMax)) } end
-        if type(det.classes) == 'table' and #det.classes > 0 then rules[#rules + 1] = { T.opClasses, table.concat(det.classes, ' · ') } end
+        local dmn, dmx = tonumber(ru.driveMin) or config.driverStint.minMinutes or 0, tonumber(ru.driveMax) or config.driverStint.maxMinutes or 0
+        if dmn > 0 then rules[#rules + 1] = { T.opStint, string.format(T.minutes, dmn) } end
+        if dmx > 0 then rules[#rules + 1] = { T.opStintMax, string.format(T.minutes, dmx) } end
+        if #RaceTable.classKeys() > 0 then rules[#rules + 1] = { T.opClasses, table.concat(RaceTable.classKeys(), ' · ') } end
         local bw = (cw - 18 * k) / 2
         local bh = math.max(CR.box(x, yy, bw, k, T.opSessions, sess, false), CR.box(x, yy, bw, k, T.opRules, rules, false))
         if draw then
@@ -16412,29 +16414,36 @@ float4 main(PS_IN pin) {
         return yy - y
       end
     end
+    function CR.trackNow()
+      local fc = Weather.forecast or RecordSync.base.forecast.list or {}
+      local segs = #fc > 0 and Radar.textSegments(fc) or {}
+      local now, boxes = segs[2] or segs[1], {}
+      for i, s in pairs({ segs[2] or segs[1], segs[4], segs[6], segs[7] }) do boxes[i] = { minute = s.minute, sky = Radar.skyOf(s), chance = math.floor(s.chance * 100 + 0.5) } end
+      local g = RecordSync.base.dirPen.grip
+      return { grip = g and tostring(TEXTS.trackGrip[CarRead.gripName(g)] or '-') or '-', air = CarRead.num(sim.ambientTemperature), road = CarRead.num(sim.roadTemperature),
+        rain = now and math.floor(now.chance * 100 + 0.5) or nil, boxes = boxes, any = now ~= nil }
+    end
     function CR.trackBody(k)
       local T = TEXTS.bc
       return function(x, y, cw, draw)
         local tr = BroadcastEvent.track or {}
-        local fc = Weather.forecast or RecordSync.base.forecast.list or {}
-        local segs = #fc > 0 and Radar.textSegments(fc) or {}
-        local now = segs[2] or segs[1]
+        local v = CR.track or CR.trackNow()
         local yy = y
         if draw then drawText(Lang.letters.upper(T.opTrackK), F.ck, 15 * k, TMP.a:set(x, yy), DIMW) end
         yy = yy + 22 * k
         if draw then drawText(fitText(Lang.letters.upper(tostring(tr.name or ac.getTrackName() or '')), F.cbig, 54 * k, cw, '.'), F.cbig, 54 * k, TMP.a:set(x, yy), PAPER) end
         yy = yy + 66 * k
-        yy = yy + CR.grid4(x, yy, cw, k, { { T.opGrip, tostring(TEXTS.trackGrip[CarRead.gripName(CarRead.num(sim.roadGrip) * 100)] or '-') },
-          { T.opAir, string.format('%.0f °C', CarRead.num(sim.ambientTemperature)) }, { T.opRoad, string.format('%.0f °C', CarRead.num(sim.roadTemperature)) },
-          { T.opRain, now and string.format(TEXTS.wxProb, math.floor(now.chance * 100 + 0.5)) or '-' } }, draw)
+        yy = yy + CR.grid4(x, yy, cw, k, { { T.opGrip, v.grip }, { T.opAir, string.format('%.0f °C', v.air) }, { T.opRoad, string.format('%.0f °C', v.road) },
+          { T.opRain, v.rain and string.format(TEXTS.wxProb, v.rain) or '-' } }, draw)
         local fw = (cw - 3 * 10 * k) / 4
-        if now then
-          for i, s in ipairs({ segs[2] or segs[1], segs[4], segs[6], segs[7] }) do
+        if v.any then
+          for i = 1, 4 do
+            local s = v.boxes[i]
             local fx = x + (i - 1) * (fw + 10 * k)
             if draw and s then
               rect(fx, yy + 16 * k, fx + fw, yy + 16 * k + 58 * k, BOX_TINT)
               drawText(hhmm(s.minute), F.rb, 20 * k, TMP.a:set(fx + 12 * k, yy + 24 * k), PAPER)
-              local sky = Radar.skyOf(s) .. ' · ' .. string.format(TEXTS.wxProb, math.floor(s.chance * 100 + 0.5))
+              local sky = s.sky .. ' · ' .. T.opRain .. ' ' .. string.format(TEXTS.wxProb, s.chance)
               drawText(fitText(sky, F.saySm, 15 * k, fw - 24 * k, '.'), F.saySm, 15 * k, TMP.a:set(fx + 12 * k, yy + 48 * k), DIMW)
             end
           end
@@ -16446,7 +16455,7 @@ float4 main(PS_IN pin) {
     function CR.listBody(k, d)
       local T = TEXTS.bc
       return function(x, y, cw, draw)
-        local roster = BroadcastEvent.ev and type(BroadcastEvent.ev.roster) == 'table' and BroadcastEvent.ev.roster or {}
+        local roster = CR.roster or {}
         local rh = 40 * k
         local runH = math.min(10 * rh, math.max(#roster, 1) * rh)
         local yy = y
@@ -16477,8 +16486,8 @@ float4 main(PS_IN pin) {
               if ry >= yy + runH then break end
               if ry + rh > yy then
                 rect(x, ry, x + cw, ry + k, HAIR)
-                local _, cc = classStyle(e.cls)
-                if e.cls and e.cls ~= '' then rect(x, ry, x + 6 * k, ry + rh, cc) end
+                local _, cc = classStyle(e.class)
+                if e.class and e.class ~= '' then rect(x, ry, x + 6 * k, ry + rh, cc) end
                 local cx = x + 14 * k
                 local num = '#' .. tostring(e.number or '')
                 frame(cx, ry + 11 * k, cx + textWidth(num, F.rb, 13 * k) + 10 * k, ry + 29 * k, NUMB, k)
@@ -16486,13 +16495,11 @@ float4 main(PS_IN pin) {
                 cx = x + cwid[1]
                 drawText(fitText(Lang.letters.upper(tostring(e.team or '')), F.name, 18 * k, cwid[2] - 12 * k, '.'), F.name, 18 * k, TMP.a:set(cx, ry + 9 * k), PAPER)
                 cx = cx + cwid[2]
-                local names = {}
-                for _, nm in ipairs(type(e.drivers) == 'table' and e.drivers or {}) do names[#names + 1] = short(nm) end
-                drawText(fitText(table.concat(names, ' · '), F.team, 15 * k, cwid[3] - 12 * k, '.'), F.team, 15 * k, TMP.a:set(cx, ry + 11 * k), DIMW)
+                drawText(fitText(short(e.name or ''), F.team, 15 * k, cwid[3] - 12 * k, '.'), F.team, 15 * k, TMP.a:set(cx, ry + 11 * k), DIMW)
                 cx = cx + cwid[3]
-                drawText(fitText(tostring(e.car or ''), F.team, 15 * k, cwid[4] - 12 * k, '.'), F.team, 15 * k, TMP.a:set(cx, ry + 11 * k), PAPER)
+                drawText(fitText(tostring(ac.getCarName(e.index) or ''), F.team, 15 * k, cwid[4] - 12 * k, '.'), F.team, 15 * k, TMP.a:set(cx, ry + 11 * k), PAPER)
                 cx = cx + cwid[4]
-                if e.cls and e.cls ~= '' then legendItem(cx, ry + 13 * k, k, false, e.cls, 'ALL') end
+                if e.class and e.class ~= '' then legendItem(cx, ry + 13 * k, k, false, e.class, 'ALL') end
               end
             end
             start = start + height
@@ -16504,6 +16511,10 @@ float4 main(PS_IN pin) {
       end
     end
     function CR.opening(w, h, k, id)
+      if BC.openWant and (not BC.opt.oe or not config.eventId or BroadcastEvent.ev) and (not (BC.opt.oe or BC.opt.ot) or RecordSync.base.forecast.done) then
+        BC.openWant, BC.openAt, CR.track, CR.sess, CR.roster = nil, state.ui.clock, CR.trackNow(), {}, RaceTable.rows
+        for _, l in ipairs(eventLines()) do if not l then break end CR.sess[#CR.sess + 1] = { l[1], l[2] } end
+      end
       if not BC.openAt then return end
       local d = state.ui.clock - BC.openAt
       for _, c in ipairs({ { BC.opt.oe, BC.opt.oes, 'e' }, { BC.opt.ot, BC.opt.ots, 't' }, { BC.opt.oi, BC.opt.ois, 'i' } }) do
@@ -16546,7 +16557,7 @@ float4 main(PS_IN pin) {
       local fc = Weather.forecast or RecordSync.base.forecast.list or {}
       local segs = #fc > 0 and Radar.textSegments(fc) or {}
       local now = segs[2] or segs[1]
-      local cond = { { T.opGrip, tostring(TEXTS.trackGrip[CarRead.gripName(CarRead.num(sim.roadGrip) * 100)] or '-') },
+      local cond = { { T.opGrip, RecordSync.base.dirPen.grip and tostring(TEXTS.trackGrip[CarRead.gripName(RecordSync.base.dirPen.grip)] or '-') or '-' },
         { T.opAir, string.format('%.0f °C', CarRead.num(sim.ambientTemperature)) }, { T.opRoad, string.format('%.0f °C', CarRead.num(sim.roadTemperature)) },
         { T.opNow, now and Radar.skyOf(now) or '-' }, { T.opRain, now and string.format(TEXTS.wxProb, math.floor(now.chance * 100 + 0.5)) or '-' } }
       local cw = math.max(640 * k, textWidth(big, F.snBig, 46 * k) + 72 * k, textWidth(line, F.snLine, 19 * k) + 72 * k)
@@ -16581,11 +16592,11 @@ float4 main(PS_IN pin) {
       end
       yy = yy + 46 * k + 9 * k
       rect(x1, yy, x1 + cw, yy + k, HAIR)
-      strip(x1, x1 + cw, yy, k, id.logoStrip)
+      strip(x1, x1 + cw, yy, k, id.logoStrip, SN_BG.mult)
       ui.popClipRect()
     end
     local function item(x, y1, k, r, list, i, multi, sel, phaseGap, ended, measure, tw, byClass)
-      local pos = (byClass or placeNow() ~= 'ALL') and (r.classPos or i) or (r.pos or i)
+      local pos = r.absent and '' or ((byClass or placeNow() ~= 'ALL') and (r.classPos or i) or (r.pos or i))
       local tt, bad = timeText(r, list, i, phaseGap, ended, byClass)
       local nm = nameOf(r)
       local num = '#' .. tostring(r.number or '')
@@ -16782,7 +16793,7 @@ float4 main(PS_IN pin) {
         towerList(x1, x2, y, sy, k, list, multi, phaseGap, ended, false, 'ALL', dt)
       end
       rect(x1, sy, x2, sy + k, HAIR)
-      strip(x1, x2, sy, k, id.logoStrip)
+      strip(x1, x2, sy, k, id.logoStrip, BAR.mult)
     end
     local SOFT_BLUE = rgbm(0x9f / 255, 0xc0 / 255, 1, 1)
     local DOT_OFF = rgbm(1, 1, 1, 0.25)
@@ -17049,7 +17060,7 @@ float4 main(PS_IN pin) {
     function BC.draw(w, h)
       local k = h / 1080
       fonts(k)
-      if BC.opt.pb or BC.opt.pt or BC.opt.px then RecordSync.base.dirPenAsk() end
+      RecordSync.base.dirPenAsk()
       CR.turn()
       local page, pt = CR.resPage()
       drawCredits(w, h, page ~= nil)
@@ -17181,7 +17192,7 @@ float4 main(PS_IN pin) {
         ui.drawRectFilledMultiColor(TMP.a:set(w - fade, y1), TMP.b:set(w, y2), BAR_EDGE, BAR, BAR, BAR_EDGE)
       end
       scrollT = now
-      strip(w - w * 0.42, w, h - 20 * k, k, id.logoStrip)
+      strip(w - w * 0.42, w, h - 20 * k, k, id.logoStrip, BAR.mult)
       cardH(h, k, multi)
       voices(w, h, k, false)
       CR.stack(k, y1)
@@ -20107,7 +20118,7 @@ do
   local function leave(ev)
     if Session.id and Session.key then
       ac.log(string.format('race-control: session %d (id %d) turned by the game: its history to the base', Session.index, Session.id))
-      rcLog(TEXTS.rc.sessionEnd, 'session turned by the game - history sent')
+      rcLog(TEXTS.rc.sessionEnd, string.format('%s, id %d - session turned by the game - history sent', TEXTS.rc.sessionTypes[(ac.getSession(Session.index) or {}).type] or '-', Session.id))
       RecordSync.base.closeSession(Session.key)
     end
     if state.hold and ac.getCar(0).currentPenaltyType ~= BLACK_FLAG then physics.setCarPenalty(NONE, 0) end
