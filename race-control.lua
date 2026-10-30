@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V248 - 2026.10.29'
+local RC_VERSION = 'V249 - 2026.10.30'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -15299,9 +15299,10 @@ float4 main(PS_IN pin) {
     BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 82, bar = true, logos = 'BOTH', defSet = nil, cycle = 0, speed = 60, flag = 'FIX',
       form = 'H', tower = 'ALL', pins = 3, card = 'AUTO', cards = 10, theme = 6, vn = -1, vnm = 'T', vns = 8, vc = -1, vcm = 'T', vcs = 8,
       pb = true, pt = true, pts = 5, px = true, pxs = 5, rs = true, rsg = 40, rc = true, rcs = 20, re = 'TURN', oe = true, oes = 12, ot = true, ots = 10, oi = true, ois = 30,
-      sv = true, svs = 6, so = true, sos = 6, sns = 6, org = false }
+      sv = true, svs = 6, so = true, sos = 6, sns = 6, org = false,
+      rop = 82, oop = 90, sop = 90 }
     local NUMS = { cards = true, theme = true, vn = true, vns = true, vc = true, vcs = true, pts = true, pxs = true, rsg = true, rcs = true, oes = true, ots = true, ois = true,
-      svs = true, sos = true, sns = true }
+      svs = true, sos = true, sns = true, rop = true, oop = true, sop = true }
     local BOOLS = { pb = true, pt = true, px = true, rs = true, rc = true, oe = true, ot = true, oi = true, sv = true, so = true, org = true }
     BC.voiceAt = { n = -1e9, c = -1e9 }
     local function speedOf(v)
@@ -15334,9 +15335,9 @@ float4 main(PS_IN pin) {
         o.form or 'H', o.tower or 'ALL', math.floor(o.pins or 3))
         .. string.format(';card=%s;cards=%d;theme=%d;vn=%d;vnm=%s;vns=%d;vc=%d;vcm=%s;vcs=%d', o.card or 'AUTO', math.floor(o.cards or 10), math.floor(o.theme or 6),
           math.floor(o.vn or -1), o.vnm or 'T', math.floor(o.vns or 8), math.floor(o.vc or -1), o.vcm or 'T', math.floor(o.vcs or 8))
-        .. string.format(';pb=%d;pt=%d;pts=%d;px=%d;pxs=%d;rs=%d;rsg=%d;rc=%d;rcs=%d;re=%s;oe=%d;oes=%d;ot=%d;ots=%d;oi=%d;ois=%d;sv=%d;svs=%d;so=%d;sos=%d;sns=%d;org=%d',
+        .. string.format(';pb=%d;pt=%d;pts=%d;px=%d;pxs=%d;rs=%d;rsg=%d;rc=%d;rcs=%d;re=%s;oe=%d;oes=%d;ot=%d;ots=%d;oi=%d;ois=%d;sv=%d;svs=%d;so=%d;sos=%d;sns=%d;org=%d;rop=%d;oop=%d;sop=%d',
           o.pb and 1 or 0, o.pt and 1 or 0, o.pts, o.px and 1 or 0, o.pxs, o.rs and 1 or 0, o.rsg, o.rc and 1 or 0, o.rcs, o.re, o.oe and 1 or 0, o.oes, o.ot and 1 or 0, o.ots,
-          o.oi and 1 or 0, o.ois, o.sv and 1 or 0, o.svs, o.so and 1 or 0, o.sos, o.sns, o.org and 1 or 0)
+          o.oi and 1 or 0, o.ois, o.sv and 1 or 0, o.svs, o.so and 1 or 0, o.sos, o.sns, o.org and 1 or 0, o.rop, o.oop, o.sop)
     end
     function BC.on() return CarRead.isTv(0) end
     function BC.orgOn() return BC.opt.org == true and CarRead.isOrg(0) end
@@ -15459,7 +15460,8 @@ float4 main(PS_IN pin) {
     end
     local CREDIT_KEYS = { ['PEN BADGE'] = 'pb', ['PEN TEXT'] = 'pt', ['PEN TEXTS'] = 'pts', ['PEN BOX'] = 'px', ['PEN BOXS'] = 'pxs', ['RES SHOW'] = 'rs', ['RES ALLS'] = 'rsg',
       ['RES CLASS'] = 'rc', ['RES CLASSS'] = 'rcs', ['OPEN EVENT'] = 'oe', ['OPEN EVENTS'] = 'oes', ['OPEN TRACK'] = 'ot', ['OPEN TRACKS'] = 'ots', ['OPEN LIST'] = 'oi',
-      ['OPEN LISTS'] = 'ois', ['SNAME TURN'] = 'sv', ['SNAME TURNS'] = 'svs', ['SNAME OPEN'] = 'so', ['SNAME OPENS'] = 'sos', ['SNAME NOWS'] = 'sns' }
+      ['OPEN LISTS'] = 'ois', ['SNAME TURN'] = 'sv', ['SNAME TURNS'] = 'svs', ['SNAME OPEN'] = 'so', ['SNAME OPENS'] = 'sos', ['SNAME NOWS'] = 'sns',
+      ['RES OP'] = 'rop', ['OPEN OP'] = 'oop', ['SNAME OP'] = 'sop' }
     function BC.command(words)
       local w = {}
       for x in tostring(words or ''):gmatch('%S+') do w[#w + 1] = x end
@@ -15602,6 +15604,7 @@ float4 main(PS_IN pin) {
         elseif a == 'SNAME' and k == 'NOW' then BC.snameShow(BC.opt.sns)
         elseif a == 'RES' and k == 'END' then BC.opt.re = v:upper() == 'FIX' and 'FIX' or 'TURN'
         elseif key and BOOLS[key] then BC.opt[key] = v == '1'
+        elseif key == 'rop' or key == 'oop' or key == 'sop' then BC.opt[key] = math.min(math.max(math.floor(tonumber(v) or BC.opt[key]), 40), 100)
         elseif key then BC.opt[key] = math.min(math.max(math.floor(tonumber(v) or BC.opt[key]), 2), 600)
         else return false end
       elseif a == 'ORG' then
@@ -15669,6 +15672,8 @@ float4 main(PS_IN pin) {
     local BAR_EDGE = rgbm(10 / 255, 12 / 255, 16 / 255, 0)
     local BOXBG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.9)
     local LOGOBG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.82)
+    local RES_BG, RES_EDGE = rgbm(10 / 255, 12 / 255, 16 / 255, 0.82), rgbm(10 / 255, 12 / 255, 16 / 255, 0)
+    local OPEN_BG, SN_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.9), rgbm(10 / 255, 12 / 255, 16 / 255, 0.9)
     local FLAGC = { green = rgbm(31 / 255, 196 / 255, 59 / 255, 1), yellow = rgbm(1, 212 / 255, 0, 1), red = rgbm(224 / 255, 23 / 255, 23 / 255, 1),
       white = rgbm(242 / 255, 242 / 255, 242 / 255, 1) }
     local CHK_DARK, CHK_LIGHT = rgbm(0x11 / 255, 0x11 / 255, 0x11 / 255, 1), rgbm(0xee / 255, 0xee / 255, 0xee / 255, 1)
@@ -16202,7 +16207,8 @@ float4 main(PS_IN pin) {
       local th = 28 * k
       local total = headH + legH + th + pins * rh + (pins > 0 and 2 * k or 0) + runH + 20 * k
       local y1 = (h - total) / 2
-      rect(x1, y1, x2, y1 + total, BAR)
+      RES_BG.mult = math.min(math.max(BC.opt.rop or 82, 40), 100) / 100
+      rect(x1, y1, x2, y1 + total, RES_BG)
       rect(x1, y1, x2, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x1 + 520 * k, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
       local sname = (R.name or select(4, sessionLine())) .. ' · ' .. (R.total or select(3, sessionLine()))
@@ -16290,8 +16296,8 @@ float4 main(PS_IN pin) {
         until not run or start >= y + runH
         ui.popClipRect()
         if run then
-          ui.drawRectFilledMultiColor(TMP.a:set(x1, y), TMP.b:set(x2, y + 18 * k), BAR, BAR, BAR_EDGE, BAR_EDGE)
-          ui.drawRectFilledMultiColor(TMP.a:set(x1, y + runH - 18 * k), TMP.b:set(x2, y + runH), BAR_EDGE, BAR_EDGE, BAR, BAR)
+          ui.drawRectFilledMultiColor(TMP.a:set(x1, y), TMP.b:set(x2, y + 18 * k), RES_BG, RES_BG, RES_EDGE, RES_EDGE)
+          ui.drawRectFilledMultiColor(TMP.a:set(x1, y + runH - 18 * k), TMP.b:set(x2, y + runH), RES_EDGE, RES_EDGE, RES_BG, RES_BG)
         end
         y = y + runH
       end
@@ -16316,7 +16322,8 @@ float4 main(PS_IN pin) {
       local ch = 34 * k + inner + 26 * k + 20 * k
       local y1 = (h - ch) / 2
       ui.pushClipRect(CR.va:set(x1 + cw * (1 - out) / 2, y1 - 2 * k), CR.vb:set(x1 + cw - cw * (1 - out) / 2, y1 + ch), true)
-      rect(x1, y1, x1 + cw, y1 + ch, BOXBG)
+      OPEN_BG.mult = math.min(math.max(BC.opt.oop or 90, 40), 100) / 100
+      rect(x1, y1, x1 + cw, y1 + ch, OPEN_BG)
       rect(x1, y1, x1 + cw, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x1 + 520 * k, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
       body(x1 + 46 * k, y1 + 34 * k, cw - 92 * k, true)
@@ -16556,7 +16563,8 @@ float4 main(PS_IN pin) {
       local y1 = 150 * k
       local ch = 16 * k + 20 * k + 52 * k + 24 * k + 12 * k + 9 * k + 46 * k + 9 * k + 20 * k
       ui.pushClipRect(CR.va:set(x1 + cw * (1 - out) / 2, y1 - 2 * k), CR.vb:set(x1 + cw - cw * (1 - out) / 2, y1 + ch), true)
-      rect(x1, y1, x1 + cw, y1 + ch, BOXBG)
+      SN_BG.mult = math.min(math.max(BC.opt.sop or 90, 40), 100) / 100
+      rect(x1, y1, x1 + cw, y1 + ch, SN_BG)
       rect(x1, y1, x1 + cw, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x1 + cw * 0.7, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
       local cx = x1 + cw / 2
@@ -17194,9 +17202,9 @@ float4 main(PS_IN pin) {
         .. math.floor(CarRead.num(BC.cam.free and BC.cam.freeFov or (grab and BC.cam.fov) or ac.getCameraFOV()) + 0.5)
         .. string.format('|%s|%d|%d|%d|%s|%d|%d|%s|%d', o.card or 'AUTO', math.floor(o.cards or 10), math.floor(o.theme or 6), math.floor(o.vn or -1), o.vnm or 'T',
           math.floor(o.vns or 8), math.floor(o.vc or -1), o.vcm or 'T', math.floor(o.vcs or 8))
-        .. string.format('|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d', o.pb and 1 or 0, o.pt and 1 or 0, o.pts, o.px and 1 or 0, o.pxs,
+        .. string.format('|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d', o.pb and 1 or 0, o.pt and 1 or 0, o.pts, o.px and 1 or 0, o.pxs,
           o.rs and 1 or 0, o.rsg, o.rc and 1 or 0, o.rcs, o.re, o.oe and 1 or 0, o.oes, o.ot and 1 or 0, o.ots, o.oi and 1 or 0, o.ois, o.sv and 1 or 0, o.svs,
-          o.so and 1 or 0, o.sos, o.sns, o.org and 1 or 0)
+          o.so and 1 or 0, o.sos, o.sns, o.org and 1 or 0, o.rop, o.oop, o.sop)
     end
     function BC.camsText()
       local out = {}
