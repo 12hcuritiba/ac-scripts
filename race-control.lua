@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V253 - 2026.10.31'
+local RC_VERSION = 'V254 - 2026.10.31'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16140,20 +16140,20 @@ float4 main(PS_IN pin) {
       local dt = M.last and math.min(now - M.last, 0.5) or 0
       M.last = now
       if M.left == nil then M.left, M.off, M.page, M.pt = wait or 0, 0, 1, 0 end
-      if ps and M.page > (n or 1) then M.page, M.pt, M.left = 1, 0, wait or 0 end
+      if ps and M.page > (n or 1) then M.page, M.pt = 1, 0 end
       if (sp or 0) <= 0 then return end
       if M.left > 0 then M.left = M.left - dt return end
       if ps then
         M.pt = M.pt + dt
         if M.pt >= ps then
           M.page, M.pt = M.page + 1, 0
-          if M.page > (n or 1) then M.page, M.left = 1, wait or 0 end
+          if M.page > (n or 1) then M.page = 1 end
         end
         return
       end
-      M.off = M.off + dt / sp * (len or 1)
+      M.off = M.off + dt * 70 * (CR.k or 1) * 60 / sp
       if stop then M.off = math.min(M.off, stop) return end
-      if M.off >= (len or 1) then M.off, M.left = 0, wait or 0 end
+      if M.off >= (len or 1) then M.off = M.off % (len or 1) end
     end
     function CR.notePush(idx, it, dsq)
       local T = TEXTS.bc
@@ -16655,8 +16655,8 @@ float4 main(PS_IN pin) {
         local height = rest * rh
         local run = height > runH
         if R.movePage ~= page then R.move, R.movePage = {}, page end
-        if run then CR.move(R.move, BC.opt.rw, BC.opt.speed or 60, nil, nil, (height - runH) / height) end
-        local off = run and R.move.off * height or 0
+        if run then CR.move(R.move, BC.opt.rw, BC.opt.speed or 60, nil, nil, height - runH, height) end
+        local off = run and R.move.off or 0
         ui.pushClipRect(CR.va:set(x1, y), CR.vb:set(x2, y + runH), true)
         for n = pins + 1, #list do
           local ry = math.floor(y - off + (n - pins - 1) * rh + 0.5)
@@ -16896,8 +16896,8 @@ float4 main(PS_IN pin) {
           local per = math.max(math.floor(runH / rh), 1)
           local paged = run and BC.opt.im == 'PAGE'
           if paged then CR.move(CR.listMove, BC.opt.iw, BC.opt.speed or 60, BC.opt.ips, math.ceil(rest / per))
-          elseif run then CR.move(CR.listMove, BC.opt.iw, BC.opt.speed or 60, nil, nil, (height - runH) / height) end
-          local off = paged and (CR.listMove.page - 1) * per * rh or run and CR.listMove.off * height or 0
+          elseif run then CR.move(CR.listMove, BC.opt.iw, BC.opt.speed or 60, nil, nil, height - runH, height) end
+          local off = paged and (CR.listMove.page - 1) * per * rh or run and CR.listMove.off or 0
           ui.pushClipRect(CR.va:set(x, yy), CR.vb:set(x + cw, yy + runH), true)
           for n = pins + 1, #roster do
             local ry = math.floor(yy - off + (n - pins - 1) * rh + 0.5)
@@ -17147,7 +17147,8 @@ float4 main(PS_IN pin) {
         local paged = BC.opt.grm == 'PAGE' and pages > 1
         if draw and #rows > 0 then
           local run = BC.opt.grm ~= 'PAGE' and pages > 1
-          if paged or run then CR.move(G.move, BC.opt.grw, BC.opt.speed or 60, paged and BC.opt.grps or nil, pages) end
+          local full = math.ceil(#rows / 2) * 62 * k + 34 * k
+          if paged or run then CR.move(G.move, BC.opt.grw, BC.opt.speed or 60, paged and BC.opt.grps or nil, pages, nil, full) end
           local function slot(n, j, sy)
             local e = rows[n]
             local sx = x + (j % 2 == 1 and 0 or (colW + 40 * k))
@@ -17169,8 +17170,7 @@ float4 main(PS_IN pin) {
           end
           ui.pushClipRect(CR.va:set(x, yy), CR.vb:set(x + cw, yy + winH), true)
           if run then
-            local full = math.ceil(#rows / 2) * 62 * k + 34 * k
-            local off = G.move.off * full
+            local off = G.move.off
             for copy = 0, 1 do
               for n = 1, #rows do
                 local sy = yy + (math.ceil(n / 2) - 1) * 62 * k + (n % 2 == 0 and 34 * k or 0) - off + copy * full
@@ -17513,7 +17513,7 @@ float4 main(PS_IN pin) {
       towerMove[key] = M
       local paged = BC.opt.vm == 'PAGE'
       local per = math.max(math.floor(room / rh), 1)
-      if run then CR.move(M, BC.opt.vw, BC.opt.speed or 60, paged and BC.opt.vps or nil, math.ceil(rest / per)) else M.left = nil end
+      if run then CR.move(M, BC.opt.vw, BC.opt.speed or 60, paged and BC.opt.vps or nil, math.ceil(rest / per), nil, height) else M.left = nil end
       ui.pushClipRect(TMP.a:set(x1, y), TMP.b:set(x2, ly2))
       if run and paged then
         local first = pins + (M.page - 1) * per
@@ -17523,7 +17523,7 @@ float4 main(PS_IN pin) {
           item(x1, y + (j - 1) * rh, k, rows[n], rows, n, multi, false, phaseGap, ended, false, x2 - x1, byClass)
         end
       else
-        local start = y - (run and M.off * height or 0)
+        local start = y - (run and M.off or 0)
         repeat
           for n = pins + 1, #rows do
             local ry = math.floor(start + (n - pins - 1) * rh + 0.5)
@@ -17883,6 +17883,7 @@ float4 main(PS_IN pin) {
     local drawCredits
     function BC.draw(w, h)
       local k = h / 1080
+      CR.k = k
       fonts(k)
       RecordSync.base.dirPenAsk()
       CR.pitScan()
