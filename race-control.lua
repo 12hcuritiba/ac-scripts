@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V255 - 2026.10.31'
+local RC_VERSION = 'V256 - 2026.10.31'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -20374,6 +20374,11 @@ local drawDesktopUI = (function()
           else
             drawSessionWait()
           end
+          return true
+        end
+        if Broadcast and Broadcast.orgOn and Broadcast.orgOn() and Session.phase == 'resultados' then
+          script.drawUI(true)
+          Desktop.hudDrawn = true
           return true
         end
         if mode == 'menu' then
