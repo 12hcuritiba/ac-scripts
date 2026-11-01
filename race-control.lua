@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V256 - 2026.10.31'
+local RC_VERSION = 'V257 - 2026.11.01'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -15437,7 +15437,7 @@ float4 main(PS_IN pin) {
       for k, v in kept:gmatch('(%w+)=([^;]*)') do
         if BC.opt[k] ~= nil or k == 'defSet' then
           if k == 'op' then BC.opt.op = tonumber(v) or 82
-          elseif k == 'cycle' then BC.opt.cycle = (tonumber(v) or 0) > 0 and 1 or 0
+          elseif k == 'cycle' then BC.opt.cycle = tonumber(v) or 0
           elseif k == 'speed' then BC.opt.speed = speedOf(v)
           elseif k == 'pins' then BC.opt.pins = pinsOf(v)
           elseif k == 'bar' then BC.opt.bar = v ~= '0'
@@ -15696,11 +15696,11 @@ float4 main(PS_IN pin) {
         elseif k == 'OP' then BC.opt.op = math.min(math.max(tonumber(v) or 82, 40), 100)
         elseif k == 'SHOW' then BC.opt.bar = v ~= '0'
         elseif k == 'LOGOS' then BC.opt.logos = v:upper()
-        elseif k == 'CYCLE' then BC.opt.cycle = (tonumber(v) or 0) > 0 and 1 or 0
+        elseif k == 'CYCLE' then BC.opt.cycle = math.min(math.max(math.floor(tonumber(v) or 0), 0), 600)
         elseif k == 'SPEED' then BC.opt.speed = speedOf(v)
         elseif k == 'FLAG' then BC.opt.flag = v:upper() == 'AUTO' and 'AUTO' or 'FIX'
         elseif k == 'FORM' then BC.opt.form = v:upper() == 'V' and 'V' or 'H'
-        elseif k == 'TOWER' then BC.opt.tower = (v:upper() == 'SEG' or v:upper() == 'CYC') and v:upper() or 'ALL'
+        elseif k == 'TOWER' then BC.opt.tower = v:upper() == 'SEG' and 'SEG' or 'ALL'
         elseif k == 'PINS' then BC.opt.pins = pinsOf(v)
         elseif k == 'CARD' then BC.opt.card = (v:upper() == 'ON' or v:upper() == 'OFF') and v:upper() or 'AUTO'
         elseif k == 'CARDS' then BC.opt.cards = math.min(math.max(math.floor(tonumber(v) or 10), 2), 120)
@@ -15921,14 +15921,12 @@ float4 main(PS_IN pin) {
       end
       return table.concat(out)
     end
-    local function cycleOn()
-      if #(BC.classKeys or {}) < 2 then return false end
-      if BC.opt.form == 'V' then return BC.opt.tower == 'CYC' end
-      return (tonumber(BC.opt.cycle) or 0) > 0
-    end
     local function placeNow()
-      if cycleOn() then return BC.segNow or 'ALL' end
-      return BC.opt.place
+      local cyc = tonumber(BC.opt.cycle) or 0
+      local keys = BC.classKeys or {}
+      if cyc <= 0 or #keys < 2 or BC.opt.form == 'V' then return BC.opt.place end
+      local n = math.floor(state.ui.clock / cyc) % (#keys + 1)
+      return n == 0 and 'ALL' or keys[n]
     end
     local function sessionOver()
       if Session.phase == 'resultados' then return true end
@@ -15990,59 +15988,42 @@ float4 main(PS_IN pin) {
       return Lang.letters.upper(ended and string.format(TEXTS.bc.sessEnd, sname) or label), el, ' / ' .. total, ended and Lang.letters.upper(nextLine()) or nil, ended
     end
     local rowsBuf = {}
-    CR.cls = { ALL = {} }
-    CR.segK, CR.segL, CR.segI = {}, {}, {}
-    local function creditRows()
+    local function creditRows(parts)
       local out, n = rowsBuf, 0
+      local place = placeNow()
       BC.classKeys = RaceTable.classKeys()
-      local cyc = cycleOn()
-      local place = cyc and 'ALL' or BC.opt.place
-      local cls, all = CR.cls, CR.cls.ALL
-      all.n = 0
-      for _, key in ipairs(BC.classKeys) do
-        cls[key] = cls[key] or {}
-        cls[key].n = 0
+      if parts then
+        for _, key in ipairs(BC.classKeys) do
+          parts[key] = parts[key] or {}
+          parts[key].n = 0
+        end
       end
       local fb, fi = 0, nil
       for _, r in ipairs(RaceTable.rows or {}) do
         if not r.absent and (r.best or 0) > 0 and (fb == 0 or r.best < fb) then fb, fi = r.best, r.index end
-        all.n = all.n + 1
-        all[all.n] = r
-        local part = cls[r.class]
-        if part then
-          part.n = part.n + 1
-          part[part.n] = r
-        end
         if place == 'ALL' or r.class == place then
           n = n + 1
-          out[n], CR.segK[n], CR.segL[n], CR.segI[n] = r, place, out, n
-        end
-      end
-      if cyc then
-        for _, key in ipairs(BC.classKeys) do
-          local part = cls[key]
-          for j = 1, part.n do
-            n = n + 1
-            out[n], CR.segK[n], CR.segL[n], CR.segI[n] = part[j], key, part, j
+          out[n] = r
+          local part = parts and parts[r.class]
+          if part then
+            part.n = part.n + 1
+            part[part.n] = r
           end
         end
       end
-      for k = #out, n + 1, -1 do out[k], CR.segK[k], CR.segL[k], CR.segI[k] = nil, nil, nil, nil end
+      for k = #out, n + 1, -1 do out[k] = nil end
       BC.fastIdx = fi
-      for k = #all, all.n + 1, -1 do all[k] = nil end
-      for _, key in ipairs(BC.classKeys) do
-        local part = cls[key]
-        for k = #part, part.n + 1, -1 do part[k] = nil end
+      if parts then
+        for _, key in ipairs(BC.classKeys) do
+          local part = parts[key]
+          for k = #part, part.n + 1, -1 do part[k] = nil end
+        end
       end
       return out, #BC.classKeys > 1
     end
-    local function segOf(rows, n, byClass)
-      if byClass then return rows, n, true end
-      return CR.segL[n], CR.segI[n], CR.segK[n] ~= 'ALL'
-    end
     local function timeText(r, list, k, phaseGap, ended, byClass)
       local T = TEXTS.bc
-      local cls = byClass
+      local cls = byClass or placeNow() ~= 'ALL'
       if ended and sim.raceSessionType == ac.SessionType.Race then
         if k == 1 then return string.format(T.laps, r.laps or 0) end
         return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-')
@@ -16098,24 +16079,13 @@ float4 main(PS_IN pin) {
       drawText(nm, F.legend, 13 * k, TMP.a:set(x + 22 * k, ty), (place == 'ALL' or place == name) and PAPER or OFFW)
       return iw
     end
-    local function fixedOf()
+    local function fixedOf(list)
       if not (RaceTable.rows or {}).anyLap then return nil end
-      local all, place = CR.cls.ALL, placeNow()
-      if BC.opt.fix == 'LEAD' then return all[1], all, 1, false end
-      if BC.opt.fix == 'CLASSLEAD' then
-        local part = place == 'ALL' and all or CR.cls[place]
-        return part and part[1], part, 1, place ~= 'ALL'
-      end
-      for n, r in ipairs(all) do
-        if r.index == sim.focusedCar then
-          local part = r.class == place and CR.cls[place]
-          if part then
-            for j, p in ipairs(part) do if p == r then return r, part, j, true end end
-          end
-          return r, all, n, false
-        end
-      end
-      return nil
+      if BC.opt.fix == 'LEAD' then return (RaceTable.rows or {})[1], 1 end
+      if BC.opt.fix == 'CLASSLEAD' then return list[1], 1 end
+      local fixed, fixedK = nil, nil
+      for n, r in ipairs(list) do if r.index == sim.focusedCar then fixed, fixedK = r, n end end
+      return fixed, fixedK
     end
     local function gapNow()
       return BC.opt.time == 'GAP' or (BC.opt.time == 'ALT' and math.floor(state.ui.clock / 10) % 2 == 1)
@@ -17440,7 +17410,7 @@ float4 main(PS_IN pin) {
       ui.popClipRect()
     end
     local function item(x, y1, k, r, list, i, multi, sel, phaseGap, ended, measure, tw, byClass)
-      local pos = r.absent and '' or (byClass and (r.classPos or i) or (r.pos or i))
+      local pos = r.absent and '' or ((byClass or placeNow() ~= 'ALL') and (r.classPos or i) or (r.pos or i))
       local tt, bad = timeText(r, list, i, phaseGap, ended, byClass)
       local nm = nameOf(r)
       local num = '#' .. tostring(r.number or '')
@@ -17519,7 +17489,7 @@ float4 main(PS_IN pin) {
       if tw then rect(x, y1, x + W, y1 + k, HAIR) else vline(x + W, y1, y2, HAIR, k) end
       return x + W
     end
-    local towerMove = {}
+    local towerParts, towerMove = {}, {}
     local PIN_LINE = rgbm(1, 1, 1, 0.22)
     local FIX_LINE = rgbm(31 / 255, 104 / 255, 207 / 255, 0.30)
     local SEG_TINT, SEG_CLEAR = rgbm(0, 0, 0, 0), rgbm(0, 0, 0, 0)
@@ -17528,8 +17498,7 @@ float4 main(PS_IN pin) {
       local pins = math.min(BC.opt.pins or 3, #rows)
       local y = ly1
       for n = 1, pins do
-        local L, I, B = segOf(rows, n, byClass)
-        if y + rh <= ly2 then item(x1, y, k, rows[n], L, I, multi, false, phaseGap, ended, false, x2 - x1, B) end
+        if y + rh <= ly2 then item(x1, y, k, rows[n], rows, n, multi, false, phaseGap, ended, false, x2 - x1, byClass) end
         y = y + rh
       end
       if pins > 0 then
@@ -17546,15 +17515,12 @@ float4 main(PS_IN pin) {
       local per = math.max(math.floor(room / rh), 1)
       if run then CR.move(M, BC.opt.vw, BC.opt.speed or 60, paged and BC.opt.vps or nil, math.ceil(rest / per), nil, height) else M.left = nil end
       ui.pushClipRect(TMP.a:set(x1, y), TMP.b:set(x2, ly2))
-      local last
       if run and paged then
         local first = pins + (M.page - 1) * per
         for j = 1, per do
           local n = first + j
           if n > #rows then break end
-          local L, I, B = segOf(rows, n, byClass)
-          item(x1, y + (j - 1) * rh, k, rows[n], L, I, multi, false, phaseGap, ended, false, x2 - x1, B)
-          last = n
+          item(x1, y + (j - 1) * rh, k, rows[n], rows, n, multi, false, phaseGap, ended, false, x2 - x1, byClass)
         end
       else
         local start = y - (run and M.off or 0)
@@ -17563,18 +17529,15 @@ float4 main(PS_IN pin) {
             local ry = math.floor(start + (n - pins - 1) * rh + 0.5)
             if ry >= ly2 then break end
             if ry + rh > y then
-              local L, I, B = segOf(rows, n, byClass)
               CR.fade(ry, ry + rh, y, ly2)
-              item(x1, ry, k, rows[n], L, I, multi, false, phaseGap, ended, false, x2 - x1, B)
+              item(x1, ry, k, rows[n], rows, n, multi, false, phaseGap, ended, false, x2 - x1, byClass)
               CR.fadeEnd()
-              last = n
             end
           end
           start = start + height
         until not run or start >= ly2
       end
       ui.popClipRect()
-      if not byClass and last then BC.segNow = CR.segK[last] end
       CR.towerSealsDraw(x2, ly1, ly2, k)
     end
     local function towerDraw(h, k, id)
@@ -17604,7 +17567,7 @@ float4 main(PS_IN pin) {
         y = y + 42 * k
       end
       local seg = BC.opt.tower == 'SEG' and BC.opt.place == 'ALL'
-      local list, multi = creditRows()
+      local list, multi = creditRows(seg and towerParts or nil)
       if (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '') then
         rect(x1, y, x2, y + k, HAIR)
         local left, right = x1 + 22 * k, x2 - 22 * k
@@ -17626,9 +17589,9 @@ float4 main(PS_IN pin) {
         y = ly + 24 * k
       end
       local phaseGap = gapNow()
-      local fixed, fixedL, fixedK, fixedB = fixedOf()
+      local fixed, fixedK = fixedOf(list)
       if fixed then
-        item(x1, y, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, false, x2 - x1, fixedB)
+        item(x1, y, k, fixed, list, fixedK, multi, true, phaseGap, ended, false, x2 - x1)
         CR.towerSealsDraw(x2, y, y + 42 * k, k)
         y = y + 42 * k
         rect(x1, y, x2, y + k, FIX_LINE)
@@ -17639,7 +17602,7 @@ float4 main(PS_IN pin) {
         local partH = (sy - y) / #BC.classKeys
         for n, key in ipairs(BC.classKeys) do
           local py = y + (n - 1) * partH
-          local rows = CR.cls[key]
+          local rows = towerParts[key]
           local _, cc = classStyle(key)
           SEG_TINT.r, SEG_TINT.g, SEG_TINT.b, SEG_TINT.mult = cc.r, cc.g, cc.b, 0.34
           SEG_CLEAR.r, SEG_CLEAR.g, SEG_CLEAR.b = cc.r, cc.g, cc.b
@@ -18022,14 +17985,13 @@ float4 main(PS_IN pin) {
       ui.drawLine(TMP.a:set(x + 3.1 * k, y2), TMP.b:set(x + 14.9 * k, y1), HAIR, k)
       x = x + 18 * k
       local phaseGap = gapNow()
-      local fixed, fixedL, fixedK, fixedB = fixedOf()
+      local fixed, fixedK = fixedOf(list)
       columns(list, fixed, k)
-      if fixed then x = item(x, y1, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, nil, nil, fixedB) end
+      if fixed then x = item(x, y1, k, fixed, list, fixedK, multi, true, phaseGap, ended) end
       if #list > 0 and x < w then
         local width = 0
         for n, r in ipairs(list) do
-          local L, I, B = segOf(list, n, false)
-          local nx = item(width, y1, k, r, L, I, multi, false, phaseGap, ended, true, nil, B)
+          local nx = item(width, y1, k, r, list, n, multi, false, phaseGap, ended, true)
           widthsBuf[n] = nx - width
           width = nx
         end
@@ -18046,18 +18008,15 @@ float4 main(PS_IN pin) {
           for n = #starts, np + 1, -1 do starts[n] = nil end
           CR.move(M, BC.opt.hw, BC.opt.speed or 60, BC.opt.hps, np)
           local cx = x
-          local last = (starts[M.page + 1] or #list + 1) - 1
-          for n = starts[M.page], last do
-            local L, I, B = segOf(list, n, false)
-            item(math.floor(cx + 0.5), y1, k, list[n], L, I, multi, false, phaseGap, ended, nil, nil, B)
+          for n = starts[M.page], (starts[M.page + 1] or #list + 1) - 1 do
+            item(math.floor(cx + 0.5), y1, k, list[n], list, n, multi, false, phaseGap, ended)
             cx = cx + widthsBuf[n]
           end
-          BC.segNow = CR.segK[last]
         else
           width = math.max(width, w - x)
           CR.move(M, BC.opt.hw, BC.opt.speed or 60, nil, nil, nil, width)
           local start = x - M.off
-          local guard, last = 0, nil
+          local guard = 0
           while start < w and guard < 6 do
             guard = guard + 1
             local cx = start
@@ -18065,17 +18024,14 @@ float4 main(PS_IN pin) {
               if cx > w then break end
               local nx = cx + widthsBuf[n]
               if nx > x then
-                local L, I, B = segOf(list, n, false)
                 CR.fade(cx, nx, x, w)
-                item(math.floor(cx + 0.5), y1, k, r, L, I, multi, false, phaseGap, ended, nil, nil, B)
+                item(math.floor(cx + 0.5), y1, k, r, list, n, multi, false, phaseGap, ended)
                 CR.fadeEnd()
-                last = n
               end
               cx = nx
             end
             start = start + width
           end
-          if last then BC.segNow = CR.segK[last] end
         end
         ui.popClipRect()
       end
