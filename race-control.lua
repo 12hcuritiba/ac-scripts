@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V258 - 2026.11.01'
+local RC_VERSION = 'V259 - 2026.11.01'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -15729,7 +15729,7 @@ float4 main(PS_IN pin) {
         elseif key then BC.opt[key] = math.min(math.max(math.floor(tonumber(v) or BC.opt[key]), 2), 600)
         else return false end
       elseif a == 'CR' then
-        local key = w[2] or ''
+        local key = (w[2] or ''):lower()
         if not CR_KEYS[key] then return false end
         BC.opt[key] = crValue(key, w[3] or '')
       elseif a == 'ORG' then
