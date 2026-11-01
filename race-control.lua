@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V260 - 2026.11.01'
+local RC_VERSION = 'V261 - 2026.11.01'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -17539,12 +17539,13 @@ float4 main(PS_IN pin) {
       M.part = parts and (M.part or 0) % (#keys + 1) or 0
       local pr = M.part > 0 and parts[keys[M.part]] or rows
       local p0 = M.part > 0 and 0 or pins
-      local was = M.page
-      if run then CR.move(M, BC.opt.vw, BC.opt.speed or 60, paged and BC.opt.vps or nil, math.max(math.ceil((#pr - p0) / per), 1), nil, height) else M.left = nil end
+      local np = math.max(math.ceil((#pr - p0) / per), 1)
+      local was, wasPt = M.page, M.pt
+      if run then CR.move(M, BC.opt.vw, BC.opt.speed or 60, paged and BC.opt.vps or nil, np, nil, height) else M.left = nil end
       ui.pushClipRect(TMP.a:set(x1, y), TMP.b:set(x2, ly2))
       if run and paged then
         local page, pkey = M.page, M.part > 0 and keys[M.part] or 'ALL'
-        if parts and was and M.page < was then page, M.part = was, (M.part + 1) % (#keys + 1) end
+        if parts and was == np and wasPt and M.pt < wasPt then page, M.part = was, (M.part + 1) % (#keys + 1) end
         local first, last = p0 + (page - 1) * per, nil
         for j = 1, per do
           local n = first + j
@@ -18056,10 +18057,10 @@ float4 main(PS_IN pin) {
             acc = acc + wd
           end
           for n = #starts, np + 1, -1 do starts[n] = nil end
-          local was = M.page
+          local was, wasPt = M.page, M.pt
           CR.move(M, BC.opt.hw, BC.opt.speed or 60, BC.opt.hps, np)
           local page = M.page
-          if cyc and was and M.page < was then page, M.part = was, (M.part + 1) % (#keys + 1) end
+          if cyc and was == np and wasPt and M.pt < wasPt then page, M.part = was, (M.part + 1) % (#keys + 1) end
           local cx = x
           for n = starts[page] or 1, (starts[page + 1] or #pl + 1) - 1 do
             item(math.floor(cx + 0.5), y1, k, pl[n], pl, n, multi, false, phaseGap, ended, nil, nil, pb)
