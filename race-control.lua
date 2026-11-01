@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V259 - 2026.11.01'
+local RC_VERSION = 'V260 - 2026.11.01'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -17212,7 +17212,7 @@ float4 main(PS_IN pin) {
     function CR.gridDraw(w, h, k, id)
       local G = CR.gr
       if G.want and (G.want ~= Session.id or Clock.greenMs) then G.want = nil end
-      if G.want and not CR.sn.at and not CR.res.at and not BC.openAt then
+      if G.want and not CR.sn.at and not CR.sn.want and not CR.res.at and not BC.openAt then
         G.want = nil
         if BC.opt.gr then
           local rows = {}
@@ -17288,7 +17288,9 @@ float4 main(PS_IN pin) {
       end
     end
     function BC.snameShow(secs, kind)
-      CR.sn.at, CR.sn.secs, CR.sn.kind = state.ui.clock, math.max(tonumber(secs) or 6, 2), kind
+      local D = RecordSync.base.dirPen
+      CR.sn.want, CR.sn.at, CR.sn.secs, CR.sn.kind = true, nil, math.max(tonumber(secs) or 6, 2), kind
+      CR.sn.pitRef, CR.sn.pitLeft = D.pit, D.busy and 2 or 1
       CR.sn.wins = kind == 'cool' and CR.winners() or nil
     end
     function CR.turn()
@@ -17312,27 +17314,37 @@ float4 main(PS_IN pin) {
     end
     function CR.sname(w, h, k, id)
       local S = CR.sn
+      if S.want then
+        local D = RecordSync.base.dirPen
+        if D.pit ~= S.pitRef then S.pitRef, S.pitLeft = D.pit, S.pitLeft - 1 end
+        if S.kind == 'cool' or (S.pitLeft <= 0 and RecordSync.base.forecast.done) then
+          S.want, S.at = nil, state.ui.clock
+          local T = TEXTS.bc
+          local _, _, total, sname = sessionLine()
+          local ss = ac.getSession(Session.index or sim.currentSessionIndex or 0)
+          local isRace = ss and ss.type == ac.SessionType.Race
+          local proc = isRace and (config.formation.procedure == 'STANDING' and T.snStart[2] or config.formation.procedure == 'ROLLING' and T.snStart[1]) or nil
+          local cool = S.kind == 'cool'
+          S.line = Lang.letters.upper(cool and sname or ((S.kind == 'form' and (sname .. ' · ') or '') .. total .. (proc and (' · ' .. proc) or '')))
+          S.big = Lang.letters.upper(S.kind == 'form' and TEXTS.fmTitle or cool and T.coolDown or sname)
+          S.kk = Lang.letters.upper(tostring((BroadcastEvent.ev or {}).name or T.snK))
+          local fc = Weather.forecast or RecordSync.base.forecast.list or {}
+          local segs = #fc > 0 and Radar.textSegments(fc) or {}
+          local now = segs[2] or segs[1]
+          S.cond = { { T.opGrip, RecordSync.base.dirPen.grip and tostring(TEXTS.trackGrip[CarRead.gripName(RecordSync.base.dirPen.grip)] or '-') or '-' },
+            { T.opAir, string.format('%.0f °C', CarRead.num(sim.ambientTemperature)) }, { T.opRoad, string.format('%.0f °C', CarRead.num(sim.roadTemperature)) },
+            { T.opNow, now and Radar.skyOf(now) or '-' }, { T.opRain, now and string.format(TEXTS.wxProb, math.floor(now.chance * 100 + 0.5)) or '-' } }
+          if now then S.cond[6] = { T.opWind, Radar.windText(now, true), dir = now.dir } end
+        end
+      end
       if not S.at then return end
       local d = state.ui.clock - S.at
       if d >= S.secs then S.at = nil return end
       local out = math.min(d / (S.secs * 0.07), 1, math.max((S.secs * 0.86 - d) / (S.secs * 0.08), 0))
       if out <= 0 then return end
       local T = TEXTS.bc
-      local _, _, total, sname = sessionLine()
-      local ss = ac.getSession(Session.index or sim.currentSessionIndex or 0)
-      local isRace = ss and ss.type == ac.SessionType.Race
-      local proc = isRace and (config.formation.procedure == 'STANDING' and T.snStart[2] or config.formation.procedure == 'ROLLING' and T.snStart[1]) or nil
       local cool = S.kind == 'cool'
-      local line = Lang.letters.upper(cool and sname or ((S.kind == 'form' and (sname .. ' · ') or '') .. total .. (proc and (' · ' .. proc) or '')))
-      local big = Lang.letters.upper(S.kind == 'form' and TEXTS.fmTitle or cool and T.coolDown or sname)
-      local kk = Lang.letters.upper(tostring((BroadcastEvent.ev or {}).name or T.snK))
-      local fc = Weather.forecast or RecordSync.base.forecast.list or {}
-      local segs = #fc > 0 and Radar.textSegments(fc) or {}
-      local now = segs[2] or segs[1]
-      local cond = { { T.opGrip, RecordSync.base.dirPen.grip and tostring(TEXTS.trackGrip[CarRead.gripName(RecordSync.base.dirPen.grip)] or '-') or '-' },
-        { T.opAir, string.format('%.0f °C', CarRead.num(sim.ambientTemperature)) }, { T.opRoad, string.format('%.0f °C', CarRead.num(sim.roadTemperature)) },
-        { T.opNow, now and Radar.skyOf(now) or '-' }, { T.opRain, now and string.format(TEXTS.wxProb, math.floor(now.chance * 100 + 0.5)) or '-' } }
-      if now then cond[6] = { T.opWind, Radar.windText(now, true), dir = now.dir } end
+      local line, big, kk, cond = S.line, S.big, S.kk, S.cond
       local cw = math.max(640 * k, textWidth(big, F.snBig, 46 * k) + 72 * k, textWidth(line, F.snLine, 19 * k) + 72 * k)
       local cellW = 0
       for _, c in ipairs(cond) do cellW = cellW + math.max(textWidth(c[2], F.rb, 20 * k) + (c.dir and 22 * k or 0), textWidth(Lang.letters.upper(c[1]), F.lab, 12 * k)) + 22 * k end
