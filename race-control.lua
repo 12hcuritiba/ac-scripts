@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V262 - 2026.11.02'
+local RC_VERSION = 'V264 - 2026.11.02'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -17975,6 +17975,7 @@ float4 main(PS_IN pin) {
       CR.secScan()
       CR.turn()
       local page = CR.resPage()
+      BC.resOn = page ~= nil or sessionOver()
       drawCredits(w, h, page ~= nil)
       local id = identity()
       if page then CR.resDraw(w, h, k, id, page) end
@@ -20439,8 +20440,10 @@ local drawDesktopUI = (function()
           end
           return true
         end
-        if Broadcast and Broadcast.orgOn and Broadcast.orgOn() and Session.phase == 'resultados' then
-          script.drawUI(true)
+        if Broadcast and Broadcast.orgOn and Broadcast.orgOn() and (Session.phase == 'resultados' or Broadcast.resOn) then
+          Desktop.fontCheck()
+          local sz = ac.getUI().windowSize
+          Broadcast.draw(sz.x, sz.y)
           Desktop.hudDrawn = true
           return true
         end
