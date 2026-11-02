@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V261 - 2026.11.01'
+local RC_VERSION = 'V262 - 2026.11.02'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2639,6 +2639,7 @@ do
       if BroadcastEvent then BroadcastEvent.ask() end
       config.eventRaces = tonumber(body:match('races=(%d+)')) or 1
       config.raceOverTime = tonumber(body:match('raceOverTime=(%d+)')) or config.raceOverTime
+      config.qualifyWait = tonumber(body:match('qualifyWait=(%d+)')) or config.qualifyWait
       config.raceNo = tonumber(body:match('raceNo=(%d+)'))
       local cc = body:match('carClasses=([^|]*)')
       if cc and cc ~= '' and cc ~= config.carClassesText then
@@ -3678,7 +3679,8 @@ do
   local function newInfo() return { crash = 0, cut = 0, spin = 0, pen = {} } end
   sessionPart('lap', Lap, function()
     return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false }, last = SESSION_NONE, others = {},
-      best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false, baseDone = false, baseBusy = false, baseTries = 0 }
+      best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false, baseDone = false, baseBusy = false, baseTries = 0,
+      ownBt = 0 }
   end, { 'splits' })
   local P = {}
   sessionPart('lapWay', P, function()
@@ -3936,7 +3938,7 @@ do
     end
     return b
   end
-  local function otherKeep(i, n, best, sec, last, lastOk, lastSec)
+  local function otherKeep(i, n, best, sec, last, lastOk, lastSec, lastT, bestT)
     local o = Lap.others[i]
     if not o then
       o = { n = 0, best = 0, last = 0, lastOk = false, s = {}, t = state.ui.clock }
@@ -3944,13 +3946,16 @@ do
     end
     local recent = n >= o.n
     if n > o.n then o.n = n end
+    local bt = (bestT or 0) > 0 and bestT or (lastT or 0)
+    if best > 0 and best == o.best and bt > 0 and bt < (o.bt or math.huge) then o.bt = bt end
     if best > 0 and (o.best == 0 or best < o.best) then
-      o.best = best
+      o.best, o.bt = best, bt > 0 and bt or nil
       for q in pairs(o.s) do o.s[q] = nil end
       local k = 0
       for v in tostring(sec or ''):gmatch('%d+') do o.s[k], k = tonumber(v), k + 1 end
     end
     if last > 0 and recent then o.last, o.lastOk = last, lastOk end
+    if recent and (lastT or 0) > 0 then o.ct = lastT end
     if recent and lastSec and lastSec ~= '' then
       local s, k = {}, 0
       for v in tostring(lastSec):gmatch('%d+') do s[k], k = tonumber(v), k + 1 end
@@ -3967,9 +3972,11 @@ do
     lapOk = ac.StructItem.uint8(),
     lapSid = ac.StructItem.uint32(),
     lapLastSec = ac.StructItem.string(48),
+    lapT = ac.StructItem.uint32(),
   }, function(sender, msg)
     if not sender or sender.index == 0 or tonumber(msg.lapSid) ~= (Session.id or 0) then return end
-    otherKeep(sender.index, tonumber(msg.lapN) or 0, tonumber(msg.lapBest) or 0, msg.lapSec, tonumber(msg.lapLast) or 0, tonumber(msg.lapOk) == 1, msg.lapLastSec)
+    otherKeep(sender.index, tonumber(msg.lapN) or 0, tonumber(msg.lapBest) or 0, msg.lapSec, tonumber(msg.lapLast) or 0, tonumber(msg.lapOk) == 1, msg.lapLastSec,
+      tonumber(msg.lapT) or 0, 0)
   end, nil, nil, { processPostponed = true })
   local BASE_TRIES = 3
   RecordSync.base.beat[#RecordSync.base.beat + 1] = function()
@@ -3990,10 +3997,11 @@ do
         local car = slotOf and slot and slot ~= mine and slotOf(slot) or nil
         if car and car.index ~= 0 then
           otherKeep(car.index, tonumber(c.laps) or 0, tonumber(c.best) or 0, type(c.bestS) == 'table' and table.concat(c.bestS, '/') or '',
-            tonumber(c.last) or 0, c.lastValid ~= false, type(c.lastS) == 'table' and table.concat(c.lastS, '/') or '')
+            tonumber(c.last) or 0, c.lastValid ~= false, type(c.lastS) == 'table' and table.concat(c.lastS, '/') or '', tonumber(c.cross) or 0, tonumber(c.bestT) or 0)
           if Broadcast and Broadcast.secBase then Broadcast.secBase(car.index, c.drv) end
           n = n + 1
         end
+        if slot == mine and (tonumber(c.bestT) or 0) > 0 and tonumber(c.best) == (Lap.ownBest and Lap.ownBest() or 0) then Lap.ownBt = tonumber(c.bestT) end
       end
       ac.log(string.format('race-control: laps of %d other cars from the base (session id %d)', n, sid))
     end)
@@ -4013,15 +4021,17 @@ do
     for _, v in ipairs(Lap.last and Lap.last.s or {}) do lastParts[#lastParts + 1] = tostring(math.floor(v)) end
     local msg = { lapN = math.min(n, 65535), lapBest = math.floor(best), lapSec = table.concat(parts, '/'),
       lapLast = Lap.last and math.max(math.floor(Lap.last.ms or 0), 0) or 0, lapOk = Lap.last and Lap.last.valid and 1 or 0, lapSid = Session.id or 0,
-      lapLastSec = table.concat(lastParts, '/') }
+      lapLastSec = table.concat(lastParts, '/'), lapT = Lap.last and math.max(math.floor(Lap.last.t or 0), 0) or 0 }
+    if all.lap and Lap.last and all.lap.lap == Lap.last.lap and (Lap.last.t or 0) > 0 then Lap.ownBt = Lap.last.t end
     Lap.sentBest, Lap.sentT = { n = n, ms = best, lap = all.lap, msg = msg }, state.ui.clock
     OnlineQueue.push(sendLap, msg, nil, true)
   end
   function Lap.of(i)
-    if i == 0 then return Lap.number(), Lap.ownBest and Lap.ownBest() or 0, Lap.last and Lap.last.ms or 0, Lap.last ~= nil and Lap.last.valid == true end
+    if i == 0 then return Lap.number(), Lap.ownBest and Lap.ownBest() or 0, Lap.last and Lap.last.ms or 0, Lap.last ~= nil and Lap.last.valid == true,
+      Lap.last and Lap.last.t or 0, Lap.ownBt or 0 end
     local o = Lap.others[i]
     if not o then return nil end
-    return o.n, o.best, o.last or 0, o.lastOk == true
+    return o.n, o.best, o.last or 0, o.lastOk == true, o.ct or 0, o.bt or 0
   end
   function Lap.sessionBest()
     local best = Lap.ownBest and Lap.ownBest() or 0
@@ -9875,7 +9885,19 @@ do
   local function bestOrder(a, b)
     if (a.best > 0) ~= (b.best > 0) then return a.best > 0 end
     if a.best > 0 and a.best ~= b.best then return a.best < b.best end
-    return a.order < b.order
+    if a.best > 0 and a.bt ~= b.bt then return a.bt < b.bt end
+    return a.slot < b.slot
+  end
+  local function arrivalOrder(a, b)
+    if a.laps ~= b.laps then return a.laps > b.laps end
+    if a.laps > 0 and a.ct ~= b.ct then return a.ct < b.ct end
+    return a.slot < b.slot
+  end
+  local function lineGap(b, a)
+    if not a or not b then return nil, nil end
+    if a.laps ~= b.laps then return nil, math.max(a.laps - b.laps, 0) end
+    if (a.ct or 0) > 0 and (b.ct or 0) > 0 then return (b.ct - a.ct) / 1000, 0 end
+    return nil, nil
   end
   function RaceTable.refresh()
     local session = ac.getSession(Session.index)
@@ -9889,7 +9911,7 @@ do
         local t = c and CarsTick.byIndex[c.index]
         if t and not t.staff then
           stopsWatch(c)
-          local n, b = Lap.of(c.index)
+          local n, b, _, _, ct, bt = Lap.of(c.index)
           local laps, best = n or 0, b or 0
           local inBoard = (e.laps or 0) > 0 or (e.bestLapTimeMs or 0) > 0
           if (c.index == 0 or c.isConnected) and not RaceTable.seen[c.index] then
@@ -9902,13 +9924,15 @@ do
           end
           r.number, r.name, r.team, r.laps, r.best = t.number, t.name, t.team, laps, best
           r.spline, r.inPit, r.connected, r.stops, r.absent = CarRead.num(c.splinePosition), c.isInPitlane, c.isConnected, RaceTable.stops[c.index] or 0, nil
-          r.pos, r.classPos, r.order = nil, nil, nil
+          r.ct, r.bt, r.slot = ct or 0, bt or 0, c.sessionID or c.index
+          r.pos, r.classPos = nil, nil
           if race then Relative.track(r, c, n, state.ui.clock) end
           if RaceTable.seen[c.index] or laps > 0 or best > 0 or inBoard then
             rows[#rows + 1] = r
+            if (c.index == 0 or c.isConnected) and (race or CarRead.num(c.speedKmh) > 8) then rows.oldest = math.min(rows.oldest or math.huge, r.ct) end
           else
             r.absent, r.laps, r.best, r.stops = true, 0, 0, 0
-            absent[#absent + 1] = r
+            absent[r.slot] = r
           end
           byIndex[c.index] = r
         elseif t and c.index == 0 and CarRead.isOrg(0) then
@@ -9920,28 +9944,34 @@ do
       end
     end
     if added then seenSave() end
-    if sim.raceSessionType ~= ac.SessionType.Race then
-      for k, r in ipairs(rows) do r.order = k end
-      table.sort(rows, bestOrder)
-    end
+    local arrival = race and Clock.endMs ~= nil
+    if not race or arrival then table.sort(rows, arrival and arrivalOrder or bestOrder) end
     local classPos2 = {}
     local classLead, classAhead = {}, {}
+    local gap = arrival and lineGap or Relative.gap
     for k, r in ipairs(rows) do
       if r.class then classPos2[r.class] = (classPos2[r.class] or 0) + 1 end
       r.pos, r.classPos = k, r.class and classPos2[r.class] or nil
       if (r.laps or 0) > 0 then rows.anyLap = true end
       if race then
-        r.gapS, r.gapL = Relative.gap(r, k > 1 and rows[k - 1] or nil)
-        r.leadS, r.leadL = Relative.gap(r, k > 1 and rows[1] or nil)
+        r.gapS, r.gapL = gap(r, k > 1 and rows[k - 1] or nil)
+        r.leadS, r.leadL = gap(r, k > 1 and rows[1] or nil)
         local cl = r.class or ''
-        r.cGapS, r.cGapL = Relative.gap(r, classAhead[cl])
-        r.cLeadS, r.cLeadL = Relative.gap(r, classLead[cl])
+        r.cGapS, r.cGapL = gap(r, classAhead[cl])
+        r.cLeadS, r.cLeadL = gap(r, classLead[cl])
         classLead[cl] = classLead[cl] or r
         classAhead[cl] = r
       end
     end
     RaceTable.present = #rows
-    for _, r in ipairs(absent) do rows[#rows + 1] = r end
+    for s = 0, (sim.carsCount or 1) - 1 do
+      local r = absent[s]
+      if r then
+        rows[#rows + 1] = r
+        if r.class then classPos2[r.class] = (classPos2[r.class] or 0) + 1 end
+        r.pos, r.classPos = #rows, r.class and classPos2[r.class] or nil
+      end
+    end
     RaceTable.rows, RaceTable.byIndex = rows, byIndex
   end
   function RaceTable.progress(r) return r.laps + r.spline end
@@ -15928,12 +15958,15 @@ float4 main(PS_IN pin) {
       return BC.opt.place, false
     end
     local function sessionOver()
-      if Session.phase == 'resultados' then return true end
       local ss = ac.getSession(Session.index)
-      if not ss then return false end
-      if ss.type == ac.SessionType.Race then return Clock.endMs ~= nil end
-      local total = Clock.ms('total', ss)
-      return total ~= nil and total > 0 and Clock.ms(nil, ss) >= total
+      local over, endAt = false, nil
+      if ss and ss.type == ac.SessionType.Race then
+        over, endAt = Clock.endMs ~= nil, Clock.endMs
+      elseif ss then
+        local total = Clock.ms('total', ss)
+        over, endAt = total ~= nil and total > 0 and Clock.ms(nil, ss) >= total, ss.durationMinutes * 60000
+      end
+      return over or Session.phase == 'resultados', over and endAt or nil
     end
     local function flagNow()
       local T = TEXTS.bc
@@ -16523,42 +16556,52 @@ float4 main(PS_IN pin) {
       local race = sim.raceSessionType == ac.SessionType.Race
       local n = 0
       for _, r in ipairs(RaceTable.rows or {}) do
-        if not r.absent then
-          n = n + 1
-          leadAll = leadAll or r
-          local first = leadCls[r.class] == nil
-          leadCls[r.class] = leadCls[r.class] or r
-          local function gapTo(lead, isFirst, cls)
-            if race then
-              if isFirst then return string.format(T.laps, r.laps or 0) end
-              return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-')
-            end
-            if isFirst then return '-' end
-            return ((r.best or 0) > 0 and (lead.best or 0) > 0) and string.format('+%.3f', (r.best - lead.best) / 1000) or '-'
+        n = n + 1
+        leadAll = leadAll or r
+        local first = leadCls[r.class] == nil
+        leadCls[r.class] = leadCls[r.class] or r
+        local function gapTo(lead, isFirst, cls)
+          if r.absent then return '-' end
+          if race then
+            if isFirst then return string.format(T.laps, r.laps or 0) end
+            return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-')
           end
-          rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = nameOf(r), team = teamOf(r), class = r.class, laps = r.laps or 0,
-            best = r.best or 0, tyre = BroadcastAlerts.tyreOf[r.index], fast = r.index == BC.fastIdx, gapAll = gapTo(leadAll, n == 1, false),
-            gapCls = gapTo(leadCls[r.class], first, true) }
+          if isFirst then return '-' end
+          return ((r.best or 0) > 0 and (lead.best or 0) > 0) and string.format('+%.3f', (r.best - lead.best) / 1000) or '-'
         end
+        rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = nameOf(r), team = teamOf(r), class = r.class, laps = r.laps or 0,
+          best = r.best or 0, tyre = BroadcastAlerts.tyreOf[r.index], fast = r.index == BC.fastIdx, gapAll = gapTo(leadAll, n == 1, false),
+          gapCls = gapTo(leadCls[r.class], first, true) }
       end
       return rows
     end
     function CR.resPage()
       local R = CR.res
       if not BC.opt.rs then R.at = nil return nil end
-      local showing = Session.phase == 'resultados'
-      if showing and not R.at and R.sid ~= Session.id then
-        local _, _, total, name = sessionLine()
-        R.at, R.sid, R.rows, R.name, R.total = state.ui.clock, Session.id, CR.resTake(), name, total
-        R.movePage = nil
-        R.pages = { 'ALL' }
-        if BC.opt.rc and #(BC.classKeys or {}) > 1 then for _, key in ipairs(BC.classKeys) do R.pages[#R.pages + 1] = key end end
+      if not R.at and Session.id and R.sid ~= Session.id and RaceTable.present ~= nil then
+        local _, endAt = sessionOver()
+        local rows = RaceTable.rows or {}
+        local lim
+        if sim.raceSessionType == ac.SessionType.Race then
+          local ro = tonumber(config.raceOverTime)
+          lim = ro and ro * 1000
+        else
+          local best, qw = rows[1] and rows[1].best or 0, tonumber(config.qualifyWait)
+          if best > 0 and qw then lim = best * qw / 100 end
+        end
+        if endAt and ((rows.oldest or math.huge) > endAt or (lim and serverTimeMs() - endAt >= lim)) then
+          local _, _, total, name = sessionLine()
+          R.at, R.sid, R.rows, R.name, R.total = state.ui.clock, Session.id, CR.resTake(), name, total
+          R.movePage = nil
+          R.pages = { 'ALL' }
+          if BC.opt.rc and #(BC.classKeys or {}) > 1 then for _, key in ipairs(BC.classKeys) do R.pages[#R.pages + 1] = key end end
+        end
       end
       if not R.at then return nil end
       local d = state.ui.clock - R.at
       local total = BC.opt.rsg + (#R.pages - 1) * BC.opt.rcs
       if BC.opt.re == 'TURN' then
-        if not showing then R.at = nil return nil end
+        if R.sid ~= Session.id then R.at = nil return nil end
         d = d % total
       elseif d >= total then
         R.at = nil
