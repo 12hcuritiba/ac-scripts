@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V263 - 2026.11.02'
+local RC_VERSION = 'V262 - 2026.11.02'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -20430,13 +20430,18 @@ local drawDesktopUI = (function()
       ui.onExclusiveHUD(function(mode)
         if not ServerGuard.ok() then return end
         Connection.hudMode = mode
-        if Broadcast and (Broadcast.on() or Broadcast.orgOn and Broadcast.orgOn()) then
+        if Broadcast and Broadcast.on() then
           if mode == 'game' or Broadcast.entered then
             script.drawUI(true)
             Desktop.hudDrawn = true
           else
             drawSessionWait()
           end
+          return true
+        end
+        if Broadcast and Broadcast.orgOn and Broadcast.orgOn() and Session.phase == 'resultados' then
+          script.drawUI(true)
+          Desktop.hudDrawn = true
           return true
         end
         if mode == 'menu' then
