@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V264 - 2026.11.02'
+local RC_VERSION = 'V265 - 2026.11.02'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -15968,6 +15968,7 @@ float4 main(PS_IN pin) {
       end
       return over or Session.phase == 'resultados', over and endAt or nil
     end
+    BC.sessionOver = sessionOver
     local function flagNow()
       local T = TEXTS.bc
       if sessionOver() then return 'end', T.finished end
@@ -20440,7 +20441,7 @@ local drawDesktopUI = (function()
           end
           return true
         end
-        if Broadcast and Broadcast.orgOn and Broadcast.orgOn() and (Session.phase == 'resultados' or Broadcast.resOn) then
+        if Broadcast and Broadcast.orgOn and Broadcast.orgOn() and (Session.phase == 'resultados' or Broadcast.resOn or Broadcast.sessionOver and Broadcast.sessionOver()) then
           Desktop.fontCheck()
           local sz = ac.getUI().windowSize
           Broadcast.draw(sz.x, sz.y)
