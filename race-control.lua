@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V264 - 2026.11.02'
+local RC_VERSION = 'V266 - 2026.11.03'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16558,8 +16558,9 @@ float4 main(PS_IN pin) {
       for _, r in ipairs(RaceTable.rows or {}) do
         n = n + 1
         leadAll = leadAll or r
-        local first = leadCls[r.class] == nil
-        leadCls[r.class] = leadCls[r.class] or r
+        local cl = r.class or ''
+        local first = leadCls[cl] == nil
+        leadCls[cl] = leadCls[cl] or r
         local function gapTo(lead, isFirst, cls)
           if r.absent then return '-' end
           if race then
@@ -16571,7 +16572,7 @@ float4 main(PS_IN pin) {
         end
         rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = nameOf(r), team = teamOf(r), class = r.class, laps = r.laps or 0,
           best = r.best or 0, tyre = BroadcastAlerts.tyreOf[r.index], fast = r.index == BC.fastIdx, gapAll = gapTo(leadAll, n == 1, false),
-          gapCls = gapTo(leadCls[r.class], first, true) }
+          gapCls = gapTo(leadCls[cl], first, true) }
       end
       return rows
     end
