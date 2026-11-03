@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V266 - 2026.11.03'
+local RC_VERSION = 'V267 - 2026.11.03'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -15423,14 +15423,14 @@ float4 main(PS_IN pin) {
       svs = true, sos = true, sns = true, rop = true, oop = true, sop = true }
     local BOOLS = { pb = true, pt = true, px = true, rs = true, rc = true, oe = true, ot = true, oi = true, sv = true, so = true, org = true }
     local CR_ORDER = { 'hm', 'hps', 'hw', 'vm', 'vps', 'vw', 'rpn', 'rw', 'ipn', 'iw', 'fl', 'fls', 'cl', 'cls', 'fcop', 'tk', 'tks', 'tkop', 'lc', 'lcs', 'lcop', 'gr', 'grs',
-      'grm', 'grps', 'grop', 'sg', 'scl', 'st', 'sts', 'sx', 'sxs', 'pm', 'ptw', 'ptws', 'pbx', 'pbxs', 'allop', 'secop', 'pitop', 'grw', 'im', 'ips', 'qb', 'qbs' }
+      'grm', 'grps', 'grop', 'sg', 'scl', 'st', 'sts', 'sx', 'sxs', 'pm', 'ptw', 'ptws', 'pbx', 'pbxs', 'allop', 'secop', 'pitop', 'grw', 'im', 'ips', 'qb', 'qbs', 'rh' }
     local CR_KEYS = { hm = 'move', hps = 'page', hw = 'wait', vm = 'move', vps = 'page', vw = 'wait', rpn = 'pins', rw = 'wait', ipn = 'pins', iw = 'wait', fl = 'bool',
       fls = 'page', cl = 'bool', cls = 'page', fcop = 'op', tk = 'bool', tks = 'page', tkop = 'op', lc = 'bool', lcs = 'page', lcop = 'op', gr = 'bool', grs = 'page',
       grm = 'move', grps = 'page', grop = 'op', sg = 'bool', scl = 'bool', st = 'bool', sts = 'page', sx = 'bool', sxs = 'page', pm = 'bool', ptw = 'bool', ptws = 'page',
-      pbx = 'bool', pbxs = 'page', allop = 'op', secop = 'op', pitop = 'op', grw = 'wait', im = 'move', ips = 'page', qb = 'bool', qbs = 'wait' }
+      pbx = 'bool', pbxs = 'page', allop = 'op', secop = 'op', pitop = 'op', grw = 'wait', im = 'move', ips = 'page', qb = 'bool', qbs = 'wait', rh = 'wait' }
     local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 90,
       tk = true, tks = 10, tkop = 90, lc = true, lcs = 12, lcop = 90, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 90, sg = true, scl = true, st = true, sts = 5,
-      sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 100, secop = 100, pitop = 100, grw = 5, im = 'ROLL', ips = 8, qb = true, qbs = 0 }
+      sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 100, secop = 100, pitop = 100, grw = 5, im = 'ROLL', ips = 8, qb = true, qbs = 0, rh = 5 }
     for k, v in pairs(CR_START) do
       BC.opt[k] = v
       if CR_KEYS[k] == 'bool' then BOOLS[k] = true elseif CR_KEYS[k] ~= 'move' then NUMS[k] = true end
@@ -15752,6 +15752,7 @@ float4 main(PS_IN pin) {
         local k, v = (w[2] or ''):upper(), w[3] or ''
         local key = CREDIT_KEYS[a .. ' ' .. k]
         if a == 'OPEN' and k == 'GO' then BC.openAt, BC.openWant = nil, true
+        elseif a == 'RES' and k == 'GO' then BC.resWant = true
         elseif a == 'SNAME' and k == 'NOW' then BC.snameShow(BC.opt.sns)
         elseif a == 'RES' and k == 'END' then BC.opt.re = v:upper() == 'FIX' and 'FIX' or 'TURN'
         elseif key and BOOLS[key] then BC.opt[key] = v == '1'
@@ -15866,7 +15867,7 @@ float4 main(PS_IN pin) {
       local bw, bh = 32 * k, 26 * k
       if fk == 'end' then
         local e = 1.25 * k
-        TMP.chequered(bx + e, by + e, bx + bw - e, by + bh - e, 6, 5, CHK_LIGHT, CHK_DARK)
+        TMP.chequered(bx + e, by + e, bx + bw - e, by + bh - e, 6, 4, CHK_LIGHT, CHK_DARK)
         frame(bx, by, bx + bw, by + bh, CHK_LIGHT, 2.5 * k)
         return
       end
@@ -16578,8 +16579,10 @@ float4 main(PS_IN pin) {
     end
     function CR.resPage()
       local R = CR.res
-      if not BC.opt.rs then R.at = nil return nil end
-      if not R.at and Session.id and R.sid ~= Session.id and RaceTable.present ~= nil then
+      local man = BC.resWant
+      BC.resWant = nil
+      if not BC.opt.rs and not R.man and not man then R.at = nil return nil end
+      if man or not R.at and Session.id and R.sid ~= Session.id and RaceTable.present ~= nil then
         local _, endAt = sessionOver()
         local rows = RaceTable.rows or {}
         local lim
@@ -16590,9 +16593,10 @@ float4 main(PS_IN pin) {
           local best, qw = rows[1] and rows[1].best or 0, tonumber(config.qualifyWait)
           if best > 0 and qw then lim = best * qw / 100 end
         end
-        if endAt and ((rows.oldest or math.huge) > endAt or (lim and serverTimeMs() - endAt >= lim)) then
+        if man or endAt and serverTimeMs() - endAt >= BC.opt.rh * 1000 and ((rows.oldest or math.huge) > endAt or (lim and serverTimeMs() - endAt >= lim)) then
           local _, _, total, name = sessionLine()
-          R.at, R.sid, R.rows, R.name, R.total = state.ui.clock, Session.id, CR.resTake(), name, total
+          R.at, R.rows, R.name, R.total, R.man = state.ui.clock, CR.resTake(), name, total, man
+          if not man then R.sid = Session.id end
           R.movePage = nil
           R.pages = { 'ALL' }
           if BC.opt.rc and #(BC.classKeys or {}) > 1 then for _, key in ipairs(BC.classKeys) do R.pages[#R.pages + 1] = key end end
@@ -16601,12 +16605,12 @@ float4 main(PS_IN pin) {
       if not R.at then return nil end
       local d = state.ui.clock - R.at
       local total = BC.opt.rsg + (#R.pages - 1) * BC.opt.rcs
-      if BC.opt.re == 'TURN' then
+      if BC.opt.re == 'TURN' and not R.man then
         if R.sid ~= Session.id then R.at = nil return nil end
         d = d % total
       elseif d >= total then
-        R.at = nil
-        if BC.opt.sv or CR.sn.pending then BC.snameShow(BC.opt.svs) end
+        R.at, R.man = nil, nil
+        if BC.opt.sv and CR.sn.pending then BC.snameShow(BC.opt.svs) end
         CR.sn.pending = false
         return nil
       end
@@ -16646,9 +16650,8 @@ float4 main(PS_IN pin) {
       local cx = x2 - 26 * k - cqw
       drawText(cq, F.chq, 15 * k, TMP.a:set(cx, y1 + 24 * k), PAPER)
       cx = cx - 12 * k - 44 * k
-      for c = 0, 3 do for rr = 0, 2 do
-        rect(cx + c * 11 * k, y1 + 16 * k + rr * 10 * k, cx + (c + 1) * 11 * k, y1 + 16 * k + (rr + 1) * 10 * k, (c + rr) % 2 == 0 and PAPER or LT_INK)
-      end end
+      local e = 0.75 * k
+      TMP.chequered(cx + e, y1 + 16 * k + e, cx + 44 * k - e, y1 + 46 * k - e, 6, 4, LT_INK, PAPER)
       frame(cx, y1 + 16 * k, cx + 44 * k, y1 + 46 * k, PAPER, 1.5 * k)
       local y = y1 + headH
       if multi then
@@ -17354,7 +17357,7 @@ float4 main(PS_IN pin) {
       if first and sessionOver() then CR.sn.cool = sid end
       if not first and sim.raceSessionType == ac.SessionType.Race then CR.gr.want = sid end
       if first or not BC.opt.sv then return end
-      if CR.res.at and BC.opt.re == 'FIX' then CR.sn.pending = true else BC.snameShow(BC.opt.svs) end
+      if CR.res.at and (BC.opt.re == 'FIX' or CR.res.man) then CR.sn.pending = true else BC.snameShow(BC.opt.svs) end
     end
     function CR.sname(w, h, k, id)
       local S = CR.sn
@@ -17977,7 +17980,8 @@ float4 main(PS_IN pin) {
       CR.turn()
       local page = CR.resPage()
       BC.resOn = page ~= nil or sessionOver()
-      drawCredits(w, h, page ~= nil)
+      drawCredits(w, h, page ~= nil or (BC.opt.rs and CR.res.sid ~= nil and CR.res.sid == Session.id) or (BC.opt.sv and Session.id == nil and Session.leaving ~= nil)
+        or BC.openAt ~= nil or BC.openWant or ((CR.sn.at ~= nil or CR.sn.want) and CR.sn.kind == nil) or CR.gr.at ~= nil)
       local id = identity()
       if page then CR.resDraw(w, h, k, id, page) end
       CR.opening(w, h, k, id)
@@ -18006,7 +18010,8 @@ float4 main(PS_IN pin) {
       end
       BAR.mult = opOf(BC.opt.op, 82)
       BOXBG.mult, SAY_BG.mult = 0.9 * opOf(100, 100), 0.96 * opOf(100, 100)
-      if onlyLogos then return end
+      if onlyLogos then BC.barHid = true return end
+      if BC.barHid then BC.barHid, CR.barMove, towerMove = nil, {}, {} end
       if not BC.opt.bar then
         voices(w, h, k, BC.opt.form == 'V')
         return
