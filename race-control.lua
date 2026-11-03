@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V267 - 2026.11.03'
+local RC_VERSION = 'V268 - 2026.11.03'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -562,6 +562,7 @@ local TEXTS = {
     thTimes = 'Times', thFight = 'Battle', thClass = 'Class', lastLap = 'Last lap', bestLap = 'Best lap', ahead = 'Ahead', behind = 'Behind', classK = 'Class',
     classPos = 'Class position', narrator = 'Narrator', commentator = 'Commentator',
     setF1 = 'Car (F1)', setF6 = 'Car onboard (F6)', f1Cams = { 'Cockpit', 'Chase', 'Far chase', 'Bonnet', 'Bumper', 'Dash' },
+    pipAl = { duel = 'Battle', pit = 'Pit entry', slow = 'Slow', stop = 'Stopped', broken = 'Broken', oil = 'Oil', spin = 'Loss of control' },
     penDt = 'Drive-through', penSg = 'Stop & go %d s', penLaps = '%d laps to serve', penLap0 = 'serve in this lap', penDsq = 'Disqualified',
     resK = 'Results', resAll = 'Overall', resHead = { 'Pos.', 'No.', 'Driver', 'Team', 'Tyre', 'Laps', 'Best lap', 'Gap' }, chq = 'Chequered flag',
     opSessions = 'Sessions', opRules = 'Rules', opDrivers = 'Drivers per team', opStops = 'Pit stops required', opSwaps = 'Driver swaps required',
@@ -15423,14 +15424,19 @@ float4 main(PS_IN pin) {
       svs = true, sos = true, sns = true, rop = true, oop = true, sop = true }
     local BOOLS = { pb = true, pt = true, px = true, rs = true, rc = true, oe = true, ot = true, oi = true, sv = true, so = true, org = true }
     local CR_ORDER = { 'hm', 'hps', 'hw', 'vm', 'vps', 'vw', 'rpn', 'rw', 'ipn', 'iw', 'fl', 'fls', 'cl', 'cls', 'fcop', 'tk', 'tks', 'tkop', 'lc', 'lcs', 'lcop', 'gr', 'grs',
-      'grm', 'grps', 'grop', 'sg', 'scl', 'st', 'sts', 'sx', 'sxs', 'pm', 'ptw', 'ptws', 'pbx', 'pbxs', 'allop', 'secop', 'pitop', 'grw', 'im', 'ips', 'qb', 'qbs', 'rh' }
+      'grm', 'grps', 'grop', 'sg', 'scl', 'st', 'sts', 'sx', 'sxs', 'pm', 'ptw', 'ptws', 'pbx', 'pbxs', 'allop', 'secop', 'pitop', 'grw', 'im', 'ips', 'qb', 'qbs', 'rh',
+      'pss', 'psc', 'psk', 'psd', 'pis', 'pic', 'pik', 'pid', 'pds', 'pdc', 'pps', 'ppc', 'pf', 'pq', 'pop', 'aa', 'atd', 'ati', 'atp', 'ad' }
     local CR_KEYS = { hm = 'move', hps = 'page', hw = 'wait', vm = 'move', vps = 'page', vw = 'wait', rpn = 'pins', rw = 'wait', ipn = 'pins', iw = 'wait', fl = 'bool',
       fls = 'page', cl = 'bool', cls = 'page', fcop = 'op', tk = 'bool', tks = 'page', tkop = 'op', lc = 'bool', lcs = 'page', lcop = 'op', gr = 'bool', grs = 'page',
       grm = 'move', grps = 'page', grop = 'op', sg = 'bool', scl = 'bool', st = 'bool', sts = 'page', sx = 'bool', sxs = 'page', pm = 'bool', ptw = 'bool', ptws = 'page',
-      pbx = 'bool', pbxs = 'page', allop = 'op', secop = 'op', pitop = 'op', grw = 'wait', im = 'move', ips = 'page', qb = 'bool', qbs = 'wait', rh = 'wait' }
+      pbx = 'bool', pbxs = 'page', allop = 'op', secop = 'op', pitop = 'op', grw = 'wait', im = 'move', ips = 'page', qb = 'bool', qbs = 'wait', rh = 'wait',
+      pss = 'set', psc = 'cam', psk = 'slot', psd = 'dur', pis = 'set', pic = 'cam', pik = 'slot', pid = 'dur', pds = 'set', pdc = 'cam', pps = 'set', ppc = 'cam',
+      pf = 'fps', pq = 'qual', pop = 'op', aa = 'dest', atd = 'bool', ati = 'bool', atp = 'bool', ad = 'page' }
     local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 90,
       tk = true, tks = 10, tkop = 90, lc = true, lcs = 12, lcop = 90, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 90, sg = true, scl = true, st = true, sts = 5,
-      sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 100, secop = 100, pitop = 100, grw = 5, im = 'ROLL', ips = 8, qb = true, qbs = 0, rh = 5 }
+      sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 100, secop = 100, pitop = 100, grw = 5, im = 'ROLL', ips = 8, qb = true, qbs = 0, rh = 5,
+      pss = 0, psc = -1, psk = -1, psd = 0, pis = -2, pic = 0, pik = -1, pid = 0, pds = -1, pdc = 3, pps = 0, ppc = -1, pf = 15, pq = 1, pop = 90, aa = 2,
+      atd = true, ati = true, atp = true, ad = 8 }
     for k, v in pairs(CR_START) do
       BC.opt[k] = v
       if CR_KEYS[k] == 'bool' then BOOLS[k] = true elseif CR_KEYS[k] ~= 'move' then NUMS[k] = true end
@@ -15443,6 +15449,13 @@ float4 main(PS_IN pin) {
       if kind == 'op' then return math.min(math.max(n, 40), 100) end
       if kind == 'pins' then return math.min(math.max(n, 0), 10) end
       if kind == 'wait' then return math.min(math.max(n, 0), 120) end
+      if kind == 'set' then return math.min(math.max(n, -2), 99) end
+      if kind == 'cam' then return math.min(math.max(n, -1), 99) end
+      if kind == 'slot' then return math.min(math.max(n, -1), 9999) end
+      if kind == 'dur' then return math.min(math.max(n, 0), 600) end
+      if kind == 'fps' then return math.min(math.max(n, 1), 240) end
+      if kind == 'qual' then return math.min(math.max(n, 0), 2) end
+      if kind == 'dest' then return math.min(math.max(n, 0), 3) end
       return math.min(math.max(n, 2), 600)
     end
     local function crText(form)
@@ -15495,6 +15508,7 @@ float4 main(PS_IN pin) {
     function BC.orgSet(on)
       BC.opt.org = on == true
       keep()
+      if not BC.opt.org then BroadcastPip.off() end
       ac.log('race-control: broadcast: the credits on the car of the organization ' .. (BC.opt.org and 'on' or 'off'))
     end
     function BC.drive()
@@ -15545,6 +15559,8 @@ float4 main(PS_IN pin) {
       ac.log(string.format('race-control: broadcast: %d sets of cameras of the track read', #sets))
       local f1, f6 = BroadcastCams.sets(#sets)
       sets[#sets + 1], sets[#sets + 2] = f1, f6
+      if BC.opt.pis == -2 then BC.opt.pis = f6.index end
+      if BC.opt.pds == -1 then BC.opt.pds = f1.index end
       return sets
     end
     function BC.setByName(name)
@@ -15759,6 +15775,15 @@ float4 main(PS_IN pin) {
         elseif key == 'rop' or key == 'oop' or key == 'sop' then BC.opt[key] = math.min(math.max(math.floor(tonumber(v) or BC.opt[key]), 40), 100)
         elseif key then BC.opt[key] = math.min(math.max(math.floor(tonumber(v) or BC.opt[key]), 2), 600)
         else return false end
+      elseif a == 'PIP' then
+        local id, x = (w[2] or ''):upper(), (w[3] or ''):upper()
+        if id ~= 'S' and id ~= 'I' then return false end
+        if x == 'SHOW' then
+          local slot = tonumber(id == 'S' and BC.opt.psk or BC.opt.pik) or -1
+          if not BroadcastPip.show(id, slot < 0 and sim.focusedCar or slotCar(slot)) then return false end
+        elseif x == 'HIDE' then BroadcastPip.close(id)
+        elseif x == 'SWAP' then if not BroadcastPip.swap(id) then return false end
+        else return false end
       elseif a == 'CR' then
         local key = (w[2] or ''):lower()
         if not CR_KEYS[key] then return false end
@@ -15811,6 +15836,7 @@ float4 main(PS_IN pin) {
         end
       end
       grabUpdate()
+      BroadcastPip.frame()
     end
     local PAPER = rgbm(0xf4 / 255, 0xf6 / 255, 0xf8 / 255, 1)
     local DIMW = rgbm(0xf4 / 255, 0xf6 / 255, 0xf8 / 255, 0.58)
@@ -16167,6 +16193,7 @@ float4 main(PS_IN pin) {
     local SEAL_Y, SEAL_R, SEAL_K = rgbm(1, 212 / 255, 0, 1), rgbm(224 / 255, 23 / 255, 23 / 255, 1), rgbm(0, 0, 0, 1)
     local SAY_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.96)
     local ROLL = 0.45
+    BC.ROLL = ROLL
     local BOX_TINT, BOX_SOFT, RES_PIN = rgbm(1, 1, 1, 0.04), rgbm(31 / 255, 104 / 255, 207 / 255, 0.30), rgbm(1, 1, 1, 0.22)
     CR.va, CR.vb = vec2(0, 0), vec2(0, 0)
     CR.barMove, CR.barStarts = {}, {}
@@ -16516,6 +16543,62 @@ float4 main(PS_IN pin) {
     function CR.rowOf(idx)
       for _, r in ipairs(RaceTable.rows or {}) do if r.index == idx then return r end end
       return nil
+    end
+    local PIP_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.9)
+    local PIP_TAG = { duel = FLAGC.yellow, pit = FLAGC.green, stop = FLAGC.red, broken = FLAGC.red, oil = FLAGC.red }
+    local function pipTag(P)
+      if P.alert then
+        local tag = (TEXTS.bc.pipAl or {})[P.alert.k] or P.alert.k
+        if P.alert.k ~= 'duel' then return tag end
+        local front = CR.rowOf(P.alert.a)
+        return string.format('%s · P%s · %.1f s', tag, tostring(front and front.pos or '-'), P.alert.gap or 0)
+      end
+      local s = Broadcast.sets()[(P.set or -1) + 1]
+      if not s then return '' end
+      local c = s.car and (BroadcastCams.list(s)[(P.cam or 0) + 1] or {}).name
+      return c and (s.name .. ' · ' .. c) or s.name
+    end
+    local function pipOne(P, x, y, k)
+      if not P.shot then return end
+      local R, now = ROLL, state.ui.clock
+      local d = P.closeAt and (2 * R - (now - P.closeAt)) or (now - P.at)
+      local hp, vp = math.min(math.max(d / R, 0), 1), math.min(math.max((d - R) / R, 0), 1)
+      if hp <= 0 then return end
+      local r = CR.rowOf(P.car or -1)
+      local w2, hh = 480 * k, 34 * k
+      ui.pushClipRect(CR.va:set(x + w2 * (1 - hp), y), CR.vb:set(x + w2, y + hh), true)
+      PIP_BG.mult = 0.9 * opOf(BC.opt.pop, 90)
+      rect(x, y, x + w2, y + hh, PIP_BG)
+      rect(x, y, x + w2, y + 2 * k, TWELVE)
+      local tx = x
+      if r then
+        local _, cc = classStyle(r.class)
+        rect(x, y, x + 6 * k, y + hh, cc)
+        tx = x + 14 * k
+        drawText(tostring(r.pos or ''), F.rb, 20 * k, TMP.a:set(tx, y + 6 * k), PAPER)
+        tx = tx + 32 * k
+        drawText('#' .. tostring(r.number or ''), F.rb, 13 * k, TMP.a:set(tx, y + 10 * k), PAPER)
+        tx = tx + textWidth('#000', F.rb, 13 * k) + 12 * k
+        drawText(nameOf(r), F.name, 18 * k, TMP.a:set(tx, y + 7 * k), PAPER)
+        tx = tx + textWidth(nameOf(r), F.name, 18 * k) + 9 * k
+        drawText(teamOf(r), F.team, 13 * k, TMP.a:set(tx, y + 10 * k), DIMW)
+      end
+      if P.tagSeq ~= P.seq then P.tagSeq, P.tag = P.seq, pipTag(P) end
+      local tag = P.tag
+      local tw = textWidth(tag, F.legend, 13 * k) + 18 * k
+      slanted(x + w2 - 12 * k - tw, y + 6 * k, x + w2 - 12 * k, y + 28 * k, 6 * k, P.alert and PIP_TAG[P.alert.k] or MIST)
+      drawText(tag, F.legend, 13 * k, TMP.a:set(x + w2 - 12 * k - tw + 9 * k, y + 8 * k), LT_INK)
+      ui.popClipRect()
+      if vp <= 0 then return end
+      ui.pushClipRect(CR.va:set(x, y + hh), CR.vb:set(x + w2, y + hh + 270 * k * vp), true)
+      ui.drawImage(P.shot, TMP.a:set(x, y + hh), TMP.b:set(x + w2, y + hh + 270 * k))
+      frame(x, y + hh, x + w2, y + hh + 270 * k, HAIR, k)
+      ui.popClipRect()
+    end
+    function CR.pipDraw(w, h, k)
+      local x = w - 44 * k - 480 * k
+      pipOne(BroadcastPip.S, x, 92 * k, k)
+      pipOne(BroadcastPip.I, x, h - 80 * k - 304 * k, k)
     end
     function CR.stack(k, by1)
       local n, secs = CR.noteNow('b')
@@ -18012,6 +18095,7 @@ float4 main(PS_IN pin) {
       BOXBG.mult, SAY_BG.mult = 0.9 * opOf(100, 100), 0.96 * opOf(100, 100)
       if onlyLogos then BC.barHid = true return end
       if BC.barHid then BC.barHid, CR.barMove, towerMove = nil, {}, {} end
+      CR.pipDraw(w, h, k)
       if not BC.opt.bar then
         voices(w, h, k, BC.opt.form == 'V')
         return
@@ -18267,16 +18351,47 @@ do
     end
     for _, p in ipairs(pits) do list[#list + 1] = { k = 'pit', a = p.a, sp = p.sp or 0, at = p.at } end
     table.sort(list, function(x, y) return x.at > y.at end)
-    local out = {}
-    for n = 1, math.min(#list, 8) do
-      local e = list[n]
-      out[n] = string.format('%s|%d|%d|%.1f|%.3f|%d', e.k, slotOf(e.a), e.b and slotOf(e.b) or -1, e.gap or 0, e.sp or 0, math.floor(now - e.at))
+    return list
+  end
+  local aired, onAir = {}, nil
+  local KIND_ON = { duel = 'atd', pit = 'atp' }
+  local function keyOf(e) return string.format('%s:%d:%d:%d', e.k, e.a, e.b or -1, math.floor(e.at)) end
+  local function auto(list, now)
+    local o = Broadcast.opt
+    local live = {}
+    for _, e in ipairs(list) do live[keyOf(e)] = true end
+    for key in pairs(aired) do if not live[key] then aired[key] = nil end end
+    if (o.aa or 0) == 0 or Broadcast.wait.on or (onAir and now < onAir.till) then return end
+    if o.aa >= 2 and Broadcast.barHid then return end
+    for _, e in ipairs(list) do
+      local key = keyOf(e)
+      if o[KIND_ON[e.k] or 'ati'] ~= false and not aired[key] then
+        aired[key] = true
+        local went = true
+        if o.aa == 1 then
+          Broadcast.command('FOCUS ' .. slotOf(e.a))
+          if o.defSet then Broadcast.command('SET ' .. o.defSet) end
+        else
+          went = BroadcastPip.alert(o.aa == 2 and 'S' or 'I', e)
+        end
+        if went then onAir = { key = key, till = now + (o.ad or 8), dest = o.aa } end
+        return
+      end
     end
-    return table.concat(out, ';')
   end
   function BroadcastAlerts.beat()
     BroadcastAlerts.tyres = tyres()
-    BroadcastAlerts.text = alerts()
+    local now = state.ui.clock
+    local list = alerts()
+    auto(list, now)
+    local out = {}
+    for n = 1, math.min(#list, 8) do
+      local e = list[n]
+      local air = onAir and now < onAir.till and onAir.key == keyOf(e) and onAir.dest or 0
+      out[n] = string.format('%s|%d|%d|%.1f|%.3f|%d|%d', e.k, slotOf(e.a), e.b and slotOf(e.b) or -1, e.gap or 0, e.sp or 0, math.floor(now - e.at), air)
+    end
+    BroadcastAlerts.text = table.concat(out, ';')
+    BroadcastPip.beat()
   end
 end
 BroadcastCams = {}
@@ -18311,6 +18426,149 @@ do
     ac.setCurrentCamera(ac.CameraMode.Car)
     ac.setCurrentCarCamera(math.min(k, n - 1))
     return true
+  end
+end
+BroadcastPip = { S = { id = 'S', seq = 0 }, I = { id = 'I', seq = 0 } }
+do
+  local B = BroadcastPip
+  local nextT = 0
+  local iniPos = {}
+  local function can() return ac.GeometryShot ~= nil and render ~= nil end
+  local function posOf(i, key)
+    local c = iniPos[i] or {}
+    iniPos[i] = c
+    if c[key] == nil then
+      local ok, ini = pcall(ac.INIConfig.carData, i, 'car.ini')
+      c[key] = ok and ini and ini:get('GRAPHICS', key, vec3()) or vec3()
+    end
+    return c[key]
+  end
+  local function make(q, k)
+    local m = q == 2 and 2 or 1
+    local shot = ac.GeometryShot(ac.findNodes('sceneRoot:yes'), vec2(math.floor(480 * k * m), math.floor(270 * k * m)), 1, false,
+      q == 0 and render.AntialiasingMode.SimplifiedYEBIS or render.AntialiasingMode.YEBIS, render.TextureFormat.R16G16B16A16.Float)
+    shot:setBestSceneShotQuality()
+    if q > 0 then
+      shot:setShadersType(render.ShadersType.Main)
+      shot:setAlternativeShadowsSet(q == 2 and 'dedicated' or 'area')
+      if q == 2 then shot:setGrass('dedicated') end
+    else
+      shot:setShadersType(render.ShadersType.SimplifiedWithLights)
+    end
+    return shot
+  end
+  local f6Cams = {}
+  local function f6Of(i, k)
+    local list = f6Cams[i]
+    if not list then
+      list = {}
+      local n = math.floor(CarRead.num((ac.getCar(i) or {}).carCamerasCount))
+      local ok, ini = pcall(ac.INIConfig.carData, i, 'cameras.ini')
+      if ok and ini then
+        for c = 0, n - 1 do
+          local sec = 'CAMERA_' .. c
+          list[c + 1] = { pos = ini:get(sec, 'POSITION', vec3()), fwd = ini:get(sec, 'FORWARD', vec3(0, 0, 1)), up = ini:get(sec, 'UP', vec3(0, 1, 0)),
+            fov = tonumber(ini:get(sec, 'FOV', 60)) or 60, exp = tonumber(ini:get(sec, 'EXPOSURE', 0)) or 0 }
+        end
+      end
+      if #list > 0 then f6Cams[i] = list end
+    end
+    if #list == 0 then return nil end
+    return list[math.min(k, #list - 1) + 1]
+  end
+  local function view(P)
+    local s = Broadcast.sets()[(P.set or -1) + 1]
+    local i = P.car
+    local car = i and ac.getCar(i)
+    if not s or not car then return end
+    if not s.car then
+      P.shot:setClippingPlanes(0.25, 5e3)
+      P.shot:updateWithTrackCamera(i, s.index)
+      return
+    end
+    ac.forceDetailedCarLOD(i)
+    P.shot:setClippingPlanes(0.01, 5e3)
+    local m = car.bodyTransform
+    if s.car == 'F6' then
+      local c = f6Of(i, math.max(P.cam or 0, 0))
+      if not c then return end
+      if c.exp > 0 then P.shot:setExposure(c.exp) end
+      P.shot:update(m:transformPoint(c.pos), m:transformVector(c.fwd), m:transformVector(c.up), c.fov)
+      return
+    end
+    local pos = P.cam == 0 and car.driverEyesPosition or posOf(i, P.cam == 4 and 'BUMPER_CAMERA_POS' or 'BONNET_CAMERA_POS')
+    P.shot:update(m:transformPoint(pos), car.look, car.up, sim.firstPersonCameraFOV)
+  end
+  function B.frame()
+    if not B.S.shot and not B.I.shot then return end
+    if Broadcast.wait.on or Broadcast.barHid then return end
+    local now = state.ui.clock
+    if now < nextT then return end
+    nextT = now + 1 / math.max(Broadcast.opt.pf or 15, 1)
+    if B.S.shot and not B.S.closeAt then view(B.S) end
+    if B.I.shot and not B.I.closeAt then view(B.I) end
+  end
+  local function open(P, kind, set, cam, car, secs, alert)
+    if not can() or Broadcast.wait.on or not car then return false end
+    local q, k = math.floor(Broadcast.opt.pq or 1), ac.getUI().windowSize.y / 1080
+    if P.shot and (P.q ~= q or P.k ~= k) then P.shot:dispose() P.shot = nil end
+    P.shot = P.shot or make(q, k)
+    P.q, P.k = q, k
+    if not P.open or P.closeAt then P.at = state.ui.clock end
+    P.open, P.closeAt = true, nil
+    P.kind, P.set, P.cam, P.car, P.alert = kind, set, cam, car, alert
+    P.till = (secs or 0) > 0 and state.ui.clock + secs or nil
+    P.seq = P.seq + 1
+    return true
+  end
+  function B.release(id)
+    local P = B[id]
+    if P.shot then P.shot:dispose() end
+    P.shot, P.open, P.closeAt, P.till, P.alert = nil, false, nil, nil, nil
+  end
+  function B.show(id, car)
+    local o = Broadcast.opt
+    local s = id == 'S'
+    return open(B[id], 'image', s and o.pss or o.pis, s and o.psc or o.pic, car, s and o.psd or o.pid)
+  end
+  function B.alert(id, e)
+    local o = Broadcast.opt
+    local duel = e.k == 'duel'
+    return open(B[id], 'alert', duel and o.pds or o.pps, duel and o.pdc or o.ppc, duel and e.b or e.a, o.ad, e)
+  end
+  function B.close(id)
+    local P = B[id]
+    if not P.open or P.closeAt then return end
+    if Broadcast.barHid then B.release(id) else P.closeAt = state.ui.clock end
+  end
+  function B.swap(id)
+    local P, c = B[id], Broadcast.cam
+    if not P.open or P.closeAt or Broadcast.wait.on or (c.mode ~= 'set' and c.mode ~= 'cam') or c.set == nil then return false end
+    local main, ms = sim.focusedCar, Broadcast.sets()[c.set + 1]
+    if not ms then return false end
+    local mset, mcam = c.set, ms.car and (c.cam or 0) or -1
+    local ps = Broadcast.sets()[(P.set or -1) + 1]
+    local pc = ac.getCar(P.car or -1)
+    if not ps or not pc then return false end
+    Broadcast.command('FOCUS ' .. tostring(pc.sessionID))
+    if ps.car then Broadcast.command(string.format('CAM %d %d', ps.index, math.max(P.cam or 0, 0))) else Broadcast.command('SET ' .. ps.index) end
+    P.kind, P.set, P.cam, P.car, P.alert = 'image', mset, mcam, main, nil
+    P.seq = P.seq + 1
+    return true
+  end
+  function B.beat()
+    local now = state.ui.clock
+    for _, id in ipairs({ 'S', 'I' }) do
+      local P = B[id]
+      if P.shot then
+        if Broadcast.wait.on or (P.closeAt and now - P.closeAt >= 2 * Broadcast.ROLL) then B.release(id)
+        elseif P.till and now >= P.till and not P.closeAt then B.close(id) end
+      end
+    end
+  end
+  function B.off()
+    B.release('S')
+    B.release('I')
   end
 end
 BroadcastEvent = { ev = nil, track = nil }
