@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V268 - 2026.11.03'
+local RC_VERSION = 'V269 - 2026.11.03'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16591,6 +16591,7 @@ float4 main(PS_IN pin) {
       ui.popClipRect()
       if vp <= 0 then return end
       ui.pushClipRect(CR.va:set(x, y + hh), CR.vb:set(x + w2, y + hh + 270 * k * vp), true)
+      rect(x, y + hh, x + w2, y + hh + 270 * k, LT_INK)
       ui.drawImage(P.shot, TMP.a:set(x, y + hh), TMP.b:set(x + w2, y + hh + 270 * k))
       frame(x, y + hh, x + w2, y + hh + 270 * k, HAIR, k)
       ui.popClipRect()
@@ -18448,6 +18449,9 @@ do
     local shot = ac.GeometryShot(ac.findNodes('sceneRoot:yes'), vec2(math.floor(480 * k * m), math.floor(270 * k * m)), 1, false,
       q == 0 and render.AntialiasingMode.SimplifiedYEBIS or render.AntialiasingMode.YEBIS, render.TextureFormat.R16G16B16A16.Float)
     shot:setBestSceneShotQuality()
+    shot:setSky(true)
+    shot:setClearColor(rgbm(0.1, 0.1, 0.1, 1))
+    shot:setOpaqueAlphaFix(true)
     if q > 0 then
       shot:setShadersType(render.ShadersType.Main)
       shot:setAlternativeShadowsSet(q == 2 and 'dedicated' or 'area')
