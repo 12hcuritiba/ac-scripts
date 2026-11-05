@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V269 - 2026.11.03'
+local RC_VERSION = 'V270 - 2026.11.05'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -184,6 +184,8 @@ local TEXTS = {
   pitDone = 'DONE',
   pitMissed = 'MISSED',
   pitOpenMsg = 'Pit window open - pit stop before it closes',
+  pitNeutral = 'NEUTRAL',
+  pitNeutralMsg = 'Neutral zone - the stop counts with the service done in this pass',
   swapCount = '%d | %d',
   trackYellow = 'YELLOW',
   trackBlue = 'BLUE',
@@ -1008,9 +1010,9 @@ local config = (function()
     restart = structKey('restart', { gridDelay = 5, gridSeconds = 30, lights = 5, stepSeconds = 1, releaseLight = 3,
       randomMin = 0.2, randomMax = 3, jumpMeters = 0.5, jumpLaps = 2, screenLightsFrom = 22, prestartSeconds = 5,
       abortSeconds = 8 }),
-    formation = structKey('formation', { procedure = 'KMR', maxKmh = 150, overSeconds = 10, speedLaps = 1, minKmh = 30,
+    raceProcedure = structKey('raceProcedure', { procedure = 'KMR', maxKmh = 150, overSeconds = 10, speedLaps = 1, minKmh = 30,
       slowSeconds = 15, slowLaps = 3, giveBackSeconds = 20, passLaps = 3, passFarM = 100, leaderSlowKmh = 30, slowFarKmh = 40,
-      slowFarM = 75, alignMeters = 0.7, alignKmh = 1, alignSeconds = 60, approachM = 400, limitSpline = 0.788, pitExitSpline = 0.024 }),
+      slowFarM = 75, alignMeters = 0.7, alignKmh = 1, alignSeconds = 60, approachM = 400, limitSpline = 0.788, pitExitSpline = 0.024, grid = 'NORMAL', reverse = 0 }),
     driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
     kmrPoints = kmrPoints,
     kmrRating = kmrRating,
@@ -1336,7 +1338,7 @@ ac.log('race-control: section=' .. tostring(__cfgSection__)
   .. ' physics.allowed=' .. tostring(physics.allowed())
   .. ' ' .. table.concat(zoneLog, ' '))
 for _, key in ipairs({ 'screenScale', 'tyreLife', 'tyreTemp', 'wrongWay', 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage',
-    'formation', 'flags', 'restart', 'screens', 'parkedCar', 'driverStint', 'lobbyPos', 'classes', 'kmrPoints', 'kmrRating' }) do
+    'raceProcedure', 'flags', 'restart', 'screens', 'parkedCar', 'driverStint', 'lobbyPos', 'classes', 'kmrPoints', 'kmrRating' }) do
   ac.log('race-control: key ' .. key .. ' = ' .. tostring(cfg[key]))
 end
 ac.log('race-control: theme keys on the server: ' .. (#config.themesOnServer > 0 and table.concat(config.themesOnServer, ' ') or 'none (old keys)'))
@@ -1410,6 +1412,23 @@ function CarRead.number(i)
     CarRead.numberIndex = idx
   end
   return idx[i] or ac.getDriverNumber(i) or i
+end
+CarRead.gridIndex = nil
+function CarRead.gridPlace(i)
+  local list = config.gridOrder
+  if not list then return nil end
+  local idx = CarRead.gridIndex
+  if not idx then
+    idx = {}
+    local at, slotOf = {}, ac.getCar.serverSlot
+    for k, n in ipairs(list) do at[n] = k end
+    for k, n in pairs(config.slotNumbers or {}) do
+      local c = slotOf and at[n] and slotOf(k - 1)
+      if c then idx[c.index] = at[n] end
+    end
+    CarRead.gridIndex = idx
+  end
+  return idx[i]
 end
 function CarRead.num(v) return tonumber(v) or 0 end
 function CarRead.flagOn(v)
@@ -2656,9 +2675,20 @@ do
           list[k] = tonumber(v)
         end
         config.slotNumbers, config.slotNumbersText = list, nums
-        CarRead.numberIndex = nil
+        CarRead.numberIndex, CarRead.gridIndex = nil, nil
         CarsTick.driversAgain()
         ac.log('race-control: official numbers of the cars from the tool of the organization: ' .. nums)
+      end
+      local grid = body:match('grid=([%d,]*)')
+      local gt = grid ~= '' and grid or nil
+      if gt ~= config.gridOrderText then
+        local list = nil
+        if gt then
+          list = {}
+          for v in gt:gmatch('%d+') do list[#list + 1] = tonumber(v) end
+        end
+        config.gridOrder, config.gridOrderText, CarRead.gridIndex = list, gt, nil
+        ac.log('race-control: grid of our order from the base: ' .. (gt or 'none'))
       end
       local req = tonumber(body:match('pitStopsRequired=(%-?%d+)'))
       local race = ac.SessionType.Race
@@ -6742,6 +6772,7 @@ do
     local t = PitStops.windowTime()
     return t >= s and t <= e
   end
+  function PitStops.stopNeutral(car) return car.isInPitlane and PitStops.passInStopWindow end
   local function openPass(jumped, entryMs)
     PitStops.line = PitStops.line + 1
     PitStops.pass = { id = PitStops.line, entryMs = entryMs, jumped = jumped, service = nil, paid = {}, stop = nil,
@@ -6961,7 +6992,7 @@ do
     local ss, se = PitStops.stopWindow()
     if ss and config.pitStopsEnabled and config.stopsRequired() > 0 and not Session.beforeStart() and not CarRead.isStaff(0)
         and not state.pit.stopDone and not state.pit.stopMissed
-        and PitStops.windowTime() > se and not (inPit and PitStops.passInStopWindow) then
+        and PitStops.windowTime() > se and not PitStops.stopNeutral(car) then
       state.pit.stopMissed = true
       Record.save('stopwindow', 2, 'missed')
       ac.log('race-control: mandatory pit stop window missed (no stop counted in it): DSQ')
@@ -8218,13 +8249,13 @@ do
     local pos, look = GridPlace.node(k)
     local fx, fz = ahead(look)
     if not pos or not fx or not c or not c.position then return false end
-    local r = config.formation
+    local r = config.raceProcedure
     local dx, dz = c.position.x - pos.x, c.position.z - pos.z
     return math.abs(dx * fx + dz * fz) <= r.alignMeters and math.abs(dz * fx - dx * fz) <= r.alignMeters
       and CarRead.num(c.speedKmh) <= r.alignKmh
   end
   function GridPlace.draw(f)
-    if not (f and f.on() and config.formation.procedure == 'STANDING' and f.phase == 'end' and not f.aligned and not f.pitStart
+    if not (f and f.on() and config.raceProcedure.procedure == 'STANDING' and f.phase == 'end' and not f.aligned and not f.pitStart
       and f.k and not state.restart) then return end
     local car = ac.getCar(0)
     if not car or car.isInPitlane then return end
@@ -8232,7 +8263,7 @@ do
     local fx, fz = ahead(look)
     local size = car.aabbSize
     if not pos or not fx or not size then return end
-    local slack = config.formation.alignMeters
+    local slack = config.raceProcedure.alignMeters
     local hl, hw = size.z / 2 + slack, size.x / 2 + slack
     local function at(a, b) return vec3(pos.x + fx * a - fz * b, pos.y, pos.z + fz * a + fx * b) end
     local function seg(p, q)
@@ -8382,13 +8413,14 @@ do
         n = n + 1
         local e = list[n] or {}
         list[n] = e
-        e.i, e.pos, e.c = r.i, CarRead.num(r.c.racePosition), r.c
+        local F = Flags.formation
+        e.i, e.pos, e.c = r.i, (F and F.boxLeave and CarRead.gridPlace(r.i)) or CarRead.num(r.c.racePosition), r.c
         e.sw = r.i == 0 and backS() or Flags.redSwaps[r.i]
       end
     end
     for k = #list, n + 1, -1 do list[k] = nil end
     table.sort(list, placeOrder)
-    local now, holds, queue, back, mine = state.ui.clock, false, state.postRed == true, nil, nil
+    local now, holds, queue, back, mine = state.ui.clock, false, state.postRed == true or (Flags.formation ~= nil and Flags.formation.boxLeave == true), nil, nil
     for k, e in ipairs(list) do
       local c, nx = e.c, list[k + 1] and list[k + 1].c
       if e.i == 0 then
@@ -8557,7 +8589,7 @@ do
     return Flags.passAllowed(r.i, CarRead.num(r.c.speedKmh), CarsTick.aheadM(r), config.flags.passSlowKmh, config.flags.passFarM, nil, nil, RED_MOVING_KMH)
   end
   local function exitQueue(car)
-    if not state.postRed or not car.isInPitlane or sim.raceSessionType ~= ac.SessionType.Race
+    if not (state.postRed or (Flags.formation and Flags.formation.boxLeave)) or not car.isInPitlane or sim.raceSessionType ~= ac.SessionType.Race
         or Rules.dsqOn() then
       Flags.exitLine, Flags.exitWait = nil, nil
       return
@@ -9220,7 +9252,7 @@ do
       ac.log('race-control: standing start: lights at session time ' .. math.floor(Formation.t0) .. ' (from car ' .. sender.index .. ')')
     end
   end, nil, nil, { processPostponed = true })
-  local function rule() return config.formation end
+  local function rule() return config.raceProcedure end
   function Formation.on()
     local p = rule().procedure
     return (p == 'ROLLING' or p == 'STANDING') and sim.raceSessionType == ac.SessionType.Race
@@ -9229,12 +9261,14 @@ do
   function Formation.pitHeld()
     return Formation.on() and Formation.phase ~= nil and Formation.phase ~= 'pre' and not Formation.pitPass
   end
+  function Formation.menuHeld() return Formation.on() and Session.beforeStart() and not Formation.boxed end
   local reset = sessionPart('formation', Formation, function()
     return { phase = SESSION_NONE, locked = {}, leader = SESSION_NONE, prog = 0, lastSp = SESSION_NONE, endT = SESSION_NONE, overSince = SESSION_NONE,
       slowSince = SESSION_NONE, overDone = false, slowDone = false, giveBack = {}, side = {}, k = SESSION_NONE, aligned = false, t0 = SESSION_NONE,
       t0Sent = -1e9, firstAligned = SESSION_NONE, pitStart = false, missed = false, armed = false, goT = SESSION_NONE, gridAt = SESSION_NONE,
       leftGrid = false, speedWarn = SESSION_NONE, trackSent = SESSION_NONE, trackT = -1e9, logged = false, pitPass = false, spun = false, limitDone = false, late = {}, out = {},
-      lineJump = false, lockT = SESSION_NONE, turnAt = {}, myTurnT = SESSION_NONE, fellBack = false }
+      lineJump = false, lockT = SESSION_NONE, turnAt = {}, myTurnT = SESSION_NONE, fellBack = false,
+      boxed = false, placed = false, slot = {}, lastSlot = 0, boxLeave = false }
   end)
   local function tag(i) return string.format('#%s', tostring(CarRead.number(i))) end
   local function lapLen() return tonumber(sim.trackLengthM) or 0 end
@@ -9289,7 +9323,7 @@ do
   function Formation.regained(i)
     if not Formation.on() then return end
     if rule().procedure == 'STANDING' then
-      if limitPart() and not isLate(i) and afterLine(alive(i), Formation.locked[i]) then Formation.late[#Formation.late + 1] = i end
+      if limitPart() and not isLate(i) and afterLine(alive(i), Formation.slot[i]) then Formation.late[#Formation.late + 1] = i end
       return
     end
     if rule().procedure ~= 'ROLLING' or Formation.phase ~= 'lap' then return end
@@ -9439,6 +9473,30 @@ do
   end
   local function slotPos(k) return (GridPlace.node(k)) end
   local function dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
+  local function wait(car)
+    local k = CarRead.gridPlace(0)
+    if not Formation.boxed then
+      Formation.boxed = true
+      if k and sim.isInMainMenu and not car.isInPitlane then
+        RcCommand.toPits()
+        ac.log('race-control: wait of the race: the car to the pits, place of our grid P' .. k)
+      end
+      return
+    end
+    if not k then return end
+    if car.isInPitlane then
+      Formation.placed = false
+      return
+    end
+    if not Formation.placed and not sim.isInMainMenu then
+      Formation.placed = true
+      local pos = slotPos(k)
+      if pos then
+        physics.setCarPosition(0, pos, nil)
+        ac.log(string.format('race-control: wait of the race: on the place of our grid P%d (AC_START_%d)', k, k - 1))
+      end
+    end
+  end
   local function align(car)
     local r = rule()
     local clock = state.ui.clock
@@ -9453,11 +9511,11 @@ do
     if Formation.t0 or state.restart then return end
     if firstConnected() == 0 then
       local all, any = true, false
-      local n = #byPlace()
+      local n = Formation.lastSlot
       for i, p in pairs(Formation.locked) do
         local c = alive(i)
         if c and not c.isInPitlane and not Flags.offField(i) then
-          local ok = (i == 0 and Formation.aligned) or (i ~= 0 and GridPlace.inside(c, p))
+          local ok = (i == 0 and Formation.aligned) or (i ~= 0 and GridPlace.inside(c, Formation.slot[i]))
           for b = n + 1, n + #Formation.late do
             if not ok and i ~= 0 then ok = GridPlace.inside(c, b) end
           end
@@ -9490,8 +9548,8 @@ do
     Formation.t0, Formation.t0Sent, Formation.armed, Formation.goT = nil, -1e9, false, nil
     Formation.endT, Formation.aligned, Formation.firstAligned = nil, false, nil
     Lock.release('grid')
-    if Formation.k ~= Formation.locked[0] then Formation.pitStart = true end
-    Formation.spun, Formation.limitDone, Formation.out, Formation.missed, Formation.late, Formation.k = false, false, {}, false, {}, Formation.locked[0]
+    if Formation.k ~= Formation.slot[0] then Formation.pitStart = true end
+    Formation.spun, Formation.limitDone, Formation.out, Formation.missed, Formation.late, Formation.k = false, false, {}, false, {}, Formation.slot[0]
     Formation.prog, Formation.lastSp = 0, nil
     Formation.phase = 'lap'
     state.restart = nil
@@ -9512,8 +9570,8 @@ do
   function Flags.formationUpdate(car)
     if not Formation.logged then
       Formation.logged = true
-      ac.log(string.format('race-control: start procedure of session %d: %s (key formation = %s; session type %s; formation lap %s)',
-        Session.index, tostring(rule().procedure), tostring(cfg.formation), tostring(sim.raceSessionType), Formation.on() and 'on' or 'off'))
+      ac.log(string.format('race-control: start procedure of session %d: %s (key raceProcedure = %s; session type %s; formation lap %s)',
+        Session.index, tostring(rule().procedure), tostring(cfg.raceProcedure), tostring(sim.raceSessionType), Formation.on() and 'on' or 'off'))
     end
     if not Formation.on() then
       if Formation.phase then
@@ -9527,6 +9585,7 @@ do
     trackTell()
     if Session.beforeStart() then
       Formation.phase = 'pre'
+      wait(car)
       return
     end
     local green = Clock.greenMs ~= nil
@@ -9540,11 +9599,17 @@ do
       local list = {}
       for i = 0, (sim.carsCount or 1) - 1 do
         local c = alive(i)
-        if c and CarRead.num(c.racePosition) > 0 and not CarRead.isStaff(i) then list[#list + 1] = { i = i, p = CarRead.num(c.racePosition) } end
+        if c and CarRead.num(c.racePosition) > 0 and not CarRead.isStaff(i) and not c.isInPitlane then
+          list[#list + 1] = { i = i, p = CarRead.gridPlace(i) or CarRead.num(c.racePosition) }
+        end
       end
       table.sort(list, function(a, b) return a.p < b.p end)
-      for k, x in ipairs(list) do Formation.locked[x.i] = k end
-      Formation.k = Formation.locked[0]
+      for k, x in ipairs(list) do
+        Formation.locked[x.i] = k
+        Formation.slot[x.i] = CarRead.gridPlace(x.i) or k
+        Formation.lastSlot = math.max(Formation.lastSlot, Formation.slot[x.i])
+      end
+      Formation.k = Formation.slot[0]
       Formation.lockT = state.ui.clock
       Formation.leader = firstConnected()
       Formation.prog, Formation.lastSp = 0, nil
@@ -9583,7 +9648,7 @@ do
         Formation.phase = 'done'
         ac.log('race-control: standing start: the start was given while this car was back in its box')
       elseif r.procedure == 'STANDING' and lc and Formation.prog >= 0.5 then
-        local lp = slotPos(Formation.locked[Formation.leader])
+        local lp = slotPos(Formation.slot[Formation.leader])
         local left = lp and ((CarRead.num(ac.worldCoordinateToTrackProgress(lp)) - sp) % 1) * lapLen() or 0
         if left <= r.approachM or crossed then
           Formation.phase = 'end'
@@ -9597,14 +9662,14 @@ do
     end
     if r.procedure == 'ROLLING' and Formation.phase == 'done' and Formation.goT and Lap.number() < 1 then lapRules(car, true) end
     if r.procedure == 'STANDING' and Formation.k and not car.isInPitlane and limitPart() and (Formation.spun or Lap.lostControl()) then
-      local after = afterLine(car, Formation.locked[0])
+      local after = afterLine(car, Formation.slot[0])
       if Lap.lostControl() then Formation.spun = after and 'after' or true end
       local sp = CarRead.num(car.splinePosition)
       if after and Formation.spun == true and not Formation.limitDone then
         Formation.limitDone = true
         for j, p in pairs(Formation.locked) do
           local c = j ~= 0 and alive(j)
-          if c and not c.isInPitlane and p > Formation.k then
+          if c and not c.isInPitlane and p > Formation.locked[0] then
             local d = CarRead.num(c.splinePosition) - sp
             if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
             if d > 0 then
@@ -9618,9 +9683,9 @@ do
           rcLog(TEXTS.rc.standingStart, TEXTS.fmLimitPit)
         end
       elseif Formation.spun == 'after' and not Formation.aligned and isLate(0) then
-        local k = Formation.locked[0]
+        local k = Formation.slot[0]
         if passedByAll(0) then
-          k = #byPlace()
+          k = Formation.lastSlot
           for _, j in ipairs(Formation.late) do
             if j == 0 then k = k + 1 break end
             if passedByAll(j) then k = k + 1 end
@@ -9629,7 +9694,7 @@ do
         if k ~= Formation.k then
           Formation.k = k
           ac.log(string.format('race-control: standing start: lost control after the limit line, grid place P%d', k))
-          if k ~= Formation.locked[0] then rcLog(TEXTS.rc.standingStart, string.format(TEXTS.fmLimitBack, k)) end
+          if k ~= Formation.slot[0] then rcLog(TEXTS.rc.standingStart, string.format(TEXTS.fmLimitBack, k)) end
         end
       end
     end
@@ -9677,10 +9742,12 @@ do
       end
       if all then
         Formation.pitPass = true
+        Formation.boxLeave = car.isInPitlane and CarRead.gridPlace(0) ~= nil
         ac.log('race-control: start: the field passed the pit exit, the pit open')
         Rules.finalize()
       end
     end
+    if Formation.boxLeave and not car.isInPitlane then Formation.boxLeave = false end
   end
   function Formation.zero()
     local p = Formation.phase
@@ -9889,6 +9956,11 @@ do
     if a.best > 0 and a.bt ~= b.bt then return a.bt < b.bt end
     return a.slot < b.slot
   end
+  local function gridOrder(a, b)
+    local ka, kb = CarRead.gridPlace(a.index) or math.huge, CarRead.gridPlace(b.index) or math.huge
+    if ka ~= kb then return ka < kb end
+    return a.slot < b.slot
+  end
   local function arrivalOrder(a, b)
     if a.laps ~= b.laps then return a.laps > b.laps end
     if a.laps > 0 and a.ct ~= b.ct then return a.ct < b.ct end
@@ -9947,6 +10019,7 @@ do
     if added then seenSave() end
     local arrival = race and Clock.endMs ~= nil
     if not race or arrival then table.sort(rows, arrival and arrivalOrder or bestOrder) end
+    if race and not arrival and Clock.greenMs == nil and config.gridOrder then table.sort(rows, gridOrder) end
     local classPos2 = {}
     local classLead, classAhead = {}, {}
     local gap = arrival and lineGap or Relative.gap
@@ -10723,6 +10796,7 @@ function Panel.cellPit()
   if state.pit.stopDone then return { value = TEXTS.pitDone, color = 'dim' } end
   if t < s then return { value = string.format(TEXTS.pitOpensIn, mmss((s - t) / 1000, true)), color = 'dim' } end
   if t <= e then return { value = string.format(TEXTS.pitOpen, mmss((e - t) / 1000, true)), color = 'yellow' } end
+  if PitStops.stopNeutral(ac.getCar(0)) then return { value = TEXTS.pitNeutral, color = 'yellow', neutral = true } end
   return { value = TEXTS.pitMissed, color = 'red' }
 end
 function Panel.cellSwap()
@@ -10771,7 +10845,8 @@ function Panel.message()
   if items[1] then return itemText(items[1]), 'yellow' end
   if state.code80 then return TEXTS.code80, 'yellow' end
   local pit = Panel.cellPit()
-  if pit and not state.pit.done and pit.color == 'yellow' then return TEXTS.pitOpenMsg, 'yellow' end
+  if pit and pit.neutral then return TEXTS.pitNeutralMsg, 'yellow' end
+  if pit and pit.color == 'yellow' then return TEXTS.pitOpenMsg, 'yellow' end
   return nil
 end
 function Panel.frameColor()
@@ -17454,7 +17529,7 @@ float4 main(PS_IN pin) {
           local _, _, total, sname = sessionLine()
           local ss = ac.getSession(Session.index or sim.currentSessionIndex or 0)
           local isRace = ss and ss.type == ac.SessionType.Race
-          local proc = isRace and (config.formation.procedure == 'STANDING' and T.snStart[2] or config.formation.procedure == 'ROLLING' and T.snStart[1]) or nil
+          local proc = isRace and (config.raceProcedure.procedure == 'STANDING' and T.snStart[2] or config.raceProcedure.procedure == 'ROLLING' and T.snStart[1]) or nil
           local cool = S.kind == 'cool'
           S.line = Lang.letters.upper(cool and sname or ((S.kind == 'form' and (sname .. ' · ') or '') .. total .. (proc and (' · ' .. proc) or '')))
           S.big = Lang.letters.upper(S.kind == 'form' and TEXTS.fmTitle or cool and T.coolDown or sname)
@@ -20721,6 +20796,10 @@ local drawDesktopUI = (function()
           Desktop.text.minPx = Desktop.text.min * sm
           lobby(size.x, size.y, sm)
           if Desktop.reportOpen then reportWindow(size.x, size.y, sm); Drag.press() end
+          if Flags.formation and Flags.formation.menuHeld() then
+            if Session.waitReason() then drawSessionWait() end
+            return true
+          end
           return Desktop.sessionFinale()
         end
         local free = state.menuFreeUntil and state.ui.clock < state.menuFreeUntil
