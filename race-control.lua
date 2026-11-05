@@ -45,7 +45,7 @@ local cfg = ac.configValues({
   tyreTemp = '',
   flags = '',
   restart = '',
-  formation = '',
+  raceProcedure = '',
   eventName = '',
   raceControlSteamID = '',
   staffSteamIDs = '',
@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V271 - 2026.11.05'
+local RC_VERSION = 'V272 - 2026.11.05'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -570,7 +570,8 @@ local TEXTS = {
     opSessions = 'Sessions', opRules = 'Rules', opDrivers = 'Drivers per team', opStops = 'Pit stops required', opSwaps = 'Driver swaps required',
     opStint = 'Minimum stint', opStintMax = 'Maximum stint', opClasses = 'Classes', opDate = 'Date', opTrack = 'Track', opLayout = 'Layout', opTime = 'Time',
     opFrom = '%s to %s', opTrackK = 'Track and weather', opGrip = 'Grip', opAir = 'Air', opRoad = 'Track', opNow = 'Now', opRain = 'Rain',
-    opList = 'Entrants', opHead = { 'No.', 'Drivers', 'Team', 'Car', 'Class' }, snK = 'Session', snStart = { 'Rolling start', 'Standing start' }, minutes = '%d min',
+    opList = 'Entrants', opHead = { 'No.', 'Drivers', 'Team', 'Car', 'Class' }, snK = 'Session', snStart = { 'Rolling start', 'Standing start' }, snStartKmr = 'KMR rolling start',
+    gridClass = 'Grid by class', gridClassRev = 'Grid by class reversed (%s per class)', gridAll = 'all', minutes = '%d min',
     coolDown = 'Cool-down lap', winner = 'Winner', winners = 'Winners',
     pitStop = 'Stop · parked %.1f s', pitLane = 'Pit lane %.1f s',
     secK = 'Sector %s', secFast = 'Fastest', lcK = 'Fastest laps', lcHead = { 'Class', 'Lap', 'Driver', 'Car', 'When' },
@@ -1010,10 +1011,10 @@ local config = (function()
     restart = structKey('restart', { gridDelay = 5, gridSeconds = 30, lights = 5, stepSeconds = 1, releaseLight = 3,
       randomMin = 0.2, randomMax = 3, jumpMeters = 0.5, jumpLaps = 2, screenLightsFrom = 22, prestartSeconds = 5,
       abortSeconds = 8 }),
-    raceProcedure = structKey('raceProcedure', { procedure = 'KMR', maxKmh = 150, overSeconds = 10, speedLaps = 1, minKmh = 30,
-      slowSeconds = 15, slowLaps = 3, giveBackSeconds = 20, passLaps = 3, passFarM = 100, leaderSlowKmh = 30, slowFarKmh = 40,
-      slowFarM = 75, alignMeters = 0.7, alignKmh = 1, alignSeconds = 60, approachM = 400, limitSpline = 0.788, pitExitSpline = 0.024,
-      grid1 = 'NORMAL', reverse1 = 0, grid2 = 'NORMAL', reverse2 = 0 }),
+    raceProcedure = structKey('raceProcedure', { procedure1 = 'KMR', grid1 = 'NORMAL', reverse1 = 0, procedure2 = 'KMR', grid2 = 'NORMAL', reverse2 = 0,
+      maxKmh = 150, overSeconds = 10, speedLaps = 1, minKmh = 30, slowSeconds = 15, slowLaps = 3, giveBackSeconds = 20, passLaps = 3, passFarM = 100,
+      leaderSlowKmh = 30, slowFarKmh = 40, slowFarM = 75, alignMeters = 0.7, alignKmh = 1, alignSeconds = 60, approachM = 400, limitSpline = 0.788,
+      pitExitSpline = 0.024 }),
     driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
     kmrPoints = kmrPoints,
     kmrRating = kmrRating,
@@ -1082,6 +1083,7 @@ local config = (function()
     unpaid = bySession(rule(K('practiceSlowdownUnpaidPenalty'), 0), rule(K('qualifySlowdownUnpaidPenalty'), 0),
       rule(K('raceSlowdownUnpaidPenalty'), 0)),
   }
+  c.raceProcedure.procedure = c.raceProcedure.procedure1
   c.staffSteamIDs = tostring(K('staffSteamIDs') or '')
   local staffPits = theme('staffPits') or {}
   c.staffPits = { org = math.max(math.floor(tonumber(staffPits.org) or 0), 0), tv = math.max(math.floor(tonumber(staffPits.tv) or 0), 0) }
@@ -2662,6 +2664,14 @@ do
       config.raceOverTime = tonumber(body:match('raceOverTime=(%d+)')) or config.raceOverTime
       config.qualifyWait = tonumber(body:match('qualifyWait=(%d+)')) or config.qualifyWait
       config.raceNo = tonumber(body:match('raceNo=(%d+)'))
+      local R = config.raceProcedure
+      R.procedure1 = body:match('|procedure1=(%u+)') or R.procedure1
+      R.grid1 = body:match('|grid1=(%u+)') or R.grid1
+      R.reverse1 = tonumber(body:match('|reverse1=(%-?%d+)')) or R.reverse1
+      R.procedure2 = body:match('|procedure2=(%u+)') or R.procedure2
+      R.grid2 = body:match('|grid2=(%u+)') or R.grid2
+      R.reverse2 = tonumber(body:match('|reverse2=(%-?%d+)')) or R.reverse2
+      R.procedure = R[config.raceNo == 2 and 'procedure2' or 'procedure1']
       local cc = body:match('carClasses=([^|]*)')
       if cc and cc ~= '' and cc ~= config.carClassesText then
         local t = {}
@@ -9263,6 +9273,13 @@ do
     return Formation.on() and Formation.phase ~= nil and Formation.phase ~= 'pre' and not Formation.pitPass
   end
   function Formation.menuHeld() return Formation.on() and Session.beforeStart() and not Formation.boxed end
+  function Formation.raceText(n)
+    local R, T = config.raceProcedure, TEXTS.bc
+    local p = R['procedure' .. n]
+    local rev = R['grid' .. n] == 'REVERSED' and tonumber(R['reverse' .. n]) or 0
+    return p == 'STANDING' and T.snStart[2] or p == 'ROLLING' and T.snStart[1] or T.snStartKmr,
+      rev ~= 0 and string.format(T.gridClassRev, rev < 0 and T.gridAll or tostring(rev)) or T.gridClass
+  end
   local reset = sessionPart('formation', Formation, function()
     return { phase = SESSION_NONE, locked = {}, leader = SESSION_NONE, prog = 0, lastSp = SESSION_NONE, endT = SESSION_NONE, overSince = SESSION_NONE,
       slowSince = SESSION_NONE, overDone = false, slowDone = false, giveBack = {}, side = {}, k = SESSION_NONE, aligned = false, t0 = SESSION_NONE,
@@ -14239,6 +14256,10 @@ float4 main(PS_IN pin) {
           if n == 1 then firstAt = at end
           local name = races > 1 and string.format(TEXTS.evRaceN, n) or (TEXTS.sessionName[ss.type] or '-')
           out[#out + 1] = { name .. (at and string.format(TEXTS.evStarts, at) or ''), on and (hms(Clock.ms()) .. ' / ' .. total) or total, on }
+          if ss.type == ac.SessionType.Race then
+            local st, gr = Flags.formation.raceText(n)
+            out[#out + 1] = { st, gr, on }
+          end
         end
       end
     end
@@ -16103,19 +16124,21 @@ float4 main(PS_IN pin) {
       local T = TEXTS.bc
       local idx = Session.index or sim.currentSessionIndex or 0
       local ss = ac.getSession(idx)
-      local name, at
+      local name, at, proc
       if ss and ss.type == ac.SessionType.Race and (tonumber(config.eventRaces) or 1) > 1 and (config.raceNo or 1) == 1 then
         name = string.format(T.raceN, 2)
+        proc = (Flags.formation.raceText(2))
       else
         local nx = ac.getSession(idx + 1)
         if nx then
           name = T.sess[nx.type]
           local starts = RecordSync.base.forecast and RecordSync.base.forecast.starts
           at = starts and starts[idx + 1] or nil
+          if nx.type == ac.SessionType.Race then proc = (Flags.formation.raceText(1)) end
         end
       end
       if not name then return T.finished end
-      return string.format(T.next, name) .. (at and (' · ' .. at) or '')
+      return string.format(T.next, name) .. (at and (' · ' .. at) or '') .. (proc and (' · ' .. proc) or '')
     end
     local function sessionTexts()
       local label, el, total, sname = sessionLine()
@@ -17530,7 +17553,8 @@ float4 main(PS_IN pin) {
           local _, _, total, sname = sessionLine()
           local ss = ac.getSession(Session.index or sim.currentSessionIndex or 0)
           local isRace = ss and ss.type == ac.SessionType.Race
-          local proc = isRace and (config.raceProcedure.procedure == 'STANDING' and T.snStart[2] or config.raceProcedure.procedure == 'ROLLING' and T.snStart[1]) or nil
+          local st, gr = Flags.formation.raceText((tonumber(config.eventRaces) or 1) > 1 and (config.raceNo or 1) or 1)
+          local proc = isRace and (st .. ' · ' .. gr) or nil
           local cool = S.kind == 'cool'
           S.line = Lang.letters.upper(cool and sname or ((S.kind == 'form' and (sname .. ' · ') or '') .. total .. (proc and (' · ' .. proc) or '')))
           S.big = Lang.letters.upper(S.kind == 'form' and TEXTS.fmTitle or cool and T.coolDown or sname)
