@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V272 - 2026.11.05'
+local RC_VERSION = 'V273 - 2026.11.05'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1693,7 +1693,7 @@ do
         if on ~= r.on then stale[i] = true end
         r.c, r.on, r.sp = c, on, CarRead.num(c.splinePosition)
         if CarRead.num(c.speedKmh) >= 5 then r.movedT = now end
-        if CarRadar.on then CarRadar.read(i, r, c) end
+        if CarRadar.want then CarRadar.read(i, r, c) end
         if stale[i] or (on and r.name == '') then
           stale[i] = nil
           driver(r)
@@ -12385,20 +12385,29 @@ local function drawTextRight(text, font, size, xRight, y, color)
   ui.dwriteDrawText(text, size, TMP.text:set(px(xRight - tw), px(y)), color)
   ui.popDWriteFont()
 end
-CarRadar = { on = false, PLACE = { 888, 364, 145 } }
+CarRadar = { on = false, want = false, close = false, PLACE = { 875, 364, 170 } }
 do
-  local EDGE, SOLID, RISK, CONTACT = 7 * 3.5 / 3, 2.0 * 7 / 3, 1.5, 0.75
+  local EDGE, RISK, CONTACT = 7 * 3.5 / 3, 1.5, 0.75
+  local K = { START = EDGE * 1.15, LEN = 0.9, FACTOR = 1.8, IN = EDGE * 0.95, OUT = EDGE * 1.08 }
+  K.RINGS = { 3, 5, 7, EDGE }
   local ZONE = { rgbm(0.12, 0.77, 0.23, 1), rgbm(1, 0.54, 0.11, 1), rgbm(0.88, 0.09, 0.09, 1) }
+  K.FLAG = { yellow = rgbm(1, 0.83, 0, 1), white = rgbm(1, 1, 1, 1), blue = rgbm(0.11, 0.31, 0.85, 1) }
+  K.FILL, K.DARK, K.LIGHT, K.TYRE = rgbm(0.04, 0.04, 0.05, 0.9), rgbm(0.04, 0.05, 0.06, 1), rgbm(1, 1, 1, 1), rgbm(0.04, 0.05, 0.06, 1)
+  K.OWN = rgbm(1, 0.85, 0.25, 0.18)
   local near, nearN = {}, 0
   local my = { p = vec3(), f = vec3(), rt = vec3(), w = 2, l = 4.6, ok = false }
   local img = { size = 0 }
-  local V = { a = vec2(), b = vec2(), c = vec2() }
+  local V = { a = vec2(), b = vec2(), c = vec2(), d = vec2() }
+  K.P1, K.P2, K.MP1, K.MP2 = vec2(), vec2(), vec2(), vec2()
+  K.ME = { rx = 0, rz = 0, rh = 0, rw = 2, rl = 4.6 }
+  K.TYRES = { { 0.436, 0.764 }, { -0.8, -0.436 } }
   local COL, GLOW = rgbm(1, 1, 1, 1), rgbm(1, 1, 1, 1)
   local function setCol(c, r, g, b, m) c.r, c.g, c.b, c.mult = r, g, b, m return c end
-  local function fade(d) return d <= SOLID and 1 or math.max(0, (EDGE - d) / (EDGE - SOLID)) end
+  local H = {}
   function CarRadar.read(i, r, c)
     local p = c.position
     if i == 0 then
+      CarRadar.close = nearN > 0
       nearN = 0
       local wh = c.wheels
       my.ok = p ~= nil and wh ~= nil and wh[0] ~= nil and wh[1] ~= nil
@@ -12415,72 +12424,172 @@ do
     local dx, dy, dz = p.x - my.p.x, p.y - my.p.y, p.z - my.p.z
     local rx = dx * my.rt.x + dy * my.rt.y + dz * my.rt.z
     local rz = dx * my.f.x + dy * my.f.y + dz * my.f.z
-    if rx * rx + rz * rz > EDGE * EDGE then return end
+    if rx * rx + rz * rz > K.START * K.START then return end
     local lk, sz = c.look, c.aabbSize
-    r.rx, r.rz = rx, rz
+    r.rx, r.rz, r.ri = rx, rz, i
     r.rh = math.atan2(lk.x * my.rt.x + lk.y * my.rt.y + lk.z * my.rt.z, lk.x * my.f.x + lk.y * my.f.y + lk.z * my.f.z)
     r.rw, r.rl = sz and sz.x or my.w, sz and sz.z or my.l
     nearN = nearN + 1
     near[nearN] = r
   end
   local function images(size)
-    if img.bg then img.bg:dispose(); img.cross:dispose() end
-    img.size, img.bg, img.cross = size, ui.ExtraCanvas(vec2(size, size)), ui.ExtraCanvas(vec2(size, size))
+    if img.bg then img.bg:dispose(); img.cross:dispose(); img.mask:dispose() end
     local r = size / 2
-    local c, k = vec2(r, r), r / EDGE
+    local k = r / EDGE
+    local ms = math.ceil(2 * K.OUT * k) + 2
+    img.size, img.ms = size, ms
+    img.bg, img.cross, img.mask = ui.ExtraCanvas(vec2(size, size)), ui.ExtraCanvas(vec2(size, size)), ui.ExtraCanvas(vec2(ms, ms))
+    local c = vec2(r, r)
     img.bg:clear(rgbm(0, 0, 0, 0))
     img.bg:update(function()
       for n, m in ipairs({ 3, 5, 7 }) do ui.drawCircle(c, m * k, rgbm(1, 1, 1, 0.13 - (n - 1) * 0.03), 64, 1) end
+      ui.drawCircle(c, EDGE * k - 0.5, rgbm(1, 1, 1, 0.18), 64, 1)
     end)
     img.cross:clear(rgbm(0, 0, 0, 0))
     img.cross:update(function()
       local a, b = vec2(), vec2()
-      for x = 0, size - 2, 2 do
-        local col = rgbm(1, 1, 1, 0.7 * fade(math.abs(x + 1 - r) / k))
-        ui.drawLine(a:set(x, r), b:set(x + 2, r), col, 1)
-        ui.drawLine(a:set(r, x), b:set(r, x + 2), col, 1)
+      ui.drawLine(a:set(0, r), b:set(size, r), rgbm(1, 1, 1, 0.35), 1)
+      ui.drawLine(a:set(r, 0), b:set(r, size), rgbm(1, 1, 1, 0.35), 1)
+    end)
+    img.mask:clear(rgbm(0, 0, 0, 0))
+    img.mask:update(function()
+      local mc = vec2(ms / 2, ms / 2)
+      ui.drawCircleFilled(mc, K.IN * k, rgbm(1, 1, 1, 1), 64)
+      for q = math.floor(K.IN * k), math.ceil(K.OUT * k) do
+        ui.drawCircle(mc, q + 0.5, rgbm(1, 1, 1, math.max(0, math.min(1, (K.OUT * k - q) / ((K.OUT - K.IN) * k)))), 64, 1.5)
       end
     end)
   end
-  local CORNERS = { { 1, 1, -math.pi / 2 }, { 1, -1, 0 }, { -1, -1, math.pi / 2 }, { -1, 1, math.pi } }
-  local function path(x, y, wd, ln, hd)
-    local cs, sn, rr = math.cos(hd), math.sin(hd), math.min(wd, ln) * 0.22
-    for _, q in ipairs(CORNERS) do
-      local lx, ly = q[1] * (wd / 2 - rr), q[2] * (ln / 2 - rr)
-      ui.pathArcTo(V.c:set(x + lx * cs + ly * sn, y + lx * sn - ly * cs), rr, hd + q[3], hd + q[3] + math.pi / 2, 4)
+  function H.at(v, r, u, w, cx, cy, m)
+    local cs, sn = math.cos(r.rh), math.sin(r.rh)
+    return v:set(cx + (r.rx + u * cs + w * sn) * m, cy - (r.rz - u * sn + w * cs) * m)
+  end
+  function H.quad(r, u1, w1, u2, w2, col, cx, cy, m)
+    ui.drawQuadFilled(H.at(V.a, r, u1, w1, cx, cy, m), H.at(V.b, r, u2, w1, cx, cy, m), H.at(V.c, r, u2, w2, cx, cy, m), H.at(V.d, r, u1, w2, cx, cy, m), col)
+  end
+  K.CORNERS = { { 1, 1, -math.pi / 2 }, { 1, -1, 0 }, { -1, -1, math.pi / 2 }, { -1, 1, math.pi } }
+  function H.body(r, hw, hl, cx, cy, m)
+    local rr = math.min(hw, hl) * 0.52
+    for _, q in ipairs(K.CORNERS) do
+      ui.pathArcTo(H.at(V.a, r, q[1] * (hw - rr), q[2] * (hl - rr), cx, cy, m), rr * m, r.rh + q[3], r.rh + q[3] + math.pi / 2, 4)
     end
   end
-  local function frameOf(x, y, wd, ln, hd, col, glow, s)
-    if glow then
-      setCol(GLOW, col.r, col.g, col.b, col.mult * 0.3)
-      path(x, y, wd, ln, hd)
-      ui.pathStroke(GLOW, true, 4 * s)
+  function H.zoneOf(r)
+    local gap = math.sqrt(math.max(0, math.abs(r.rx) - (my.w + r.rw) / 2) ^ 2 + math.max(0, math.abs(r.rz) - (my.l + r.rl) / 2) ^ 2)
+    return gap <= CONTACT and 3 or gap <= RISK and 2 or 1
+  end
+  function H.ink(c) return (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) > 0.55 and K.DARK or K.LIGHT end
+  function H.three(name)
+    local out, n = '', 0
+    for ch in tostring(name or ''):gmatch('[%z\1-\127\194-\244][\128-\191]*') do
+      if ch ~= ' ' then out, n = out .. ch, n + 1 end
+      if n == 3 then break end
     end
-    path(x, y, wd, ln, hd)
-    ui.pathStroke(col, true, 1.6 * s)
+    return Lang.letters.upper(out)
+  end
+  K.cu, K.cw, K.aa = { -1, 1, 1, -1 }, { -1, -1, 1, 1 }, {}
+  function H.lit(r, col, cx, cy, m, s)
+    local hw, hl = r.rw / 2, r.rl * K.LEN / 2
+    local cs, sn = math.cos(r.rh), math.sin(r.rh)
+    local ang = math.atan2(r.rz, r.rx)
+    local lo, hi, dmax = 1e9, -1e9, 0
+    local xlo, xhi, zlo, zhi = 1e9, -1e9, 1e9, -1e9
+    for q = 1, 4 do
+      local x, z = r.rx + K.cu[q] * hw * cs + K.cw[q] * hl * sn, r.rz - K.cu[q] * hw * sn + K.cw[q] * hl * cs
+      local d = math.atan2(z, x) - ang
+      while d > math.pi do d = d - 2 * math.pi end
+      while d < -math.pi do d = d + 2 * math.pi end
+      K.aa[q] = ang + d
+      lo, hi = math.min(lo, K.aa[q]), math.max(hi, K.aa[q])
+      xlo, xhi, zlo, zhi = math.min(xlo, x), math.max(xhi, x), math.min(zlo, z), math.max(zhi, z)
+      dmax = math.max(dmax, math.sqrt(x * x + z * z))
+    end
+    local u0, w0 = -r.rx * cs + r.rz * sn, -r.rx * sn - r.rz * cs
+    local nu, nw = math.max(-hw, math.min(hw, u0)) - u0, math.max(-hl, math.min(hl, w0)) - w0
+    local dmin = math.sqrt(nu * nu + nw * nw)
+    local mid, half = (lo + hi) / 2, math.min((hi - lo) / 2 * K.FACTOR, math.pi)
+    for _, R in ipairs(K.RINGS) do
+      if dmin <= R and R <= dmax then
+        for pass = 1, 2 do
+          ui.pathArcTo(V.a:set(cx, cy), R * m, -(mid + half), -(mid - half), 24)
+          if pass == 1 then ui.pathStroke(setCol(GLOW, col.r, col.g, col.b, 0.3), false, 4 * s) else ui.pathStroke(col, false, 1.6 * s) end
+        end
+      end
+    end
+    local function seg(x1, z1, x2, z2)
+      ui.drawLine(V.a:set(cx + x1 * m, cy - z1 * m), V.b:set(cx + x2 * m, cy - z2 * m), setCol(GLOW, col.r, col.g, col.b, 0.3), 4 * s)
+      ui.drawLine(V.a:set(cx + x1 * m, cy - z1 * m), V.b:set(cx + x2 * m, cy - z2 * m), col, 1.6 * s)
+    end
+    if zlo <= 0 and zhi >= 0 then
+      local c0, h0 = (xlo + xhi) / 2, (xhi - xlo) / 2 * K.FACTOR
+      seg(math.max(-EDGE, c0 - h0), 0, math.min(EDGE, c0 + h0), 0)
+    end
+    if xlo <= 0 and xhi >= 0 then
+      local c0, h0 = (zlo + zhi) / 2, (zhi - zlo) / 2 * K.FACTOR
+      seg(0, math.max(-EDGE, c0 - h0), 0, math.min(EDGE, c0 + h0))
+    end
+  end
+  function H.car(r, cx, cy, m, s, mp1, mp2)
+    local i = r.ri
+    local row = RaceTable.byIndex and RaceTable.byIndex[i]
+    local me = RaceTable.byIndex and RaceTable.byIndex[0]
+    local _, flag = Flags.incidentOf(i)
+    local fc = K.FLAG[flag] or (row and me and RaceTable.progress(row) - RaceTable.progress(me) >= 1 and K.FLAG.blue) or nil
+    local cc = row and row.class and Broadcast.classColor(row.class) or nil
+    local z = H.zoneOf(r)
+    local hw, hl = r.rw / 2, r.rl * K.LEN / 2
+    ui.beginTextureShade(img.mask)
+    H.body(r, hw, hl, cx, cy, m)
+    ui.pathFillConvex(fc or setCol(K.FILL, 0.04, 0.04, 0.05, 0.9 * Desktop.opacity))
+    if cc then H.quad(r, -hw + 0.06, -hl * 0.327, hw - 0.06, hl * 0.327, cc, cx, cy, m) end
+    for _, q in ipairs(K.TYRES) do
+      for _, sd in ipairs({ -1, 1 }) do H.quad(r, sd * hw - 0.12 * hw, q[1] * hl, sd * hw + 0.12 * hw, q[2] * hl, K.TYRE, cx, cy, m) end
+    end
+    H.body(r, hw, hl, cx, cy, m)
+    if z > 1 then ui.pathStroke(setCol(GLOW, ZONE[z].r, ZONE[z].g, ZONE[z].b, 0.3), true, 4 * s); H.body(r, hw, hl, cx, cy, m) end
+    ui.pathStroke(ZONE[z], true, 1.6 * s)
+    ui.endTextureShade(mp1, mp2)
+    if not row then return end
+    local d = math.sqrt(r.rx * r.rx + r.rz * r.rz)
+    local a = d <= K.IN and 1 or math.max(0, math.min(1, (K.OUT - d) / (K.OUT - K.IN)))
+    if a <= 0 then return end
+    local x, y = cx + r.rx * m, cy - r.rz * m
+    local fs, fn = 0.34 * r.rw * m, 0.53 * r.rw * m
+    local pos, num, nm = 'P' .. tostring(row.pos or '-'), tostring(row.number or ''), H.three(row.name)
+    local bodyInk, bandInk = H.ink(fc or K.FILL), H.ink(cc or fc or K.FILL)
+    ui.pushStyleVar(ui.StyleVar.Alpha, a)
+    ui.beginRotation()
+    drawText(pos, FONT_TEXT, fs, V.a:set(x - textWidth(pos, FONT_TEXT, fs) / 2, y - 0.672 * hl * m - fs / 2), bodyInk)
+    drawText(num, FONT_TITLE, fn, V.a:set(x - textWidth(num, FONT_TITLE, fn) / 2, y - fn / 2), bandInk)
+    drawText(nm, FONT_TEXT, fs, V.a:set(x - textWidth(nm, FONT_TEXT, fs) / 2, y + 0.69 * hl * m - fs / 2), bodyInk)
+    ui.endRotation(90 - math.deg(r.rh))
+    ui.popStyleVar()
   end
   function CarRadar.draw(w, h, s)
     local pl = CarRadar.PLACE
     local size = math.floor(pl[3] * s)
     if img.size ~= size then images(size) end
     local o = Drag.offset('carradar', h)
-    local p1 = V.a:set(math.floor(pl[1] * h / 1080 + o.x), math.floor(pl[2] * h / 1080 + o.y))
-    local p2 = V.b:set(p1.x + size, p1.y + size)
+    local p1 = K.P1:set(math.floor(pl[1] * h / 1080 + o.x), math.floor(pl[2] * h / 1080 + o.y))
+    local p2 = K.P2:set(p1.x + size, p1.y + size)
     Drag.group = 'carradar'
     Drag.hit(p1, p2)
     ui.drawImage(img.bg, p1, p2, setCol(COL, 1, 1, 1, Desktop.opacity))
     ui.drawImage(img.cross, p1, p2)
     local cx, cy, m = p1.x + size / 2, p1.y + size / 2, size / 2 / EDGE
-    for k = 1, nearN do
-      local r = near[k]
-      local a = fade(math.sqrt(r.rx * r.rx + r.rz * r.rz))
-      if a > 0 then
-        local gap = math.sqrt(math.max(0, math.abs(r.rx) - (my.w + r.rw) / 2) ^ 2 + math.max(0, math.abs(r.rz) - (my.l + r.rl) / 2) ^ 2)
-        local z = gap <= CONTACT and 3 or gap <= RISK and 2 or 1
-        frameOf(cx + r.rx * m, cy - r.rz * m, r.rw * m, r.rl * m, r.rh, setCol(COL, ZONE[z].r, ZONE[z].g, ZONE[z].b, a), z > 1, s)
-      end
+    local mp1, mp2 = K.MP1:set(cx - img.ms / 2, cy - img.ms / 2), K.MP2:set(cx + img.ms / 2, cy + img.ms / 2)
+    for k = 1, nearN do H.lit(near[k], ZONE[H.zoneOf(near[k])], cx, cy, m, s) end
+    for k = 1, nearN do H.car(near[k], cx, cy, m, s, mp1, mp2) end
+    local me = K.ME
+    me.rw, me.rl = my.w, my.l
+    local hw, hl = me.rw / 2, me.rl * K.LEN / 2
+    H.body(me, hw, hl, cx, cy, m)
+    ui.pathFillConvex(K.OWN)
+    for _, q in ipairs(K.TYRES) do
+      for _, sd in ipairs({ -1, 1 }) do H.quad(me, sd * hw - 0.12 * hw, q[1] * hl, sd * hw + 0.12 * hw, q[2] * hl, K.TYRE, cx, cy, m) end
     end
-    frameOf(cx, cy, my.w * m, my.l * m, 0, PANEL_COLORS.yellow, false, s)
+    H.body(me, hw, hl, cx, cy, m)
+    ui.pathStroke(PANEL_COLORS.yellow, true, 1.6 * s)
     Drag.icons('carradar', p1, p2, s)
   end
 end
@@ -12964,7 +13073,7 @@ local drawStatus
   F1.NOSE_EXTRA, F1.EXTRA_Y = 0.6, -21
   F1.NOSE_EXTRA2, F1.EXTRA2_Y = 0.6, -25
   F1.SHIFT = -4
-  F1.WHEELS = { { 11.5, 17, -27, -15 }, { 10, 17, 16, 31 } }
+  F1.WHEELS = { { 11.5, 17, -27, -15 }, { 11.5, 18.5, 16, 31 } }
   F1.TRUMPET_Y, F1.TRUMPET_R = 9, 1.3
   F1.REAR_UP = F1.TRUMPET_Y - F1.TRUMPET_R
   F1.DIRT_GAP, F1.DIRT_W, F1.DIRT_TRACK = 1.5, 1.5, rgbm(1, 1, 1, 0.1)
@@ -13007,7 +13116,7 @@ local drawStatus
         ui.drawLine(P(sd * wl[1], mid), P(sd * half(mid + 4), mid + 4), body, 1)
         local w = wh[(n - 1) * 2 + (sd < 0 and 0 or 1)]
         local k = math.min(math.max(num(w and w.tyreDirty), 0), 1)
-        local bx1, bx2 = sd * (wl[2] + F1.DIRT_GAP), sd * (wl[2] + F1.DIRT_GAP + F1.DIRT_W)
+        local bx1, bx2 = sd * (F1.WHEELS[2][2] + F1.DIRT_GAP), sd * (F1.WHEELS[2][2] + F1.DIRT_GAP + F1.DIRT_W)
         if bx1 > bx2 then bx1, bx2 = bx2, bx1 end
         ui.drawRectFilled(P(bx1, wl[3]), P(bx2, wl[4]), F1.DIRT_TRACK, 1)
         if k > 0 then
@@ -15942,6 +16051,7 @@ float4 main(PS_IN pin) {
     local NUMB = rgbm(1, 1, 1, 0.35)
     local MIST = rgbm(0xd7 / 255, 0xdb / 255, 0xe0 / 255, 1)
     local MIST_GAP = rgbm(0xc8 / 255, 0xcc / 255, 0xd3 / 255, 1)
+    local POS_EQ, POS_V = rgbm(0x8a / 255, 0x90 / 255, 0x99 / 255, 1), vec2(0, 0)
     local LT_INK = rgbm(0x0a / 255, 0x0c / 255, 0x10 / 255, 1)
     local WHITE = rgbm(1, 1, 1, 1)
     local TWELVE = rgbm(0x1f / 255, 0x68 / 255, 0xcf / 255, 1)
@@ -16050,6 +16160,11 @@ float4 main(PS_IN pin) {
       local n = 0
       for _, k in ipairs(BC.classKeys or {}) do n = n + 1 if k == key then break end end
       return key, CLASS_DEFAULT[(math.max(n, 1) - 1) % #CLASS_DEFAULT + 1]
+    end
+    function BC.classColor(key)
+      BC.classKeys = RaceTable.classKeys()
+      local _, c = classStyle(key)
+      return c
     end
     local function tyreStyle(name)
       local id = identity()
@@ -16182,6 +16297,33 @@ float4 main(PS_IN pin) {
       end
       return out, #BC.classKeys > 1
     end
+    local function gained(r, list, i)
+      if sim.raceSessionType ~= ac.SessionType.Race or Clock.greenMs == nil then return nil end
+      local g = CarRead.gridPlace(r.index)
+      if not g then return nil end
+      local start = 1
+      for _, x in ipairs(list) do
+        local gx = x ~= r and CarRead.gridPlace(x.index)
+        if gx and gx < g then start = start + 1 end
+      end
+      return start - i
+    end
+    local function posMark(bx1, bx2, by1, by2, k, d, ty)
+      local fs = 17 * k
+      local t = (d and d ~= 0) and string.format('%+d', d) or '-'
+      local tw = textWidth(t, F.rb, fs)
+      local aw = (d and d ~= 0) and 9 * k or 0
+      local gap = aw > 0 and 4 * k or 0
+      local x = (bx1 + bx2) / 2 - (aw + gap + tw) / 2
+      local cy = (by1 + by2) / 2
+      if aw > 0 then
+        local up = d > 0
+        local base = up and cy - k or cy + k
+        ui.drawTriangleFilled(TMP.a:set(x + aw / 2, up and cy - 7 * k or cy + 7 * k), TMP.b:set(x + aw, base), POS_V:set(x, base), WHITE)
+        rect(x + aw * 0.3, up and base or cy - 7 * k, x + aw * 0.7, up and cy + 7 * k or base, WHITE)
+      end
+      drawText(t, F.rb, fs, TMP.a:set(x + aw + gap, ty), WHITE)
+    end
     local function timeText(r, list, k, phaseGap, ended, byClass)
       local T = TEXTS.bc
       local cls = byClass == nil and placeNow() ~= 'ALL' or byClass
@@ -16256,9 +16398,12 @@ float4 main(PS_IN pin) {
       for n, r in ipairs(L) do if r == me then return me, L, n, cls end end
       return nil
     end
-    local function gapNow()
-      return BC.opt.time == 'GAP' or (BC.opt.time == 'ALT' and math.floor(state.ui.clock / 10) % 2 == 1)
+    local ALT_PHASES = { 'LAST', 'GAP', 'POS' }
+    local function timePhase()
+      if BC.opt.time == 'ALT' then return ALT_PHASES[math.floor(state.ui.clock / 10) % 3 + 1] end
+      return BC.opt.time
     end
+    local function gapNow() return timePhase() == 'GAP' end
     local function strip(sx1, xr, sy1, k, ls, op)
       if BC.stripUrl ~= ls then BC.stripUrl, BC.stripAr = ls, nil end
       if ls and ls ~= '' and not BC.stripAr then
@@ -16293,6 +16438,7 @@ float4 main(PS_IN pin) {
     local SAY_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.96)
     local ROLL = 0.45
     BC.ROLL = ROLL
+    BC.SCALE = 0.87
     local BOX_TINT, BOX_SOFT, RES_PIN = rgbm(1, 1, 1, 0.04), rgbm(31 / 255, 104 / 255, 207 / 255, 0.30), rgbm(1, 1, 1, 0.22)
     CR.va, CR.vb = vec2(0, 0), vec2(0, 0)
     CR.barMove, CR.barStarts = {}, {}
@@ -17733,9 +17879,16 @@ float4 main(PS_IN pin) {
         local _, ccol = classStyle(r.class)
         slanted(bx1 - 3.72 * k, by1 - 6.6 * k, bx2 + 3.72 * k, by2 + 6.6 * k, (tw and 9.3 or 9.05) * k, ccol)
       end
-      slanted(bx1, by1, bx2, by2, 6 * k, sel and WHITE or ((phaseGap and not ended) and MIST_GAP or MIST))
-      local ttw = textWidth(tt, F.rb, 17 * k)
-      drawText(tt, F.rb, 17 * k, TMP.a:set((bx1 + bx2) / 2 - ttw / 2, by1 + (tw and 2 or 3) * k), bad and RED or LT_INK)
+      local gain = timePhase() == 'POS' and not ended
+      local d = gain and gained(r, list, i) or nil
+      slanted(bx1, by1, bx2, by2, 6 * k, gain and (d and d > 0 and GREEN or d and d < 0 and RED or POS_EQ) or sel and WHITE
+        or ((phaseGap and not ended) and MIST_GAP or MIST))
+      if gain then
+        posMark(bx1, bx2, by1, by2, k, d, by1 + (tw and 2 or 3) * k)
+      else
+        local ttw = textWidth(tt, F.rb, 17 * k)
+        drawText(tt, F.rb, 17 * k, TMP.a:set((bx1 + bx2) / 2 - ttw / 2, by1 + (tw and 2 or 3) * k), bad and RED or LT_INK)
+      end
       if r.index == BC.fastIdx then fastBadge(bx2 - 2 * k, by1 + k, k) end
       if pen and not tw then CR.seal(bx2 + (cls and 3.72 * k or 0) + 9 * k, y1 + 22 * k, k, pen) end
       if tw then CR.towerSeal(x + W + 6 * k, y1, r.index, pen, r) end
@@ -18155,7 +18308,7 @@ float4 main(PS_IN pin) {
     end
     local drawCredits
     function BC.draw(w, h)
-      local k = h / 1080
+      local k = h / 1080 * BC.SCALE
       CR.k = k
       fonts(k)
       RecordSync.base.dirPenAsk()
@@ -18173,7 +18326,7 @@ float4 main(PS_IN pin) {
       CR.gridDraw(w, h, k, id)
     end
     drawCredits = function(w, h, onlyLogos)
-      local k = h / 1080
+      local k = h / 1080 * BC.SCALE
       local id = identity()
       local T = TEXTS.bc
       if BC.opt.logos ~= 'NONE' then
@@ -18382,7 +18535,8 @@ float4 main(PS_IN pin) {
     if shown('cockpit', car.isInPitlane) then cockpitScreen(car, w, h, s) end
     if shown('perf', false) then perfScreen(car, w, h, s) end
     if shown('calc', false) then calcScreen(car, w, h, s) end
-    CarRadar.on = shown('carradar', Desktop.close)
+    CarRadar.want = Drag.mode('carradar') ~= 'hidden'
+    CarRadar.on = shown('carradar', CarRadar.close)
     if CarRadar.on then CarRadar.draw(w, h, s) end
   end
 end)()
@@ -18614,7 +18768,7 @@ do
   end
   local function open(P, kind, set, cam, car, secs, alert)
     if not can() or Broadcast.wait.on or not car then return false end
-    local q, k = math.floor(Broadcast.opt.pq or 1), ac.getUI().windowSize.y / 1080
+    local q, k = math.floor(Broadcast.opt.pq or 1), ac.getUI().windowSize.y / 1080 * Broadcast.SCALE
     if P.shot and (P.q ~= q or P.k ~= k) then P.shot:dispose() P.shot = nil end
     P.shot = P.shot or make(q, k)
     P.q, P.k = q, k
