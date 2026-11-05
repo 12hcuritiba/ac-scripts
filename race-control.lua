@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V270 - 2026.11.05'
+local RC_VERSION = 'V271 - 2026.11.05'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1012,7 +1012,8 @@ local config = (function()
       abortSeconds = 8 }),
     raceProcedure = structKey('raceProcedure', { procedure = 'KMR', maxKmh = 150, overSeconds = 10, speedLaps = 1, minKmh = 30,
       slowSeconds = 15, slowLaps = 3, giveBackSeconds = 20, passLaps = 3, passFarM = 100, leaderSlowKmh = 30, slowFarKmh = 40,
-      slowFarM = 75, alignMeters = 0.7, alignKmh = 1, alignSeconds = 60, approachM = 400, limitSpline = 0.788, pitExitSpline = 0.024, grid = 'NORMAL', reverse = 0 }),
+      slowFarM = 75, alignMeters = 0.7, alignKmh = 1, alignSeconds = 60, approachM = 400, limitSpline = 0.788, pitExitSpline = 0.024,
+      grid1 = 'NORMAL', reverse1 = 0, grid2 = 'NORMAL', reverse2 = 0 }),
     driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
     kmrPoints = kmrPoints,
     kmrRating = kmrRating,
