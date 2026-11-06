@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V277 - 2026.11.05'
+local RC_VERSION = 'V278 - 2026.11.05'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -13097,14 +13097,14 @@ local drawStatus
       for k = 0, 3 do ui.drawLine(F1.q(x - 2 * s + (k % 2) * 0.9 * s, y + (k * 2 - 4) * s), F1.q(x - 2 * s + ((k + 1) % 2) * 0.9 * s, y + (k * 2 - 2) * s), col, 0.6 * s) end
     end
   end
-  F1.SCREEN = { { -5.2, -3.2 }, { 0, -4.2 }, { 5.2, -3.2 }, { 4, 3.4 }, { 0, 3.9 }, { -4, 3.4 } }
+  F1.SCREEN = { { -3.75, -2.3 }, { 0, -3 }, { 3.75, -2.3 }, { 2.9, 2.45 }, { 0, 2.8 }, { -2.9, 2.45 } }
   function F1.wiper(x, y, s, col)
     for _, p in ipairs(F1.SCREEN) do ui.pathLineTo(F1.q(x + p[1] * s, y + p[2] * s)) end
     ui.pathStroke(col, true, 0.7 * s)
-    ui.pathArcTo(F1.q(x, y + 3.4 * s), 3.6 * s, -math.pi + 0.35, -0.35, 8)
+    ui.pathArcTo(F1.q(x, y + 2.45 * s), 2.6 * s, -math.pi + 0.35, -0.35, 8)
     ui.pathStroke(col, false, 0.5 * s)
-    ui.drawLine(F1.q(x, y + 3.4 * s), F1.q(x - 2.2 * s, y - 1.6 * s), col, 0.7 * s)
-    ui.drawLine(F1.q(x - 2.9 * s, y - 0.9 * s), F1.q(x - 1.5 * s, y - 2.3 * s), col, 1.1 * s)
+    ui.drawLine(F1.q(x, y + 2.45 * s), F1.q(x - 1.6 * s, y - 1.15 * s), col, 0.7 * s)
+    ui.drawLine(F1.q(x - 2.1 * s, y - 0.65 * s), F1.q(x - 1.1 * s, y - 1.65 * s), col, 1.1 * s)
   end
   function F1.coolant(x, y, s, col)
     ui.drawLine(F1.q(x, y - 5 * s), F1.q(x, y + 1.2 * s), col, 0.8 * s)
@@ -13176,12 +13176,13 @@ local drawStatus
           local t, o, bt = num(w.tyreCoreTemperature), num(w.tyreOptimumTemperature), num(w.discTemperature)
           local tt, btx = string.format('%d°', math.floor(t + 0.5)), string.format('%d°', math.floor(bt + 0.5))
           local tc, bc = F1.tyreHeat(t, o), F1.heat(bt, 150, 600, 800)
+          local w3 = sd > 0 and TMP.width('000°', FONT_MONO, math.max(8 * s, Desktop.text.minPx)) or 0
           local a = P(sd * 31, mid - 4)
-          if sd < 0 then drawTextRight(tt, FONT_MONO, 8 * s, a.x, a.y, tc) else drawText(tt, FONT_MONO, 8 * s, a, tc) end
+          drawTextRight(tt, FONT_MONO, 8 * s, a.x + w3, a.y, tc)
           local b = P(sd * 28, mid + 8.7)
           ui.drawCircle(b, 1.8 * s, bc, 10, 0.7 * s)
           local c = P(sd * 31, mid + 4.7)
-          if sd < 0 then drawTextRight(btx, FONT_MONO, 8 * s, c.x, c.y, bc) else drawText(btx, FONT_MONO, 8 * s, c, bc) end
+          drawTextRight(btx, FONT_MONO, 8 * s, c.x + w3, c.y, bc)
         end
       end
     end
@@ -13303,7 +13304,7 @@ local drawStatus
     F1.lamp(cx + 65.5 * s, ly, s, COLOR_OFF, 'fog')
     local wm = math.floor(num(car.wiperSelectedMode))
     F1.wiper(p1.x + 20 * s, ly, s, wm > 0 and COLOR_TITLE or COLOR_OFF)
-    drawText(wm > 0 and tostring(wm) or '-', FONT_MONO, 8 * s, TMP.a:set(p1.x + 27 * s, ly - 4 * s), wm > 0 and COLOR_TITLE or COLOR_OFF)
+    drawText(wm > 0 and tostring(wm) or '-', FONT_MONO, 8 * s, TMP.a:set(p1.x + 27 * s, ly - math.max(8 * s, Desktop.text.minPx) / 2), wm > 0 and COLOR_TITLE or COLOR_OFF)
     local by = cy + 55.5 * s
     local wt, ot = num(car.waterTemperature), num(car.oilTemperature)
     local wc, oc = F1.heat(wt, 60, 100, 110), F1.heat(ot, 70, 120, 135)
