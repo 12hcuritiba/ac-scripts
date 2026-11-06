@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V273 - 2026.11.05'
+local RC_VERSION = 'V274 - 2026.11.05'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16333,9 +16333,9 @@ float4 main(PS_IN pin) {
       end
       if phaseGap then
         local ahead = list[k - 1]
-        if not ahead then return '---' end
-        if sim.raceSessionType == ac.SessionType.Race then return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '---') end
-        return (r.best > 0 and ahead.best > 0) and string.format('+%.3f', (r.best - ahead.best) / 1000) or '---'
+        if not ahead then return '-' end
+        if sim.raceSessionType == ac.SessionType.Race then return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-') end
+        return (r.best > 0 and ahead.best > 0) and string.format('+%.3f', (r.best - ahead.best) / 1000) or '-'
       end
       local _, _, ms, ok = Lap.of(r.index)
       if (ms or 0) > 0 then return lapTime(ms), not ok end
