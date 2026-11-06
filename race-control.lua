@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V279 - 2026.11.06'
+local RC_VERSION = 'V280 - 2026.11.06'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2707,6 +2707,12 @@ do
         ac.log(string.format('race-control: pitStopsRequired of the race from the tool of the organization: %d (key of the server: %s)', req,
           tostring(config.pitStopsRequiredBy[race])))
         config.pitStopsRequiredBy[race] = req
+      end
+      local ds = body:match('deskSetup=([%w%+/=_%-]+)')
+      if ds ~= config.deskSetupText then
+        local ok, t = false, nil
+        if ds then ok, t = pcall(function() return JSON.parse(ac.decodeBase64(ds)) end) end
+        config.deskSetup, config.deskSetupText = ok and type(t) == 'table' and t or nil, ds
       end
       if Broadcast and Broadcast.setupApply then Broadcast.setupApply() end
     end)
@@ -15708,11 +15714,11 @@ float4 main(PS_IN pin) {
     local BC = Broadcast
     local KEEP = 'rc.tv'
     local KEY_ESC, KEY_F2, KEY_ADD, KEY_SUB = 27, 113, 107, 109
-    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 82, bar = true, logos = 'BOTH', defSet = nil, cycle = 0, speed = 60, flag = 'FIX',
+    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 75, bar = true, logos = 'BOTH', defSet = nil, cycle = 0, speed = 60, flag = 'FIX',
       form = 'H', tower = 'ALL', pins = 3, card = 'AUTO', cards = 10, theme = 6, vn = -1, vnm = 'T', vns = 8, vc = -1, vcm = 'T', vcs = 8,
       pb = true, pt = true, pts = 5, px = true, pxs = 5, rs = true, rsg = 40, rc = true, rcs = 20, re = 'TURN', oe = true, oes = 12, ot = true, ots = 10, oi = true, ois = 30,
       sv = true, svs = 6, so = true, sos = 6, sns = 6, org = false,
-      rop = 82, oop = 90, sop = 90 }
+      rop = 75, oop = 75, sop = 75 }
     local NUMS = { cards = true, theme = true, vn = true, vns = true, vc = true, vcs = true, pts = true, pxs = true, rsg = true, rcs = true, oes = true, ots = true, ois = true,
       svs = true, sos = true, sns = true, rop = true, oop = true, sop = true }
     local BOOLS = { pb = true, pt = true, px = true, rs = true, rc = true, oe = true, ot = true, oi = true, sv = true, so = true, org = true }
@@ -15725,10 +15731,10 @@ float4 main(PS_IN pin) {
       pbx = 'bool', pbxs = 'page', allop = 'op', secop = 'op', pitop = 'op', grw = 'wait', im = 'move', ips = 'page', qb = 'bool', qbs = 'wait', rh = 'wait',
       pss = 'set', psc = 'cam', psk = 'slot', psd = 'dur', pis = 'set', pic = 'cam', pik = 'slot', pid = 'dur', pds = 'set', pdc = 'cam', pps = 'set', ppc = 'cam',
       pf = 'fps', pq = 'qual', pop = 'op', aa = 'dest', atd = 'bool', ati = 'bool', atp = 'bool', ad = 'page', of = 'bool', ofs = 'wait', dm = 'qual' }
-    local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 90,
-      tk = true, tks = 10, tkop = 90, lc = true, lcs = 12, lcop = 90, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 90, sg = true, scl = true, st = true, sts = 5,
-      sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 100, secop = 100, pitop = 100, grw = 5, im = 'ROLL', ips = 8, qb = true, qbs = 0, rh = 5,
-      pss = 0, psc = -1, psk = -1, psd = 0, pis = -2, pic = 0, pik = -1, pid = 0, pds = -1, pdc = 3, pps = 0, ppc = -1, pf = 15, pq = 1, pop = 90, aa = 2,
+    local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 75,
+      tk = true, tks = 10, tkop = 75, lc = true, lcs = 12, lcop = 75, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 75, sg = true, scl = true, st = true, sts = 5,
+      sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 90, secop = 75, pitop = 75, grw = 5, im = 'ROLL', ips = 8, qb = true, qbs = 0, rh = 5,
+      pss = 0, psc = -1, psk = -1, psd = 0, pis = -2, pic = 0, pik = -1, pid = 0, pds = -1, pdc = 3, pps = 0, ppc = -1, pf = 15, pq = 1, pop = 75, aa = 2,
       atd = true, ati = true, atp = true, ad = 8, of = false, ofs = 30, dm = 0 }
     for k, v in pairs(CR_START) do
       BC.opt[k] = v
@@ -15772,7 +15778,7 @@ float4 main(PS_IN pin) {
       local kept = tostring(ac.storage[KEEP] or '')
       for k, v in kept:gmatch('(%w+)=([^;]*)') do
         if BC.opt[k] ~= nil or k == 'defSet' then
-          if k == 'op' then BC.opt.op = tonumber(v) or 82
+          if k == 'op' then BC.opt.op = tonumber(v) or 75
           elseif k == 'cycle' then BC.opt.cycle = tonumber(v) or 0
           elseif k == 'speed' then BC.opt.speed = speedOf(v)
           elseif k == 'pins' then BC.opt.pins = pinsOf(v)
@@ -15798,8 +15804,8 @@ float4 main(PS_IN pin) {
     end
     function BC.on() return CarRead.isTv(0) end
     function BC.setupApply()
-      local s = config.bcIdentity and config.bcIdentity.setup
-      if not BC.on() or type(s) ~= 'table' or type(s.list) ~= 'table' then return end
+      local s = config.deskSetup
+      if not (BC.on() or BC.orgOn()) or type(s) ~= 'table' or type(s.list) ~= 'table' then return end
       if tostring(ac.storage.bcSetupV or '') == tostring(s.v) then return end
       for _, line in ipairs(s.list) do BC.command(line) end
       ac.storage.bcSetupV = tostring(s.v)
@@ -15809,6 +15815,7 @@ float4 main(PS_IN pin) {
     function BC.orgSet(on)
       BC.opt.org = on == true
       keep()
+      if BC.opt.org then BC.setupApply() end
       if not BC.opt.org then BroadcastPip.off() end
       ac.log('race-control: broadcast: the credits on the car of the organization ' .. (BC.opt.org and 'on' or 'off'))
     end
@@ -16040,7 +16047,7 @@ float4 main(PS_IN pin) {
         elseif k == 'LEGEND' then BC.opt.legend = v:upper()
         elseif k == 'FIX' then BC.opt.fix = v:upper()
         elseif k == 'TIME' then BC.opt.time = v:upper()
-        elseif k == 'OP' then BC.opt.op = math.min(math.max(tonumber(v) or 82, 40), 100)
+        elseif k == 'OP' then BC.opt.op = math.min(math.max(tonumber(v) or 75, 40), 100)
         elseif k == 'SHOW' then BC.opt.bar = v ~= '0'
         elseif k == 'LOGOS' then BC.opt.logos = v:upper()
         elseif k == 'CYCLE' then BC.opt.cycle = math.min(math.max(math.floor(tonumber(v) or 0), 0), 600)
@@ -16157,7 +16164,7 @@ float4 main(PS_IN pin) {
     local LOGOBG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.82)
     local RES_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.82)
     local OPEN_BG, SN_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.9), rgbm(10 / 255, 12 / 255, 16 / 255, 0.9)
-    local function opOf(v, def) return math.min(math.max(tonumber(v) or def, 40), 100) / 100 * math.min(math.max(tonumber(BC.opt.allop) or 100, 40), 100) / 100 end
+    local function opOf(v, def) return math.min(math.max(tonumber(v) or def, 40), 100) / 100 * math.min(math.max(tonumber(BC.opt.allop) or 90, 40), 100) / 100 end
     local FLAGC = { green = rgbm(31 / 255, 196 / 255, 59 / 255, 1), yellow = rgbm(1, 212 / 255, 0, 1), red = rgbm(224 / 255, 23 / 255, 23 / 255, 1),
       white = rgbm(242 / 255, 242 / 255, 242 / 255, 1) }
     local CHK_DARK, CHK_LIGHT = rgbm(0x11 / 255, 0x11 / 255, 0x11 / 255, 1), rgbm(0xee / 255, 0xee / 255, 0xee / 255, 1)
@@ -16907,7 +16914,7 @@ float4 main(PS_IN pin) {
       local r = CR.rowOf(P.car or -1)
       local w2, hh = 480 * k, 34 * k
       ui.pushClipRect(CR.va:set(x + w2 * (1 - hp), y), CR.vb:set(x + w2, y + hh), true)
-      PIP_BG.mult = 0.9 * opOf(BC.opt.pop, 90)
+      PIP_BG.mult = 0.9 * opOf(BC.opt.pop, 75)
       rect(x, y, x + w2, y + hh, PIP_BG)
       rect(x, y, x + w2, y + 2 * k, TWELVE)
       local tx = x
@@ -17061,7 +17068,7 @@ float4 main(PS_IN pin) {
       local th = 28 * k
       local total = headH + legH + th + pins * rh + (pins > 0 and 2 * k or 0) + runH + 20 * k
       local y1 = (h - total) / 2
-      RES_BG.mult = opOf(BC.opt.rop, 82)
+      RES_BG.mult = opOf(BC.opt.rop, 75)
       rect(x1, y1, x2, y1 + total, RES_BG)
       rect(x1, y1, x2, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x1 + 520 * k, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
@@ -17172,7 +17179,7 @@ float4 main(PS_IN pin) {
       local ch = 34 * k + inner + 26 * k + 20 * k
       local y1 = (h - ch) / 2
       ui.pushClipRect(CR.va:set(x1 + cw * (1 - out) / 2, y1 - 2 * k), CR.vb:set(x1 + cw - cw * (1 - out) / 2, y1 + ch), true)
-      OPEN_BG.mult = opOf(op or BC.opt.oop, 90)
+      OPEN_BG.mult = opOf(op or BC.opt.oop, 75)
       rect(x1, y1, x1 + cw, y1 + ch, OPEN_BG)
       rect(x1, y1, x1 + cw, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x1 + 520 * k, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
@@ -17848,7 +17855,7 @@ float4 main(PS_IN pin) {
       local y1 = 150 * k
       local ch = 16 * k + 20 * k + 52 * k + 24 * k + 12 * k + (cool and (8 * k + 26 * k + #wins * 34 * k + 10 * k) or (9 * k + 46 * k + 9 * k)) + 20 * k
       ui.pushClipRect(CR.va:set(x1 + cw * (1 - out) / 2, y1 - 2 * k), CR.vb:set(x1 + cw - cw * (1 - out) / 2, y1 + ch), true)
-      SN_BG.mult = opOf(S.kind and BC.opt.fcop or BC.opt.sop, 90)
+      SN_BG.mult = opOf(S.kind and BC.opt.fcop or BC.opt.sop, 75)
       rect(x1, y1, x1 + cw, y1 + ch, SN_BG)
       rect(x1, y1, x1 + cw, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x1 + cw * 0.7, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
@@ -18450,7 +18457,7 @@ float4 main(PS_IN pin) {
           ui.drawImage(id.logoChannel, TMP.a:set(44 * k, 36 * k), TMP.b:set(214 * k, 82 * k), LOGO_CH, UV0, UV1, ui.ImageFit.Fit)
         end
       end
-      BAR.mult = opOf(BC.opt.op, 82)
+      BAR.mult = opOf(BC.opt.op, 75)
       BOXBG.mult, SAY_BG.mult = 0.9 * opOf(100, 100), 0.96 * opOf(100, 100)
       if onlyLogos then BC.barHid = true return end
       if BC.barHid then BC.barHid, CR.barMove, towerMove = nil, {}, {} end
