@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V276 - 2026.11.05'
+local RC_VERSION = 'V277 - 2026.11.05'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -13180,8 +13180,8 @@ local drawStatus
           if sd < 0 then drawTextRight(tt, FONT_MONO, 8 * s, a.x, a.y, tc) else drawText(tt, FONT_MONO, 8 * s, a, tc) end
           local b = P(sd * 28, mid + 8.7)
           ui.drawCircle(b, 1.8 * s, bc, 10, 0.7 * s)
-          local c = P(sd * 31, mid + 5.2)
-          if sd < 0 then drawTextRight(btx, FONT_MONO, 7 * s, c.x, c.y, bc) else drawText(btx, FONT_MONO, 7 * s, c, bc) end
+          local c = P(sd * 31, mid + 4.7)
+          if sd < 0 then drawTextRight(btx, FONT_MONO, 8 * s, c.x, c.y, bc) else drawText(btx, FONT_MONO, 8 * s, c, bc) end
         end
       end
     end
