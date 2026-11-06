@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V278 - 2026.11.05'
+local RC_VERSION = 'V279 - 2026.11.06'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2708,6 +2708,7 @@ do
           tostring(config.pitStopsRequiredBy[race])))
         config.pitStopsRequiredBy[race] = req
       end
+      if Broadcast and Broadcast.setupApply then Broadcast.setupApply() end
     end)
   end
   local FORECAST_GAP = 60
@@ -8116,6 +8117,24 @@ do
       end
     end
   end
+  local function tvLine(tv)
+    local words, seq = tv:match('^(.-)%s+_(%d+)%s*$')
+    local n = seq and tonumber(seq)
+    if n then tv = words end
+    if n and Broadcast.lastSeq and n <= Broadcast.lastSeq then
+      ac.log('race-control: broadcast command not newer than the last one run, dropped: ' .. tv)
+    else
+      if n then Broadcast.lastSeq = n end
+      local okTv = Broadcast.command(tv)
+      ac.log('race-control: broadcast command ' .. tv .. (okTv and '' or ' (not understood)'))
+    end
+    return seq
+  end
+  ac.onSharedEvent('amxracing.race-control.desk', function(data)
+    if not Broadcast or not (Broadcast.on() or CarRead.isOrg(0)) or type(data) ~= 'string' or data == '' then return end
+    local seq = tvLine(data)
+    if seq then ac.broadcastSharedEvent('amxracing.race-control.desk.done', seq) end
+  end)
   function RcCommand.tv()
     local cmds = state.rcCommands
     if #cmds == 0 then return end
@@ -8126,22 +8145,12 @@ do
       local cut = line:find(' - ', 1, true)
       local body = cut and line:sub(1, cut - 1) or line
       local tv = body:match('^%s*[Rr][Cc]%s+[Tt][Vv]%s+(.+)$')
-      if tv then
-        local words, seq = tv:match('^(.-)%s+_(%d+)%s*$')
-        local n = seq and tonumber(seq)
-        if n then tv = words end
-        if n and Broadcast.lastSeq and n < Broadcast.lastSeq then
-          ac.log('race-control: broadcast command older than the last one run, dropped: ' .. tv)
-        else
-          if n then Broadcast.lastSeq = n end
-          local okTv = Broadcast.command(tv)
-          ac.log('race-control: broadcast command ' .. tv .. (okTv and '' or ' (not understood)'))
-        end
-      end
+      if tv then tvLine(tv) end
     end
   end
   table.insert(RecordSync.base.beat, 1, function()
     if not Broadcast then return end
+    if CarRead.isStaff(0) then ac.broadcastSharedEvent('amxracing.race-control.desk.on', ((Broadcast.on() or Broadcast.orgOn()) and Broadcast.opt.dm ~= 2) and '1' or '0') end
     if Broadcast.on() or CarRead.isOrg(0) then RcCommand.tv() end
     if Broadcast.drive and CarRead.isStaff(0) then Broadcast.drive() end
   end)
@@ -15709,18 +15718,18 @@ float4 main(PS_IN pin) {
     local BOOLS = { pb = true, pt = true, px = true, rs = true, rc = true, oe = true, ot = true, oi = true, sv = true, so = true, org = true }
     local CR_ORDER = { 'hm', 'hps', 'hw', 'vm', 'vps', 'vw', 'rpn', 'rw', 'ipn', 'iw', 'fl', 'fls', 'cl', 'cls', 'fcop', 'tk', 'tks', 'tkop', 'lc', 'lcs', 'lcop', 'gr', 'grs',
       'grm', 'grps', 'grop', 'sg', 'scl', 'st', 'sts', 'sx', 'sxs', 'pm', 'ptw', 'ptws', 'pbx', 'pbxs', 'allop', 'secop', 'pitop', 'grw', 'im', 'ips', 'qb', 'qbs', 'rh',
-      'pss', 'psc', 'psk', 'psd', 'pis', 'pic', 'pik', 'pid', 'pds', 'pdc', 'pps', 'ppc', 'pf', 'pq', 'pop', 'aa', 'atd', 'ati', 'atp', 'ad' }
+      'pss', 'psc', 'psk', 'psd', 'pis', 'pic', 'pik', 'pid', 'pds', 'pdc', 'pps', 'ppc', 'pf', 'pq', 'pop', 'aa', 'atd', 'ati', 'atp', 'ad', 'of', 'ofs', 'dm' }
     local CR_KEYS = { hm = 'move', hps = 'page', hw = 'wait', vm = 'move', vps = 'page', vw = 'wait', rpn = 'pins', rw = 'wait', ipn = 'pins', iw = 'wait', fl = 'bool',
       fls = 'page', cl = 'bool', cls = 'page', fcop = 'op', tk = 'bool', tks = 'page', tkop = 'op', lc = 'bool', lcs = 'page', lcop = 'op', gr = 'bool', grs = 'page',
       grm = 'move', grps = 'page', grop = 'op', sg = 'bool', scl = 'bool', st = 'bool', sts = 'page', sx = 'bool', sxs = 'page', pm = 'bool', ptw = 'bool', ptws = 'page',
       pbx = 'bool', pbxs = 'page', allop = 'op', secop = 'op', pitop = 'op', grw = 'wait', im = 'move', ips = 'page', qb = 'bool', qbs = 'wait', rh = 'wait',
       pss = 'set', psc = 'cam', psk = 'slot', psd = 'dur', pis = 'set', pic = 'cam', pik = 'slot', pid = 'dur', pds = 'set', pdc = 'cam', pps = 'set', ppc = 'cam',
-      pf = 'fps', pq = 'qual', pop = 'op', aa = 'dest', atd = 'bool', ati = 'bool', atp = 'bool', ad = 'page' }
+      pf = 'fps', pq = 'qual', pop = 'op', aa = 'dest', atd = 'bool', ati = 'bool', atp = 'bool', ad = 'page', of = 'bool', ofs = 'wait', dm = 'qual' }
     local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 90,
       tk = true, tks = 10, tkop = 90, lc = true, lcs = 12, lcop = 90, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 90, sg = true, scl = true, st = true, sts = 5,
       sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 100, secop = 100, pitop = 100, grw = 5, im = 'ROLL', ips = 8, qb = true, qbs = 0, rh = 5,
       pss = 0, psc = -1, psk = -1, psd = 0, pis = -2, pic = 0, pik = -1, pid = 0, pds = -1, pdc = 3, pps = 0, ppc = -1, pf = 15, pq = 1, pop = 90, aa = 2,
-      atd = true, ati = true, atp = true, ad = 8 }
+      atd = true, ati = true, atp = true, ad = 8, of = false, ofs = 30, dm = 0 }
     for k, v in pairs(CR_START) do
       BC.opt[k] = v
       if CR_KEYS[k] == 'bool' then BOOLS[k] = true elseif CR_KEYS[k] ~= 'move' then NUMS[k] = true end
@@ -15788,6 +15797,14 @@ float4 main(PS_IN pin) {
           o.oi and 1 or 0, o.ois, o.sv and 1 or 0, o.svs, o.so and 1 or 0, o.sos, o.sns, o.org and 1 or 0, o.rop, o.oop, o.sop) .. crText('keep')
     end
     function BC.on() return CarRead.isTv(0) end
+    function BC.setupApply()
+      local s = config.bcIdentity and config.bcIdentity.setup
+      if not BC.on() or type(s) ~= 'table' or type(s.list) ~= 'table' then return end
+      if tostring(ac.storage.bcSetupV or '') == tostring(s.v) then return end
+      for _, line in ipairs(s.list) do BC.command(line) end
+      ac.storage.bcSetupV = tostring(s.v)
+      ac.log('race-control: setup of the start of the desk applied, version ' .. tostring(s.v))
+    end
     function BC.orgOn() return BC.opt.org == true and CarRead.isOrg(0) end
     function BC.orgSet(on)
       BC.opt.org = on == true
@@ -17683,6 +17700,16 @@ float4 main(PS_IN pin) {
       CR.card(w, h, k, id, CR.gridBody(k), out, BC.opt.grop)
     end
     function CR.opening(w, h, k, id)
+      if BC.opt.of and not BC.firstDone and Session.id then
+        BC.firstAt = BC.firstAt or state.ui.clock + BC.opt.ofs
+        if state.ui.clock >= BC.firstAt then
+          BC.firstDone = true
+          if tostring(ac.storage.bcFirst or '') ~= tostring(Session.id) then
+            ac.storage.bcFirst = tostring(Session.id)
+            BC.openAt, BC.openWant = nil, true
+          end
+        end
+      end
       if BC.openWant and BC.opt.lc and not CR.laps then CR.lapsAsk() end
       if BC.openWant and (not BC.opt.oe or not config.eventId or BroadcastEvent.ev) and (not (BC.opt.oe or BC.opt.ot) or RecordSync.base.forecast.done)
         and (not BC.opt.lc or CR.laps.got >= CR.laps.want) then
