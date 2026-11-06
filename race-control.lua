@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V274 - 2026.11.05'
+local RC_VERSION = 'V275 - 2026.11.05'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -280,7 +280,7 @@ local TEXTS = {
   statusGearbox = 'GEARBOX',
   statusBop = 'BOP',
   statusOk = 'OK',
-  statusBody = 'BODY',
+  statusBody = 'BODY / TYRES',
   sgBoxTitle = 'STOP & GO',
   sgBoxStay = 'Stay stopped - no service during stop & go',
   sgBoxTimes = 'Stopped %s / Total %s',
@@ -13077,6 +13077,50 @@ local drawStatus
   F1.TRUMPET_Y, F1.TRUMPET_R = 9, 1.3
   F1.REAR_UP = F1.TRUMPET_Y - F1.TRUMPET_R
   F1.DIRT_GAP, F1.DIRT_W, F1.DIRT_TRACK = 1.5, 1.5, rgbm(1, 1, 1, 0.1)
+  F1.WEAR_GAP, F1.WEAR_W, F1.WEAR_TRACK, F1.WEAR_FILL = 1.5, 1.5, rgbm(1, 1, 1, 0.12), rgbm(1, 1, 1, 0.85)
+  F1.COLD, F1.HIGH = PANEL_COLORS.blue, PANEL_COLORS.blue
+  F1.Q, F1.qi = { vec2(0, 0), vec2(0, 0), vec2(0, 0), vec2(0, 0) }, 0
+  function F1.q(x, y) F1.qi = F1.qi % 4 + 1 return F1.Q[F1.qi]:set(x, y) end
+  function F1.heat(t, cold, ok, warm) return t < cold and F1.COLD or t <= ok and COLOR_OK or t <= warm and COLOR_ORANGE or BORDER_RED end
+  function F1.tyreHeat(t, o)
+    if o <= 0 then return COLOR_TITLE end
+    return t < o - 15 and F1.COLD or t > o + 20 and BORDER_RED or t > o + 10 and COLOR_ORANGE or COLOR_OK
+  end
+  function F1.lamp(x, y, s, col, kind)
+    ui.pathArcTo(F1.q(x + 1.5 * s, y), 3 * s, -math.pi / 2, math.pi / 2, 8)
+    ui.pathFillConvex(col)
+    for k = -1, 1 do
+      local dy = kind == 'high' and 0 or kind == 'drl' and k * 1.8 or 1.2
+      ui.drawLine(F1.q(x, y + k * (kind == 'drl' and 1.6 or 2.4) * s), F1.q(x - 3.6 * s, y + (k * (kind == 'drl' and 3.4 or 2.4) + (kind == 'drl' and 0 or dy)) * s), col, 0.75 * s)
+    end
+    if kind == 'fog' then
+      for k = 0, 3 do ui.drawLine(F1.q(x - 2 * s + (k % 2) * 0.9 * s, y + (k * 2 - 4) * s), F1.q(x - 2 * s + ((k + 1) % 2) * 0.9 * s, y + (k * 2 - 2) * s), col, 0.6 * s) end
+    end
+  end
+  F1.SCREEN = { { -5.2, -3.2 }, { 0, -4.2 }, { 5.2, -3.2 }, { 4, 3.4 }, { 0, 3.9 }, { -4, 3.4 } }
+  function F1.wiper(x, y, s, col)
+    for _, p in ipairs(F1.SCREEN) do ui.pathLineTo(F1.q(x + p[1] * s, y + p[2] * s)) end
+    ui.pathStroke(col, true, 0.7 * s)
+    ui.pathArcTo(F1.q(x, y + 3.4 * s), 3.6 * s, -math.pi + 0.35, -0.35, 8)
+    ui.pathStroke(col, false, 0.5 * s)
+    ui.drawLine(F1.q(x, y + 3.4 * s), F1.q(x - 2.2 * s, y - 1.6 * s), col, 0.7 * s)
+    ui.drawLine(F1.q(x - 2.9 * s, y - 0.9 * s), F1.q(x - 1.5 * s, y - 2.3 * s), col, 1.1 * s)
+  end
+  function F1.coolant(x, y, s, col)
+    ui.drawLine(F1.q(x, y - 5 * s), F1.q(x, y + 1.2 * s), col, 0.8 * s)
+    ui.drawLine(F1.q(x, y - 4 * s), F1.q(x + 2 * s, y - 4 * s), col, 0.8 * s)
+    ui.drawLine(F1.q(x, y - 2.2 * s), F1.q(x + 1.6 * s, y - 2.2 * s), col, 0.8 * s)
+    ui.drawCircleFilled(F1.q(x, y + 2.4 * s), 1.3 * s, col, 10)
+    for k = 0, 7 do ui.drawLine(F1.q(x + (k * 1.25 - 5) * s, y + (k % 2 == 0 and 4.2 or 3.4) * s), F1.q(x + (k * 1.25 - 3.75) * s, y + (k % 2 == 0 and 3.4 or 4.2) * s), col, 0.7 * s) end
+  end
+  F1.CAN = { { -4.5, -0.5 }, { -2, -0.5 }, { -1, -2 }, { 2.5, -2 }, { 5, -3.6 }, { 3.5, -0.2 }, { 2.5, 2.4 }, { -2.5, 2.4 }, { -3.5, 1 }, { -5.5, 0.2 } }
+  function F1.oil(x, y, s, col)
+    for _, p in ipairs(F1.CAN) do ui.pathLineTo(F1.q(x + p[1] * s, y + p[2] * s)) end
+    ui.pathStroke(col, true, 0.8 * s)
+    ui.drawLine(F1.q(x - 1 * s, y - 2 * s), F1.q(x - 1 * s, y - 3.4 * s), col, 0.8 * s)
+    ui.drawLine(F1.q(x - 2.2 * s, y - 3.4 * s), F1.q(x + 0.2 * s, y - 3.4 * s), col, 0.8 * s)
+    ui.drawCircleFilled(F1.q(x + 5.6 * s, y - 0.6 * s), 0.7 * s, col, 8)
+  end
   F1.RING, F1.at = { vec2(0, 0), vec2(0, 0), vec2(0, 0), vec2(0, 0) }, 0
   local function drawF1(cx, cy, s, car)
     local body = COLOR_TITLE
@@ -13121,6 +13165,23 @@ local drawStatus
         ui.drawRectFilled(P(bx1, wl[3]), P(bx2, wl[4]), F1.DIRT_TRACK, 1)
         if k > 0 then
           ui.drawRectFilled(P(bx1, wl[4] - (wl[4] - wl[3]) * k), P(bx2, wl[4]), k > 0.5 and COLOR_WARN or COLOR_OK, 1)
+        end
+        local wx = F1.WHEELS[2][2] + F1.DIRT_GAP + F1.DIRT_W + F1.WEAR_GAP
+        local wx1, wx2 = sd * wx, sd * (wx + F1.WEAR_W)
+        if wx1 > wx2 then wx1, wx2 = wx2, wx1 end
+        ui.drawRectFilled(P(wx1, wl[3]), P(wx2, wl[4]), F1.WEAR_TRACK, 1)
+        local left = 1 - math.min(math.max(num(w and w.tyreWear), 0), 1)
+        if left > 0 then ui.drawRectFilled(P(wx1, wl[4] - (wl[4] - wl[3]) * left), P(wx2, wl[4]), F1.WEAR_FILL, 1) end
+        if w then
+          local t, o, bt = num(w.tyreCoreTemperature), num(w.tyreOptimumTemperature), num(w.discTemperature)
+          local tt, btx = string.format('%d°', math.floor(t + 0.5)), string.format('%d°', math.floor(bt + 0.5))
+          local tc, bc = F1.tyreHeat(t, o), F1.heat(bt, 150, 600, 800)
+          local a = P(sd * 27, mid - 4)
+          if sd < 0 then drawTextRight(tt, FONT_MONO, 8 * s, a.x, a.y, tc) else drawText(tt, FONT_MONO, 8 * s, a, tc) end
+          local b = P(sd < 0 and -48 or 29, mid + 8.7)
+          ui.drawCircle(b, 1.8 * s, bc, 10, 0.7 * s)
+          local c = P(sd < 0 and -27 or 32.5, mid + 5.2)
+          if sd < 0 then drawTextRight(btx, FONT_MONO, 7 * s, c.x, c.y, bc) else drawText(btx, FONT_MONO, 7 * s, c, bc) end
         end
       end
     end
@@ -13234,6 +13295,22 @@ local drawStatus
     drawTextRight(string.format('%s %.0f', TEXTS.side.right, vR), FONT_MONO, bf, p2.x - 19 * s, cy - 6 * s, cR)
     vbar(p2.x - 15 * s, kR, cR)
     drawF1(cx, cy + F1.SHIFT * s, s, car)
+    local ly = cy - 56.5 * s
+    local low = car.headlightsActive == true and (car.lowBeams == true or car.hasLowBeams == false)
+    F1.lamp(cx + 35.5 * s, ly, s, low and COLOR_OK or COLOR_OFF, 'low')
+    F1.lamp(cx + 45.5 * s, ly, s, car.highBeams == true and F1.HIGH or COLOR_OFF, 'high')
+    F1.lamp(cx + 55.5 * s, ly, s, car.daytimeRunningLights == true and COLOR_OK or COLOR_OFF, 'drl')
+    F1.lamp(cx + 65.5 * s, ly, s, COLOR_OFF, 'fog')
+    local wm = math.floor(num(car.wiperSelectedMode))
+    F1.wiper(p1.x + 20 * s, ly, s, wm > 0 and COLOR_TITLE or COLOR_OFF)
+    drawText(wm > 0 and tostring(wm) or '-', FONT_MONO, 8 * s, TMP.a:set(p1.x + 27 * s, ly - 4 * s), wm > 0 and COLOR_TITLE or COLOR_OFF)
+    local by = cy + 55.5 * s
+    local wt, ot = num(car.waterTemperature), num(car.oilTemperature)
+    local wc, oc = F1.heat(wt, 60, 100, 110), F1.heat(ot, 70, 120, 135)
+    F1.coolant(p1.x + 20 * s, by, s, wc)
+    drawTextRight(string.format('%d°', math.floor(wt + 0.5)), FONT_MONO, 8 * s, p1.x + 47 * s, by - 4 * s, wc)
+    F1.oil(p1.x + 131 * s, by, s, oc)
+    drawTextRight(string.format('%d°', math.floor(ot + 0.5)), FONT_MONO, 8 * s, p2.x - 14 * s, by - 4 * s, oc)
     Drag.icons('status', p1, p2, s)
   end
   local function shown(group, car)
