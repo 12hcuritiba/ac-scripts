@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V280 - 2026.11.06'
+local RC_VERSION = 'V281 - 2026.11.06'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -17706,6 +17706,9 @@ float4 main(PS_IN pin) {
       local out = math.min(math.max(math.min(d / ROLL, (BC.opt.grs - d) / ROLL), 0), 1)
       CR.card(w, h, k, id, CR.gridBody(k), out, BC.opt.grop)
     end
+    function BC.firstWait()
+      return BC.opt.of and not BC.firstDone and (Session.id == nil or tostring(ac.storage.bcFirst or '') ~= tostring(Session.id))
+    end
     function CR.opening(w, h, k, id)
       if BC.opt.of and not BC.firstDone and Session.id then
         BC.firstAt = BC.firstAt or state.ui.clock + BC.opt.ofs
@@ -18430,7 +18433,7 @@ float4 main(PS_IN pin) {
       local page = CR.resPage()
       BC.resOn = page ~= nil or sessionOver()
       drawCredits(w, h, page ~= nil or (BC.opt.rs and CR.res.sid ~= nil and CR.res.sid == Session.id) or (BC.opt.sv and Session.id == nil and Session.leaving ~= nil)
-        or BC.openAt ~= nil or BC.openWant or ((CR.sn.at ~= nil or CR.sn.want) and CR.sn.kind == nil) or CR.gr.at ~= nil)
+        or BC.openAt ~= nil or BC.openWant or BC.firstWait() or ((CR.sn.at ~= nil or CR.sn.want) and CR.sn.kind == nil) or CR.gr.at ~= nil)
       local id = identity()
       if page then CR.resDraw(w, h, k, id, page) end
       CR.opening(w, h, k, id)
