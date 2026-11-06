@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V281 - 2026.11.06'
+local RC_VERSION = 'V282 - 2026.11.06'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -558,7 +558,7 @@ local TEXTS = {
   scrWeatherAnim = 'forecast in segments of 10 min', scrWeatherStatic = 'no forecast', scrWxPage = '< %d/%d >',
   scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
   scrEvent = 'EVENT', scrEventInfo = 'event info', evStarts = ' - starts %s', evRaceN = 'RACE %d',
-  bc = { green = 'Green', red = 'Red', finished = 'Finished', yellowS = 'Yellow · S%d', sess = { [1] = 'Practice', [2] = 'Qualifying', [3] = 'Race' },
+  bc = { green = 'Green', lastLap = 'Last lap', extraLap = ' extra lap', red = 'Red', finished = 'Finished', yellowS = 'Yellow · S%d', sess = { [1] = 'Practice', [2] = 'Qualifying', [3] = 'Race' },
     raceN = 'Race %d', lap = 'lap %d', sessEnd = 'End of %s', next = 'Next: %s', laps = '%d L',
     cars = '%d cars',
     thTimes = 'Times', thFight = 'Battle', thClass = 'Class', lastLap = 'Last lap', bestLap = 'Best lap', ahead = 'Ahead', behind = 'Behind', classK = 'Class',
@@ -690,6 +690,7 @@ local TEXTS = {
   hdr = { pos = 'P', classPos = 'CL', driver = 'DRIVER', class = 'CLASS', laps = 'LAPS', gap = 'GAP', int = 'INT', best = 'BEST', pit = 'PIT',
     sr = 'SR', pts = 'PTS', time = 'TIME', sky = 'SKY', air = 'AIR', track = 'TRACK', avg = 'AVG', lap = 'LAP', delta = 'DELTA', precip = 'PRECIP.' },
   wxProb = '%d%%',
+  plusExtraLap = ' + extra lap', flagLastLapExtra = 'LAST LAP (EXTRA LAP)', flagLastLapOver = 'LAST LAP (TIME OVER)',
   lapsShort = '%d L', lapTag = { cut = 'invalid', pit = 'pit', best = 'best' },
   wxSky = { clear = 'Clear', few = 'Few clouds', scattered = 'Scattered clouds', broken = 'Broken clouds', overcast = 'Overcast', thunder = 'Thunderstorm' },
   wxPrecip = { lightDrizzle = 'light drizzle', drizzle = 'drizzle', lightRain = 'light rain', rain = 'rain', heavyRain = 'heavy rain', violentRain = 'violent rain' },
@@ -8575,12 +8576,12 @@ do
     if g == ac.FlagType.FasterCar then
       info = { 4, 'blue', TEXTS.flagBlue, TEXTS.flagBlueLine,
         cause and cause >= 0 and string.format('%s - %.1f s', carTag(cause), math.abs(ac.getGapBetweenCars(0, cause))) or '' }
-    elseif Flags.ending == 'lastLap' or (Flags.lastLap and Lap.count == Flags.lastLap) then
-      info = { 4, 'white', TEXTS.flagLastLap, TEXTS.flagLastLapLine, '' }
+    elseif Flags.ending == 'lastLap' or (Flags.ending == 'raceOver' and Flags.whiteGot) or (Flags.lastLap and Lap.count == Flags.lastLap) then
+      info = { 4, 'white', Flags.extraLapOn(ac.getSession(Session.index)) and TEXTS.flagLastLapExtra or Flags.overLeader and TEXTS.flagLastLapOver or TEXTS.flagLastLap, TEXTS.flagLastLapLine, '' }
     end
     if Flags.ending == 'timeOver' then
       info = { 4, 'white', TEXTS.flagTimeOver, TEXTS.flagFinishLap, '' }
-    elseif Flags.ending == 'raceOver' then
+    elseif Flags.ending == 'raceOver' and not Flags.whiteGot then
       info = { 4, 'white', TEXTS.flagRaceOver, TEXTS.flagFinishLap, '' }
     end
     info = info or slow or slip
@@ -8767,15 +8768,21 @@ do
     Flags.sector = sec
     local own = Lap.ownBestAll and Lap.ownBestAll() or { ms = 0, s = {} }
     local n = #(Lap.splits or {}) + 1
-    if n < 2 or sec ~= n - 1 then return end
+    if n < 2 then return end
     local session = ac.getSession(Session.index)
-    local byTime = session and ((session.durationMinutes or 0) > 0) and (session.type ~= ac.SessionType.Race
-      or (session.isTimedRace and not session.hasAdditionalLap))
+    local byTime = session and ((session.durationMinutes or 0) > 0) and session.type ~= ac.SessionType.Race
     if not byTime then return end
     local lastSector, bestLap = CarRead.num(own.s[n - 1]), CarRead.num(own.ms)
     local left = CarRead.num(sim.sessionTimeLeft)
     if lastSector <= 0 or bestLap <= 0 or left <= 0 then return end
-    if left > lastSector and left < lastSector + bestLap then
+    local rest = 0
+    for k = sec, n - 1 do rest = rest + CarRead.num(own.s[k]) end
+    if left <= rest then
+      if Flags.lastLap ~= Lap.count then
+        Flags.lastLap = Lap.count
+        rcLog(TEXTS.rc.lastLap, string.format('lap %d - %.0f s left, this lap', Lap.number() + 1, left / 1000))
+      end
+    elseif sec == n - 1 and left < lastSector + bestLap then
       Flags.lastLap = Lap.count + 1
       rcLog(TEXTS.rc.lastLap, string.format('lap %d - %.0f s left, best last sector %.1f s', Lap.number() + 2, left / 1000,
         lastSector / 1000))
@@ -8783,7 +8790,7 @@ do
   end
   local function leaderLaps()
     for _, r in ipairs(CarsTick.rows) do
-      if r.on and not r.staff and CarRead.num(r.c.racePosition) == 1 then return CarRead.num(r.c.lapCount) end
+      if r.on and not r.staff and CarRead.num(r.c.racePosition) == 1 then return CarRead.num(r.c.lapCount), r.i end
     end
     return nil
   end
@@ -8797,25 +8804,43 @@ do
     if not session then return end
     local race = session.type == ac.SessionType.Race
     local timed = (session.durationMinutes or 0) > 0 and (not race or session.isTimedRace)
-    local lead = leaderLaps()
+    local lead, leadI = leaderLaps()
     local was = Flags.ending
     local now = was
-    if timed and Flags.timeSeen and left <= 0 then
-      if race and session.hasAdditionalLap then
-        Flags.overLeader = Flags.overLeader or lead
-        if lead and Flags.overLeader and lead >= Flags.overLeader + 2 then now = 'raceOver'
-        elseif lead and Flags.overLeader and lead >= Flags.overLeader + 1 then now = 'lastLap'
-        else now = now or nil end
-      else
-        now = 'timeOver'
+    local over = timed and Flags.timeSeen and left <= 0
+    local endLap
+    if race and timed and not session.hasAdditionalLap and lead then
+      if left > 0 and Flags.leadSeen and lead > Flags.leadSeen and not Flags.whiteLap then
+        local _, best = Lap.of(leadI)
+        if best and best > 0 and left < best then Flags.whiteLap = lead end
       end
-    elseif not timed and race and (session.laps or 0) > 0 and lead then
-      if lead >= session.laps then now = 'raceOver'
-      elseif lead == session.laps - 1 then now = 'lastLap' end
+      Flags.leadSeen = lead
     end
-    if now == 'timeOver' or now == 'raceOver' then
+    if over and race then
+      if lead and (not Flags.overLeader or lead < Flags.overLeader) then Flags.overLeader = lead end
+      endLap = Flags.overLeader and Flags.overLeader + (session.hasAdditionalLap and 2 or 1)
+      if endLap and session.hasAdditionalLap then
+        if lead and lead >= endLap - 1 then Flags.whiteLap = Flags.whiteLap or endLap - 1 end
+      elseif endLap then
+        Flags.whiteLap = Flags.whiteLap or Flags.overLeader
+      end
+    elseif over then
+      now = 'timeOver'
+    elseif not timed and race and (session.laps or 0) > 0 and lead then
+      endLap = session.laps
+      if lead >= endLap - 1 then Flags.whiteLap = Flags.whiteLap or endLap - 1 end
+    end
+    if race then
+      if lead and endLap and lead >= endLap then now = 'raceOver'
+      elseif now ~= 'raceOver' then
+        if Flags.whiteLap and (lineFrame or CarRead.num(car.lapCount) >= Flags.whiteLap or CarRead.isStaff(0)) then now = 'lastLap'
+        elseif over and not session.hasAdditionalLap and now == nil then now = 'timeOver' end
+      end
+      if now == 'lastLap' then Flags.whiteGot = true end
+    end
+    if (now == 'timeOver' and not race) or now == 'raceOver' then
       local startedNow = was ~= now
-      if (startedNow and car.isInPitlane) or (not startedNow and (lineFrame or enteredPit)) then
+      if (startedNow and car.isInPitlane) or (not startedNow and (lineFrame or enteredPit)) or (endLap and CarRead.num(car.lapCount) >= endLap) then
         now = 'finished'
       end
     end
@@ -8824,6 +8849,9 @@ do
       if now then rcLog(TEXTS.rc.sessionEnd, string.format('%s, id %s - %s', TEXTS.rc.sessionTypes[session.type] or '-', tostring(Session.id or '-'), now)) end
       if now == 'finished' then Lap.finish() end
     end
+  end
+  function Flags.extraLapOn(ss)
+    return ss and ss.type == ac.SessionType.Race and ss.isTimedRace and ss.hasAdditionalLap
   end
   local START_LIGHTS_FROM = 22
   function Flags.startLights(car)
@@ -8913,7 +8941,7 @@ do
   end
   sessionPart('flags', Flags, function()
     return { incidents = {}, own = 0, ownSince = SESSION_NONE, sentKind = 0, sentT = -1e9, greenUntil = 0, lastGroup = SESSION_NONE,
-      sector = SESSION_NONE, lastLap = SESSION_NONE, ending = SESSION_NONE, overLeader = SESSION_NONE, prevPitlane = SESSION_NONE, prevSp = SESSION_NONE,
+      sector = SESSION_NONE, lastLap = SESSION_NONE, ending = SESSION_NONE, overLeader = SESSION_NONE, whiteLap = SESSION_NONE, leadSeen = SESSION_NONE, whiteGot = false, prevPitlane = SESSION_NONE, prevSp = SESSION_NONE,
       timeSeen = false, hudT = 0, redSent = SESSION_NONE, redSentT = -1e9, redLocked = false, redWasUp = false, redSince = SESSION_NONE,
       redReceived = false, redPrevLane = SESSION_NONE, redSwaps = {}, mySwapMs = SESSION_NONE, restartUntil = SESSION_NONE, swapSentT = -1e9, turnAt = {}, pxAhead = SESSION_NONE, backNow = false,
       lightsSent = SESSION_NONE, lightsSentT = -1e9, redOver = false, redOverSince = SESSION_NONE, localYellow = false, giveBack = {},
@@ -14442,6 +14470,7 @@ float4 main(PS_IN pin) {
         local total = ss.durationMinutes and ss.durationMinutes > 0 and hms(Clock.ms('total', ss))
           or (ss.laps and ss.laps > 0 and string.format(TEXTS.lapsShort, ss.laps)) or '-'
         local now = i == sim.currentSessionIndex
+        local xl = Flags.extraLapOn(ss)
         local starts = RecordSync.base.forecast.starts
         local races = ss.type == ac.SessionType.Race and math.max(math.floor(tonumber(config.eventRaces) or 1), 1) or 1
         local firstAt = nil
@@ -14457,7 +14486,7 @@ float4 main(PS_IN pin) {
           end
           if n == 1 then firstAt = at end
           local name = races > 1 and string.format(TEXTS.evRaceN, n) or (TEXTS.sessionName[ss.type] or '-')
-          out[#out + 1] = { name .. (at and string.format(TEXTS.evStarts, at) or ''), on and (hms(Clock.ms()) .. ' / ' .. total) or total, on }
+          out[#out + 1] = { name .. (at and string.format(TEXTS.evStarts, at) or ''), on and (hms(Clock.ms()) .. ' / ' .. total .. (xl and TEXTS.plusExtraLap or '')) or (total .. (xl and TEXTS.plusExtraLap or '')), on, total .. (xl and TEXTS.bc.extraLap or '') }
           if ss.type == ac.SessionType.Race then
             local st, gr = Flags.formation.raceText(n)
             out[#out + 1] = { st, gr, on }
@@ -16206,7 +16235,7 @@ float4 main(PS_IN pin) {
         frame(bx, by, bx + bw, by + bh, CHK_LIGHT, 2.5 * k)
         return
       end
-      local fc = fk == 'red' and FLAGC.red or (fk == 'yellow' or fk == 'code') and FLAGC.yellow or FLAGC.green
+      local fc = fk == 'red' and FLAGC.red or (fk == 'yellow' or fk == 'code') and FLAGC.yellow or fk == 'white' and FLAGC.white or FLAGC.green
       rect(bx, by, bx + bw, by + bh, fk == 'code' and FLAGC.yellow or BOXBG)
       frame(bx, by, bx + bw, by + bh, fc, 2.5 * k)
     end
@@ -16322,6 +16351,7 @@ float4 main(PS_IN pin) {
           return 'yellow', string.format(T.yellowS, sec)
         end
       end
+      if sim.raceSessionType == ac.SessionType.Race and (Flags.ending == 'lastLap' or Flags.ending == 'raceOver' or Flags.ending == 'finished') then return 'white', T.lastLap end
       return 'green', T.green
     end
     local function sessionLine()
@@ -16335,7 +16365,7 @@ float4 main(PS_IN pin) {
       local lead = RaceTable.rows and RaceTable.rows[1]
       local lapTxt = type == ac.SessionType.Race and lead and lead.laps and lead.laps > 0 and (' · ' .. string.format(T.lap, lead.laps + 1)) or ''
       local total = ss and ss.durationMinutes and ss.durationMinutes > 0 and hms(Clock.ms('total', ss)) or (ss and ss.laps and ss.laps > 0 and string.format(TEXTS.lapsShort, ss.laps)) or '-'
-      return name .. cls .. lapTxt, hms(Clock.ms()), total, name
+      return name .. cls .. lapTxt, hms(Clock.ms()), total, name, total .. (Flags.extraLapOn(ss) and T.extraLap or '')
     end
     local function nextLine()
       local T = TEXTS.bc
@@ -16360,7 +16390,9 @@ float4 main(PS_IN pin) {
     local function sessionTexts()
       local label, el, total, sname = sessionLine()
       local ended = sessionOver()
-      return Lang.letters.upper(ended and string.format(TEXTS.bc.sessEnd, sname) or label), el, ' / ' .. total, ended and Lang.letters.upper(nextLine()) or nil, ended
+      local ss = ac.getSession(Session.index)
+      local extra = Flags.ending ~= nil and Flags.extraLapOn(ss)
+      return Lang.letters.upper(ended and string.format(TEXTS.bc.sessEnd, sname) or label), extra and '' or el, extra and (total .. TEXTS.bc.extraLap) or (' / ' .. total), ended and Lang.letters.upper(nextLine()) or nil, ended
     end
     local rowsBuf = {}
     local function creditRows(parts)
@@ -17025,7 +17057,7 @@ float4 main(PS_IN pin) {
           if best > 0 and qw then lim = best * qw / 100 end
         end
         if man or endAt and serverTimeMs() - endAt >= BC.opt.rh * 1000 and ((rows.oldest or math.huge) > endAt or (lim and serverTimeMs() - endAt >= lim)) then
-          local _, _, total, name = sessionLine()
+          local _, _, _, name, total = sessionLine()
           R.at, R.rows, R.name, R.total, R.man = state.ui.clock, CR.resTake(), name, total, man
           if not man then R.sid = Session.id end
           R.movePage = nil
@@ -17072,7 +17104,7 @@ float4 main(PS_IN pin) {
       rect(x1, y1, x2, y1 + total, RES_BG)
       rect(x1, y1, x2, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x1 + 520 * k, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
-      local sname = (R.name or select(4, sessionLine())) .. ' · ' .. (R.total or select(3, sessionLine()))
+      local sname = (R.name or select(4, sessionLine())) .. ' · ' .. (R.total or select(5, sessionLine()))
       local pageName = page == 'ALL' and T.resAll or (classStyle(page))
       drawText(Lang.letters.upper(T.resK .. ' · ' .. pageName), F.resK, 14 * k, TMP.a:set(x1 + 26 * k, y1 + 12 * k), DIMW)
       drawText(Lang.letters.upper(sname), F.resV, 30 * k, TMP.a:set(x1 + 26 * k, y1 + 26 * k), PAPER)
@@ -17724,7 +17756,7 @@ float4 main(PS_IN pin) {
       if BC.openWant and (not BC.opt.oe or not config.eventId or BroadcastEvent.ev) and (not (BC.opt.oe or BC.opt.ot) or RecordSync.base.forecast.done)
         and (not BC.opt.lc or CR.laps.got >= CR.laps.want) then
         BC.openWant, BC.openAt, CR.track, CR.sess, CR.roster = nil, state.ui.clock, CR.trackNow(), {}, RaceTable.rows
-        for _, l in ipairs(eventLines()) do if not l then break end CR.sess[#CR.sess + 1] = { l[1], l[2] } end
+        for _, l in ipairs(eventLines()) do if not l then break end CR.sess[#CR.sess + 1] = { l[1], l[4] or l[2] } end
         CR.lapRows = BC.opt.lc and CR.lapsRows() or {}
       end
       if not BC.openAt then return end
@@ -17811,7 +17843,7 @@ float4 main(PS_IN pin) {
         if S.kind == 'cool' or (S.pitLeft <= 0 and RecordSync.base.forecast.done) then
           S.want, S.at = nil, state.ui.clock
           local T = TEXTS.bc
-          local _, _, total, sname = sessionLine()
+          local _, _, _, sname, total = sessionLine()
           local ss = ac.getSession(Session.index or sim.currentSessionIndex or 0)
           local isRace = ss and ss.type == ac.SessionType.Race
           local st, gr = Flags.formation.raceText((tonumber(config.eventRaces) or 1) > 1 and (config.raceNo or 1) or 1)
