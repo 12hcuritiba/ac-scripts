@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V275 - 2026.11.05'
+local RC_VERSION = 'V276 - 2026.11.05'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -13176,11 +13176,11 @@ local drawStatus
           local t, o, bt = num(w.tyreCoreTemperature), num(w.tyreOptimumTemperature), num(w.discTemperature)
           local tt, btx = string.format('%d°', math.floor(t + 0.5)), string.format('%d°', math.floor(bt + 0.5))
           local tc, bc = F1.tyreHeat(t, o), F1.heat(bt, 150, 600, 800)
-          local a = P(sd * 27, mid - 4)
+          local a = P(sd * 31, mid - 4)
           if sd < 0 then drawTextRight(tt, FONT_MONO, 8 * s, a.x, a.y, tc) else drawText(tt, FONT_MONO, 8 * s, a, tc) end
-          local b = P(sd < 0 and -48 or 29, mid + 8.7)
+          local b = P(sd * 28, mid + 8.7)
           ui.drawCircle(b, 1.8 * s, bc, 10, 0.7 * s)
-          local c = P(sd < 0 and -27 or 32.5, mid + 5.2)
+          local c = P(sd * 31, mid + 5.2)
           if sd < 0 then drawTextRight(btx, FONT_MONO, 7 * s, c.x, c.y, bc) else drawText(btx, FONT_MONO, 7 * s, c, bc) end
         end
       end
