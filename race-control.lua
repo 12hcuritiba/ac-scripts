@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V284 - 2026.11.06'
+local RC_VERSION = 'V285 - 2026.11.07'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16601,7 +16601,7 @@ float4 main(PS_IN pin) {
     end
     local ALT_PHASES = { 'LAST', 'GAP', 'POS' }
     local function timePhase()
-      if BC.opt.time == 'ALT' then return ALT_PHASES[math.floor(state.ui.clock / 10) % 3 + 1] end
+      if BC.opt.time == 'ALT' then return ALT_PHASES[math.floor(math.max(state.ui.clock - (BC.altFrom or 0), 0) / 10) % 3 + 1] end
       return BC.opt.time
     end
     local function gapNow() return timePhase() == 'GAP' end
@@ -18563,7 +18563,11 @@ float4 main(PS_IN pin) {
       BAR.mult = opOf(BC.opt.op, 75)
       BOXBG.mult, SAY_BG.mult = 0.9 * opOf(100, 100), 0.96 * opOf(100, 100)
       if onlyLogos then BC.barHid = true return end
-      if BC.barHid then BC.barHid, CR.barMove, towerMove = nil, {}, {} end
+      if not BC.opt.bar then BC.barHid = true
+      elseif BC.barHid or not BC.altFrom then
+        BC.barHid, CR.barMove, towerMove = nil, {}, {}
+        BC.altFrom = state.ui.clock + (tonumber(BC.opt.form == 'V' and BC.opt.vw or BC.opt.hw) or 0)
+      end
       CR.pipDraw(w, h, k)
       if not BC.opt.bar then
         voices(w, h, k, BC.opt.form == 'V')
