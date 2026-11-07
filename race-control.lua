@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V282 - 2026.11.06'
+local RC_VERSION = 'V283 - 2026.11.06'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -14157,13 +14157,14 @@ float4 main(PS_IN pin) {
   float4 w = lerp(W[ia], W[ia + 1], at - ia);
   float cover = w.x, mmh = w.y, conv = w.z, vv = w.w;
   float2 q = P - gOff;
-  float rank = rankOf(field(q, 9, 0.757858, 0.6831, 11, 2000.0));
+  float rank = rankOf(field(q, 9, 0.757858, 0.6831, (int)gOct, 2000.0));
   float cov = max(cover, vv);
   float3 col = float3(9, 13, 18);
   if (cov <= 0 || rank < 1 - cov) return float4(col / 255, 1);
   float th = pow(saturate((rank - (1 - cov)) / cov), 1 - 0.5 * conv);
-  th = saturate(th + 0.22 * field(q, 13, 0.6, 0.6, 6, 700.0) * (0.4 + th));
-  float edge = saturate(th / 0.06);
+  th = saturate(th + 0.22 * field(q, 13, 0.6, 0.6, (int)gDet, 700.0) * (0.4 + th));
+  float border = 0.06 * min((1 - cov) / 0.125, 1);
+  float edge = border > 0 ? saturate((rank - (1 - cov)) / border) : 1;
   float shade = (240 - 125 * th) * (1 - vv) + (92 - 60 * th) * vv;
   col = lerp(col, float3(shade, shade, shade + 5), edge * (0.82 + 0.15 * th));
   if (mmh > 0.005) {
@@ -14179,8 +14180,9 @@ float4 main(PS_IN pin) {
 ]]
   end
   local RADAR_SHADER = radarShader()
+  function Radar.octaves(wave, half, max) return math.min(math.max(math.floor(math.log(wave / (4 * half / 256)) / math.log(2)) + 1, 1), max) end
   function Radar.values(FL, t, half)
-    local v = { gHalf = half }
+    local v = { gHalf = half, gOct = Radar.octaves(2000, half, 11), gDet = Radar.octaves(700, half, 6) }
     local ox, oy = Radar.airAt(FL, t)
     v.gOff = vec2(ox, oy)
     local px, py = {}, {}
