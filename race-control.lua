@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V283 - 2026.11.06'
+local RC_VERSION = 'V284 - 2026.11.06'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -509,7 +509,7 @@ local TEXTS = {
     pingHigh = 'kicked by the KMR - high ping', pingUnstable = 'kicked by the KMR - unstable ping', kick = 'kicked',
     unknown = 'left - no menu seen, connection fine' },
   connGoneTitle = 'LEFT THE SERVER', connLeft = 'left', connTitle = 'Connection', connLog = '%s left the server - %s',
-  lobbyTitle = 'RACING CONTROL', lobbyStops = 'Stops', lobbyKmr = 'KMR points / rating', lobbyWeather = 'Air / track',
+  lobbyTitle = 'RACING CONTROL', lobbyStops = 'Stops', lobbyKmr = 'KMR points / rating', lobbyWeather = 'Air / track / humidity',
   lobbyMessages = 'MESSAGES', lobbyWindow = 'Racing Control - lobby',
   scrShare = 'RACING ROOM', shareOn = 'GAME SCREEN SHARED', shareOff = 'GAME SCREEN NOT SHARED', shareHint = '< off   on >',
   ownOn = 'MY SCREENS SHOWN TO ME', ownOff = 'MY SCREENS HIDDEN FROM ME', ownHint = 'Hidden: less traffic and load; the others still see them',
@@ -556,7 +556,7 @@ local TEXTS = {
   scrRadarPrec = 'PRECIPITATION', scrRadarLight = 'light', scrRadarHeavy = 'heavy', scrRadarExtreme = 'extreme', scrRadarClouds = 'clouds: white = light, grey = thick',
   scrRadarLoop = '%s - 1 hour in 6 segments of 10 min, one a second', scrRadarNoTrack = 'No AI spline on this track',
   scrWeatherAnim = 'forecast in segments of 10 min', scrWeatherStatic = 'no forecast', scrWxPage = '< %d/%d >',
-  scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
+  scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track / humidity', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
   scrEvent = 'EVENT', scrEventInfo = 'event info', evStarts = ' - starts %s', evRaceN = 'RACE %d',
   bc = { green = 'Green', lastLap = 'Last lap', extraLap = ' extra lap', red = 'Red', finished = 'Finished', yellowS = 'Yellow · S%d', sess = { [1] = 'Practice', [2] = 'Qualifying', [3] = 'Race' },
     raceN = 'Race %d', lap = 'lap %d', sessEnd = 'End of %s', next = 'Next: %s', laps = '%d L',
@@ -569,7 +569,7 @@ local TEXTS = {
     resK = 'Results', resAll = 'Overall', resHead = { 'Pos.', 'No.', 'Driver', 'Team', 'Tyre', 'Laps', 'Best lap', 'Gap' }, chq = 'Chequered flag',
     opSessions = 'Sessions', opRules = 'Rules', opDrivers = 'Drivers per team', opStops = 'Pit stops required', opSwaps = 'Driver swaps required',
     opStint = 'Minimum stint', opStintMax = 'Maximum stint', opClasses = 'Classes', opDate = 'Date', opTrack = 'Track', opLayout = 'Layout', opTime = 'Time',
-    opFrom = '%s to %s', opTrackK = 'Track and weather', opGrip = 'Grip', opAir = 'Air', opRoad = 'Track', opNow = 'Now', opRain = 'Rain',
+    opFrom = '%s to %s', opTrackK = 'Track and weather', opGrip = 'Grip', opAir = 'Air', opRoad = 'Track', opHum = 'Humidity', opNow = 'Now', opRain = 'Rain',
     opList = 'Entrants', opHead = { 'No.', 'Drivers', 'Team', 'Car', 'Class' }, snK = 'Session', snStart = { 'Rolling start', 'Standing start' }, snStartKmr = 'KMR rolling start',
     gridClass = 'Grid by class', gridClassRev = 'Grid by class reversed (%s per class)', gridAll = 'all', minutes = '%d min',
     coolDown = 'Cool-down lap', winner = 'Winner', winners = 'Winners',
@@ -688,12 +688,12 @@ local TEXTS = {
   flagChequeredLine = 'Session finished',
   relPit = '  PIT',
   hdr = { pos = 'P', classPos = 'CL', driver = 'DRIVER', class = 'CLASS', laps = 'LAPS', gap = 'GAP', int = 'INT', best = 'BEST', pit = 'PIT',
-    sr = 'SR', pts = 'PTS', time = 'TIME', sky = 'SKY', air = 'AIR', track = 'TRACK', avg = 'AVG', lap = 'LAP', delta = 'DELTA', precip = 'PRECIP.' },
+    sr = 'SR', pts = 'PTS', time = 'TIME', sky = 'SKY', air = 'AIR', track = 'TRACK', hum = 'HUM.', avg = 'AVG', lap = 'LAP', delta = 'DELTA', precip = 'PRECIP.' },
   wxProb = '%d%%',
   plusExtraLap = ' + extra lap', flagLastLapExtra = 'LAST LAP (EXTRA LAP)', flagLastLapOver = 'LAST LAP (TIME OVER)',
   lapsShort = '%d L', lapTag = { cut = 'invalid', pit = 'pit', best = 'best' },
   wxSky = { clear = 'Clear', few = 'Few clouds', scattered = 'Scattered clouds', broken = 'Broken clouds', overcast = 'Overcast', thunder = 'Thunderstorm' },
-  wxPrecip = { lightDrizzle = 'light drizzle', drizzle = 'drizzle', lightRain = 'light rain', rain = 'rain', heavyRain = 'heavy rain', violentRain = 'violent rain' },
+  wxPrecip = { lightDrizzle = 'light drizzle', drizzle = 'drizzle', lightRain = 'light rain', rain = 'rain', heavyRain = 'heavy rain', violentRain = 'violent rain', lightSnow = 'light snow', snow = 'snow', heavySnow = 'heavy snow', lightSleet = 'light sleet', sleet = 'sleet', heavySleet = 'heavy sleet', hail = 'hail' },
   compass = { 'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW' },
   wxBulletin = { now = '%s now: %s, air %d°C, track %d°C, wind %s %s.', rain = 'Precipitation expected from %s (%s), %d%% chance, up to %.2f mm/h.',
     dry = 'No precipitation expected.', by = 'By %s: %s%s, air %d°C, track %d°C; wind %s %s.', falling = 'Track temperature falling %d°C: less grip expected.',
@@ -2744,10 +2744,11 @@ do
         if #f >= 9 and f[1]:match('^%d+:%d+$') then
           list[#list + 1] = { time = f[1], type = f[2], sky = f[3]:gsub('%s*%(Sol%)', ''), wind = f[4], road = tonumber(f[5]),
             air = tonumber(f[6]), rain = tonumber(f[7]), wet = tonumber(f[8]), water = tonumber(f[9]), trans = tonumber(f[10]) or 0,
-            tsec = tonumber(f[11]) or 0 }
+            tsec = tonumber(f[11]) or 0, hum = tonumber(f[12]) }
         end
       end
       F.list, F.race, F.session = list, race, session
+      F.seed = tonumber(body:match('\nSEED|(%d+)')) or 0
       F.starts = {}
       local st = body:match('\nSTART|([^\r\n]*)')
       if st then
@@ -13846,32 +13847,81 @@ local drawRaceScreens = (function()
   local function low(name) return (tostring(name or ''):lower():gsub('_', ' ')) end
   function Radar.scheme(name)
     local n = low(name)
-    local function s(o1, o2, wet, conv, vv) return { o1 = o1, o2 = o2, wet = wet, conv = conv and 1 or 0, vv = vv and 1 or 0 } end
+    local function s(o1, o2, wet, conv, vv, air, pct) return { o1 = o1, o2 = o2, wet = wet, conv = conv and 1 or 0, vv = vv and 1 or 0, air = air, pct = pct } end
     if n:find('thunder', 1, true) then return s(8, 8, n:find('heavy', 1, true) and 'heavyThunder' or n:find('light', 1, true) and 'lightThunder' or 'thunder', true, true) end
+    if n:find('tornado', 1, true) then return s(8, 8, 'tornado', true, true) end
+    if n:find('hurricane', 1, true) then return s(8, 8, 'hurricane', true, true) end
+    if n:find('hail', 1, true) then return s(8, 8, 'hail', true, true) end
     if n:find('shower', 1, true) or n:find('squall', 1, true) then return s(8, 8, 'showers', true) end
     if n:find('drizzle', 1, true) then
       if n:find('heavy', 1, true) then return s(8, 8, 'heavyDrizzle') end
       return s(8, 8, n:find('light', 1, true) and 'lightDrizzle' or 'drizzle')
     end
     if n:find('rain', 1, true) then return s(8, 8, n:find('heavy', 1, true) and 'heavyRain' or n:find('light', 1, true) and 'lightRain' or 'rain') end
+    if n:find('sleet', 1, true) then return s(8, 8, n:find('heavy', 1, true) and 'heavySleet' or n:find('light', 1, true) and 'lightSleet' or 'sleet') end
+    if n:find('flurr', 1, true) then return s(3, 5, nil, nil, nil, 'flurries', { 40, 70 }) end
+    if n:find('snow', 1, true) or n:find('blizzard', 1, true) then
+      return s(8, 8, (n:find('heavy', 1, true) or n:find('blizzard', 1, true) or n:find('snowstorm', 1, true)) and 'heavySnow' or n:find('light', 1, true) and 'lightSnow' or 'snow')
+    end
+    if n:find('fog', 1, true) then return s(8, 8, nil, nil, nil, n:find('light', 1, true) and 'lightFog' or 'fog') end
+    if n:find('mist', 1, true) then return s(4, 8, nil, nil, nil, 'mist', { 50, 100 }) end
+    if n:find('sand', 1, true) then return s(0, 2, nil, nil, nil, 'sand', { 0, 30 }) end
+    if n:find('haze', 1, true) or n:find('dust', 1, true) or n:find('smoke', 1, true) then return s(0, 2, nil, nil, nil, 'haze', { 0, 30 }) end
+    if n:find('windy', 1, true) then return s(0, 3, nil, nil, nil, 'windy', { 0, 40 }) end
+    if n:find('light clouds', 1, true) then return s(1, 2, nil, nil, nil, 'lightClouds', { 10, 30 }) end
+    if n:find('mid clouds', 1, true) then return s(3, 5, nil, nil, nil, 'midClouds', { 40, 70 }) end
+    if n:find('heavy clouds', 1, true) then return s(7, 8, 'heavyClouds', nil, nil, nil, { 85, 100 }) end
     if n:find('overcast', 1, true) then return s(8, 8) end
     if n:find('broken', 1, true) then return s(5, 7) end
     if n:find('scattered', 1, true) then return s(3, 4) end
     if n:find('few', 1, true) then return s(1, 2) end
-    if n:find('clear', 1, true) or n:find('no clouds', 1, true) then return s(0, 0) end
+    if n:find('no clouds', 1, true) then return s(0, 0) end
+    if n:find('clear', 1, true) then return s(0, 0, nil, nil, nil, nil, { 0, 12 }) end
     return s(4, 4)
   end
   local function oktaMid(o) return (OKTA_PCT[o][1] + OKTA_PCT[o][2]) / 200 end
-  function Radar.slotCover(name, nextName)
-    return oktaMid(Radar.scheme(name).o2)
+  function Radar.slotCover(name, nextName, dev)
+    local sc = Radar.scheme(name)
+    if not dev then return oktaMid(sc.o2) end
+    local r = sc.pct or OKTA_PCT[sc.o2]
+    return (r[1] + (r[2] - r[1]) * dev) / 100
+  end
+  local function knot(k)
+    local h = (k * 9301 + 49297) % 233280
+    h = (h * h + 12345) % 233280
+    return ((h * 9301 + 49297) % 233280) / 233280
+  end
+  function Radar.deviation(M, seed)
+    local x = M / 30
+    local i = math.floor(x) + seed
+    local f = x - math.floor(x)
+    f = f * f * (3 - 2 * f)
+    return knot(i) + (knot(i + 1) - knot(i)) * f
   end
   local MMH = { lightDrizzle = { 0, 0.30 }, drizzle = { 0.30, 0.50 }, heavyDrizzle = { 0.50, 1.0 }, lightRain = { 0, 2.5 }, rain = { 2.6, 10.0 },
-    heavyRain = { 10.1, 50.0 }, showers = { 1.0, 30.0 }, lightThunder = { 15, 40 }, thunder = { 15, 70 }, heavyThunder = { 15, 100 } }
+    heavyRain = { 10.1, 50.0 }, showers = { 1.0, 30.0 }, lightThunder = { 15, 40 }, thunder = { 15, 70 }, heavyThunder = { 15, 100 },
+    lightSnow = { 0, 2.5 }, snow = { 2.6, 10.0 }, heavySnow = { 10.1, 50.0 }, lightSleet = { 0, 2.5 }, sleet = { 2.6, 10.0 }, heavySleet = { 10.1, 50.0 }, hail = { 15, 50 }, tornado = { 0, 50 },
+    hurricane = { 50, 200 }, heavyClouds = { 0.5, 5 } }
   function Radar.intensity(name, rainPct)
     local c = Radar.scheme(name).wet
     if not c then return 0 end
     local r = MMH[c]
     return r[1] + (r[2] - r[1]) * math.min(math.max(CarRead.num(rainPct), 0), 100) / 100
+  end
+  local function ramp(x, r) return r[3] + (r[4] - r[3]) * math.min(math.max((x - r[1]) / (r[2] - r[1]), 0), 1) end
+  local H_DRIZZLE, H_RAIN, H_HARD, H_SLEET = { 0, 1, 90, 100 }, { 0, 10, 85, 95 }, { 10, 50, 95, 100 }, { 2, 10, 85, 95 }
+  local HUM_WET = { lightDrizzle = H_DRIZZLE, drizzle = H_DRIZZLE, heavyDrizzle = H_DRIZZLE, lightRain = H_RAIN, rain = H_RAIN, lightSnow = H_RAIN, snow = H_RAIN, heavyRain = H_HARD, lightThunder = H_HARD,
+    thunder = H_HARD, heavyThunder = H_HARD, heavySnow = H_HARD, showers = { 1, 30, 75, 90 }, lightSleet = H_SLEET, sleet = H_SLEET, heavySleet = H_SLEET, hail = { 15, 50, 90, 100 },
+    tornado = { 0, 50, 85, 100 }, hurricane = { 50, 200, 95, 100 }, heavyClouds = { 0.5, 5, 75, 90 } }
+  local HUM_DEV = { lightFog = { 0, 1, 90, 95 }, fog = { 0, 1, 95, 100 } }
+  local HUM_AIR = { haze = { 0, 30, 0, 60 }, sand = { 0, 30, 0, 20 }, mist = { 50, 100, 70, 95 }, flurries = { 40, 70, 60, 75 },
+    windy = { 0, 40, 30, 60 }, lightClouds = { 10, 30, 30, 50 }, midClouds = { 40, 70, 50, 70 } }
+  local H_CLEAR, H_CLOUD = { 0, 50, 50, 65 }, { 50, 100, 65, 85 }
+  function Radar.humidity(sc, cover, mmh, dev)
+    if sc.wet then return ramp(mmh, HUM_WET[sc.wet]) end
+    if HUM_DEV[sc.air] then return ramp(dev, HUM_DEV[sc.air]) end
+    local c = cover * 100
+    return ramp(c, sc.air and HUM_AIR[sc.air] or c <= 50 and H_CLEAR or H_CLOUD)
   end
   function Radar.slots(fc)
     local out = {}
@@ -13882,7 +13932,7 @@ local drawRaceScreens = (function()
         local v1, v2 = w:match('(%d+%.?%d*)%s*%-%s*(%d+%.?%d*)%s*m/s')
         out[#out + 1] = { minute = tonumber(h) * 60 + tonumber(m), name = f.sky or f.type or '', rain = CarRead.num(f.rain), air = CarRead.num(f.air),
           road = CarRead.num(f.road), vmin = tonumber(v1) or 0, vmax = tonumber(v2) or tonumber(v1) or 0,
-          dir = tonumber(w:match('(%d+)%s*°') or w:match('at%s*(%d+)')) or 0, trans = CarRead.num(f.trans), tsec = CarRead.num(f.tsec) }
+          dir = tonumber(w:match('(%d+)%s*°') or w:match('at%s*(%d+)')) or 0, trans = CarRead.num(f.trans), tsec = CarRead.num(f.tsec), hum = tonumber(f.hum) }
       end
     end
     if #out == 0 then
@@ -13897,7 +13947,7 @@ local drawRaceScreens = (function()
   local function lerp(a, b, u) return a + (b - a) * u end
   local function turn(a, b, u) return (a + ((b - a + 540) % 360 - 180) * u + 360) % 360 end
   local function line(slots)
-    local sl, add = {}, 0
+    local sl, add, seed = {}, 0, CarRead.num(RecordSync.base.forecast.seed)
     for _, x in ipairs(slots) do
       local m = x.minute + add
       if #sl > 0 and m < sl[#sl].minute then add = add + 1440; m = x.minute + add end
@@ -13909,7 +13959,9 @@ local drawRaceScreens = (function()
     for i, s in ipairs(sl) do
       local nx = sl[math.min(i + 1, #sl)]
       local sc = Radar.scheme(s.name)
-      s.q = { cover = Radar.slotCover(s.name, nx.name), wet = sc.wet and 1 or 0, mmh = Radar.intensity(s.name, s.rain), conv = sc.conv, vv = sc.vv }
+      local dev = Radar.deviation(s.minute, seed)
+      s.q = { cover = Radar.slotCover(s.name, nx.name, dev), wet = sc.wet and 1 or 0, mmh = Radar.intensity(s.name, s.rain), conv = sc.conv, vv = sc.vv, cat = sc.wet }
+      s.q.hum = s.hum or Radar.humidity(sc, s.q.cover, s.q.mmh, dev)
       local tr = math.min(math.max(CarRead.num(s.trans), 0), 99) / 100
       s.trFrom = (tr > 0 and nx ~= s) and (nx.minute - (nx.minute - s.minute) / (1 - tr)) or nil
       s.idx = i
@@ -13926,7 +13978,8 @@ local drawRaceScreens = (function()
     return sl
   end
   local function mixQ(a, b, w)
-    return { cover = lerp(a.cover, b.cover, w), wet = lerp(a.wet, b.wet, w), mmh = lerp(a.mmh, b.mmh, w), conv = lerp(a.conv, b.conv, w), vv = lerp(a.vv, b.vv, w) }
+    return { cover = lerp(a.cover, b.cover, w), wet = lerp(a.wet, b.wet, w), mmh = lerp(a.mmh, b.mmh, w), conv = lerp(a.conv, b.conv, w), vv = lerp(a.vv, b.vv, w), hum = lerp(a.hum, b.hum, w),
+      cat = w >= 0.5 and (b.cat or a.cat) or (a.cat or b.cat) }
   end
   local function stateAt(sl, M)
     local i = 1
@@ -13934,43 +13987,48 @@ local drawRaceScreens = (function()
     local a, b = sl[i], sl[math.min(i + 1, #sl)]
     local span = b.minute - a.minute
     local u = span > 0 and math.min(math.max((M - a.minute) / span, 0), 1) or 0
-    local q, name = a.q, a.name
+    local q0 = a.q
+    if b ~= a and low(a.name) == low(b.name) then
+      q0 = { cover = lerp(a.q.cover, b.q.cover, u), hum = lerp(a.q.hum, b.q.hum, u), wet = a.q.wet, mmh = a.q.mmh, conv = a.q.conv, vv = a.q.vv, cat = a.q.cat }
+    end
+    local q, name = q0, a.name
     if a.trTo then
       local w = math.min(math.max((M - a.trFrom) / (a.trTo - a.trFrom), 0), 1)
-      q = mixQ(a.q, a.tg.q, w)
+      q = mixQ(q0, a.tg.q, w)
       if w >= 0.5 then name = a.tg.name end
     elseif b.trTo and b ~= a then
       if M >= b.trFrom then
         local w = math.min(math.max((M - b.trFrom) / (b.trTo - b.trFrom), 0), 1)
-        q = mixQ(a.q, b.tg.q, w)
+        q = mixQ(q0, b.tg.q, w)
         if w >= 0.5 then name = b.tg.name end
       end
     elseif a.trFrom and b ~= a then
       local w = math.min(math.max((M - a.trFrom) / (b.minute - a.trFrom), 0), 1)
-      q = mixQ(a.q, b.q, w)
+      q = mixQ(q0, b.q, w)
       if w >= 0.5 then name = b.name end
     elseif b.trFrom and b ~= a then
       local c = sl[math.min(b.idx + 1, #sl)]
-      if c ~= b and M >= b.trFrom then q = mixQ(a.q, c.q, math.min(math.max((M - b.trFrom) / (c.minute - b.trFrom), 0), 1)) end
+      if c ~= b and M >= b.trFrom then q = mixQ(q0, c.q, math.min(math.max((M - b.trFrom) / (c.minute - b.trFrom), 0), 1)) end
     end
-    return { cover = q.cover, wet = q.wet, mmh = q.mmh, conv = q.conv, vv = q.vv, name = name, air = lerp(a.air or 0, b.air or 0, u),
+    return { cover = q.cover, wet = q.wet, mmh = q.mmh, conv = q.conv, vv = q.vv, hum = q.hum, cat = q.cat, name = name, air = lerp(a.air or 0, b.air or 0, u),
       road = lerp(a.road or 0, b.road or 0, u), vmin = lerp(a.vmin, b.vmin, u), vmax = lerp(a.vmax, b.vmax, u), dir = turn(a.dir, b.dir, u) }
   end
   local NEAR, TAU = 60, 10
   local function nearness(d) return math.max(0, 1 - math.log(1 + d / TAU) / math.log(1 + NEAR / TAU)) end
   local function windowOf(sl, M0)
-    local wet, cover, conv, vv, inMm = 0, 0, 0, 0, 0
+    local wet, cover, conv, vv, inMm, hum, cat = 0, 0, 0, 0, 0, 0, nil
     for m = 0, 9 do
       local s = stateAt(sl, M0 + m + 0.5)
       wet, cover, conv, vv = wet + s.wet / 10, cover + s.cover / 10, conv + s.conv / 10, vv + s.vv / 10
-      if s.wet > 0 then inMm = inMm + s.mmh / 10 end
+      hum = hum + s.hum / 10
+      if s.wet > 0 then inMm, cat = inMm + s.mmh / 10, s.cat or cat end
     end
-    local g, nearMm, after = 0, 0, false
+    local g, nearMm, nearCat, after = 0, 0, nil, false
     for d = 0, NEAR do
       local before, aft = stateAt(sl, M0 - d - 0.5), stateAt(sl, M0 + 10 + d + 0.5)
       for _, x in ipairs({ before, aft }) do
         local v = nearness(d) * x.wet
-        if x.wet > 0 and v > g then g, nearMm = v, x.mmh / x.wet end
+        if x.wet > 0 and v > g then g, nearMm, nearCat = v, x.mmh / x.wet, x.cat end
       end
       if aft.wet > 0 and d <= 20 then after = true end
     end
@@ -13978,7 +14036,7 @@ local drawRaceScreens = (function()
     local dryAfter = (wet > 0 and not after) and 1 or 0
     local p = math.floor(math.min(math.max(0.9 * wet + 0.45 * g * (1 - wet) - 0.15 * wet * dryAfter, 0), 0.95) * 20 + 1e-9) / 20
     local s0 = stateAt(sl, M0)
-    return { minute = M0 % 1440, cover = cover, conv = conv, vv = vv, chance = p, mmh = p * ref, ref = ref, air = s0.air, road = s0.road, vmin = s0.vmin,
+    return { minute = M0 % 1440, cover = cover, conv = conv, vv = vv, hum = hum, cat = cat or nearCat, chance = p, mmh = p * ref, ref = ref, air = s0.air, road = s0.road, vmin = s0.vmin,
       vmax = s0.vmax, dir = s0.dir, name = stateAt(sl, M0 + 5).name }
   end
   function Radar.segments(slots, m0, count)
@@ -13997,9 +14055,11 @@ local drawRaceScreens = (function()
     for k = 0, 8 do if seg.cover * 100 >= OKTA_PCT[k][1] - 0.5 then o = k end end
     return TEXTS.wxSky[SKY_OKTA[o]]
   end
-  function Radar.precipOf(mm)
+  local PRECIP_OWN = { lightSnow = true, snow = true, heavySnow = true, lightSleet = true, sleet = true, heavySleet = true, hail = true }
+  function Radar.precipOf(mm, cat)
     if mm < 0.01 then return '' end
     local P = TEXTS.wxPrecip
+    if PRECIP_OWN[cat] then return P[cat] end
     if mm < 0.30 then return P.lightDrizzle elseif mm <= 0.50 then return P.drizzle elseif mm <= 2.5 then return P.lightRain
     elseif mm <= 10 then return P.rain elseif mm <= 50 then return P.heavyRain end
     return P.violentRain
@@ -14015,10 +14075,10 @@ local drawRaceScreens = (function()
       compass(a.dir), kmh(a)) }
     local r
     for _, s in ipairs(seg) do if not r and s.chance >= 0.2 and s.mmh >= 0.01 then r = s end end
-    out[#out + 1] = r and string.format(TEXTS.wxBulletin.rain, hhmm(r.minute), Radar.precipOf(r.ref),
+    out[#out + 1] = r and string.format(TEXTS.wxBulletin.rain, hhmm(r.minute), Radar.precipOf(r.ref, r.cat),
       math.floor(r.chance * 100 + 0.5), r.mmh) or TEXTS.wxBulletin.dry
     out[#out + 1] = string.format(TEXTS.wxBulletin.by, hhmm(z.minute), Radar.skyOf(z):lower(),
-      z.mmh >= 0.01 and string.format(', %s %d%%', Radar.precipOf(z.ref), math.floor(z.chance * 100 + 0.5)) or '', math.floor(z.air + 0.5),
+      z.mmh >= 0.01 and string.format(', %s %d%%', Radar.precipOf(z.ref, z.cat), math.floor(z.chance * 100 + 0.5)) or '', math.floor(z.air + 0.5),
       math.floor(z.road + 0.5), compass(z.dir), kmh(z))
     local drop = math.floor(a.road - z.road + 0.5)
     if math.abs(drop) >= 3 then
@@ -14075,7 +14135,7 @@ local drawRaceScreens = (function()
       key[#key + 1] = string.format('%d|%s|%g|%g|%g|%g|%g|%g|%g', x.minute, tostring(x.name), x.rain or 0, x.vmin or 0, x.vmax or 0, x.dir or 0, x.trans or 0, x.road or 0,
         x.tsec or 0)
     end
-    key = table.concat(key, ';')
+    key = table.concat(key, ';') .. '|' .. CarRead.num(RecordSync.base.forecast.seed)
     if Radar.flKey ~= key then Radar.flKey, Radar.fl = key, Radar.forecastLine(slots) end
     return Radar.fl
   end
@@ -14097,6 +14157,13 @@ local drawRaceScreens = (function()
     for k = 0, Radar.WINDOW_SEGS - 1 do out[#out + 1] = Radar.segAt(FL, H + k * 10) end
     return out
   end
+  function Radar.now()
+    local fc = Weather.forecast or RecordSync.base.forecast.list or {}
+    if #fc == 0 then return nil end
+    local segs = Radar.textSegments(fc)
+    return segs[2] or segs[1]
+  end
+  Desktop.wxNow = Radar.now
   local RADAR_BACK, RADAR_STEPS = 24, 60
   local function radarShader()
     local w, d = {}, {}
@@ -14355,8 +14422,7 @@ float4 main(PS_IN pin) {
       x = a.x - 4 * s
     end
     wxMark('mode', vec2(x + 4 * s, p1.y + 5 * s), tabsR, s)
-    local okC, cs = pcall(ac.getConditionsSet)
-    local nowName = weatherName(sim.weatherType)
+    local now = segs[2] or segs[1]
     if mode == 'map' then
       local side = p2.x - p1.x - 20 * s
       local zx = p1.x + 10 * s
@@ -14422,16 +14488,14 @@ float4 main(PS_IN pin) {
         drawText(fit(string.format(TEXTS.scrRadarLoop, #fc > 0 and TEXTS.scrWeatherAnim or TEXTS.scrWeatherStatic)), FONT_MONO, 8 * s, TMP.a:set(p1.x + 14 * s, ly + 37 * s), COLOR_DIM)
       end
     else
-      local kmhW = CarRead.num(sim.windSpeedKmh)
       local lines = {
         { TEXTS.scrWxTime, clock },
-        { TEXTS.scrWxSky, nowName or '-' },
-        { TEXTS.scrWxAir, string.format('%.0f / %.0f C', CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature)) },
-        { TEXTS.scrWxWind, string.format(TEXTS.wxWindFmt, kmhW, CarRead.num(sim.windDirectionDeg) % 360) },
-        { TEXTS.scrWxRain, string.format(TEXTS.wxRainFmt, CarRead.num(sim.rainIntensity) * 100, CarRead.num(sim.rainWetness) * 100) },
+        { TEXTS.scrWxSky, now and Radar.skyOf(now) or '-' },
+        { TEXTS.scrWxAir, now and string.format('%.0f / %.0f C / %.0f%%', now.air, now.road, now.hum) or '-' },
+        { TEXTS.scrWxWind, now and Radar.windText(now, true) or '-' },
+        { TEXTS.scrWxRain, now and string.format(TEXTS.wxRainFmt, now.chance * 100, CarRead.num(sim.rainWetness) * 100) or '-' },
         { TEXTS.scrTrack, string.format(TEXTS.wxGripFmt, CarRead.num(sim.roadGrip) * 100) },
-        { TEXTS.scrWxNext, okC and cs and weatherName(cs.upcomingType) and string.format('%s - %.0f%%', weatherName(cs.upcomingType),
-          CarRead.num(cs.transition) * 100) or '-' },
+        { TEXTS.scrWxNext, segs[3] and string.format('%s %s', hhmm(segs[3].minute), Radar.skyOf(segs[3])) or '-' },
       }
       for _, l in ipairs(lines) do
         row(p1, y, s, { { l[1], 14, COLOR_DIM, false, FONT_TEXT }, { l[2], 286, COLOR_TITLE, true } })
@@ -14440,12 +14504,12 @@ float4 main(PS_IN pin) {
       if #fc > 0 then
         drawSeparator(p1, p2, y + 3 * s, s)
         y = y + 8 * s
-        row(p1, y, s, { { TEXTS.hdr.time, 14, COLOR_AXIS }, { TEXTS.hdr.sky, 70, COLOR_AXIS }, { TEXTS.hdr.precip, 210, COLOR_AXIS, true },
-          { TEXTS.hdr.air, 240, COLOR_AXIS, true }, { TEXTS.hdr.track, 286, COLOR_AXIS, true } })
+        row(p1, y, s, { { TEXTS.hdr.time, 14, COLOR_AXIS }, { TEXTS.hdr.sky, 50, COLOR_AXIS }, { TEXTS.hdr.precip, 190, COLOR_AXIS, true },
+          { TEXTS.hdr.hum, 222, COLOR_AXIS, true }, { TEXTS.hdr.air, 246, COLOR_AXIS, true }, { TEXTS.hdr.track, 286, COLOR_AXIS, true } })
         if paged then
           local t = string.format(TEXTS.scrWxPage, wxPage, wxPages(segs))
           local tw = textWidth(t, FONT_MONO, FS * s)
-          local cx = p1.x + 145 * s
+          local cx = p1.x + 115 * s
           drawText(t, FONT_MONO, FS * s, TMP.a:set(cx - tw / 2, y), COLOR_DIM)
           Drag.clickable(vec2(cx - tw / 2 - 4 * s, y), vec2(cx, y + ROW * s), function() Desktop.weatherStep(-1) end)
           Drag.clickable(vec2(cx, y), vec2(cx + tw / 2 + 4 * s, y + ROW * s), function() Desktop.weatherStep(1) end)
@@ -14455,9 +14519,10 @@ float4 main(PS_IN pin) {
         for k = (wxPage - 1) * WX_PAGE + 1, math.min(wxPage * WX_PAGE, #segs) do
           local f = segs[k]
           local sky = Radar.skyOf(f)
-          row(p1, y, s, { { hhmm(f.minute), 14 }, { sky, 70 },
-            { string.format(TEXTS.wxProb, math.floor(f.chance * 100 + 0.5)), 210, nil, true },
-            { string.format('%.0f', f.air), 240, nil, true }, { string.format('%.0f', f.road), 286, nil, true } })
+          row(p1, y, s, { { hhmm(f.minute), 14 }, { sky, 50 },
+            { string.format(TEXTS.wxProb, math.floor(f.chance * 100 + 0.5)), 190, nil, true },
+            { string.format('%.0f%%', f.hum), 222, nil, true },
+            { string.format('%.0f', f.air), 246, nil, true }, { string.format('%.0f', f.road), 286, nil, true } })
           y = y + ROW * s
         end
       end
@@ -17326,10 +17391,10 @@ float4 main(PS_IN pin) {
       local segs = #fc > 0 and Radar.textSegments(fc) or {}
       local now, boxes = segs[2] or segs[1], {}
       for i, s in pairs({ segs[2] or segs[1], segs[4], segs[6], segs[7] }) do
-        boxes[i] = { minute = s.minute, sky = Radar.skyOf(s), chance = math.floor(s.chance * 100 + 0.5), wind = Radar.windText(s, true), dir = s.dir }
+        boxes[i] = { minute = s.minute, sky = Radar.skyOf(s), chance = math.floor(s.chance * 100 + 0.5), wind = Radar.windText(s, true), dir = s.dir, hum = s.hum }
       end
       local g = RecordSync.base.dirPen.grip
-      return { grip = g and tostring(TEXTS.trackGrip[CarRead.gripName(g)] or '-') or '-', air = CarRead.num(sim.ambientTemperature), road = CarRead.num(sim.roadTemperature),
+      return { grip = g and tostring(TEXTS.trackGrip[CarRead.gripName(g)] or '-') or '-', air = now and now.air, road = now and now.road, hum = now and now.hum,
         rain = now and math.floor(now.chance * 100 + 0.5) or nil, wind = now and Radar.windText(now) or nil, dir = now and now.dir, boxes = boxes, any = now ~= nil }
     end
     function CR.trackBody(k)
@@ -17342,9 +17407,9 @@ float4 main(PS_IN pin) {
         yy = yy + 22 * k
         if draw then drawText(fitText(Lang.letters.upper(tostring(tr.name or ac.getTrackName() or '')), F.cbig, 54 * k, cw, '.'), F.cbig, 54 * k, TMP.a:set(x, yy), PAPER) end
         yy = yy + 66 * k
-        local cells = { { T.opGrip, v.grip }, { T.opAir, string.format('%.0f °C', v.air) }, { T.opRoad, string.format('%.0f °C', v.road) },
-          { T.opRain, v.rain and string.format(TEXTS.wxProb, v.rain) or '-' } }
-        if v.wind then cells[5] = { T.opWind .. ' · km/h', v.wind, dir = v.dir } end
+        local cells = { { T.opGrip, v.grip }, { T.opAir, v.air and string.format('%.0f °C', v.air) or '-' }, { T.opRoad, v.road and string.format('%.0f °C', v.road) or '-' },
+          { T.opHum, v.hum and string.format('%.0f%%', v.hum) or '-' }, { T.opRain, v.rain and string.format(TEXTS.wxProb, v.rain) or '-' } }
+        if v.wind then cells[6] = { T.opWind .. ' · km/h', v.wind, dir = v.dir } end
         yy = yy + CR.grid4(x, yy, cw, k, cells, draw)
         local fw = (cw - 3 * 10 * k) / 4
         if v.any then
@@ -17357,7 +17422,7 @@ float4 main(PS_IN pin) {
               local sky = s.sky .. ' · ' .. T.opRain .. ' ' .. string.format(TEXTS.wxProb, s.chance)
               drawText(fitText(sky, F.saySm, 15 * k, fw - 24 * k, '.'), F.saySm, 15 * k, TMP.a:set(fx + 12 * k, yy + 48 * k), DIMW)
               CR.windArrow(fx + 12 * k, yy + 71 * k, 14 * k, s.dir, DIMW)
-              drawText(fitText(s.wind, F.saySm, 15 * k, fw - 44 * k, '.'), F.saySm, 15 * k, TMP.a:set(fx + 32 * k, yy + 69 * k), DIMW)
+              drawText(fitText(s.wind .. ' · ' .. T.opHum .. string.format(' %.0f%%', s.hum), F.saySm, 15 * k, fw - 44 * k, '.'), F.saySm, 15 * k, TMP.a:set(fx + 32 * k, yy + 69 * k), DIMW)
             end
           end
           yy = yy + 16 * k + 80 * k
@@ -17858,9 +17923,10 @@ float4 main(PS_IN pin) {
           local segs = #fc > 0 and Radar.textSegments(fc) or {}
           local now = segs[2] or segs[1]
           S.cond = { { T.opGrip, RecordSync.base.dirPen.grip and tostring(TEXTS.trackGrip[CarRead.gripName(RecordSync.base.dirPen.grip)] or '-') or '-' },
-            { T.opAir, string.format('%.0f °C', CarRead.num(sim.ambientTemperature)) }, { T.opRoad, string.format('%.0f °C', CarRead.num(sim.roadTemperature)) },
+            { T.opAir, now and string.format('%.0f °C', now.air) or '-' }, { T.opRoad, now and string.format('%.0f °C', now.road) or '-' },
+            { T.opHum, now and string.format('%.0f%%', now.hum) or '-' },
             { T.opNow, now and Radar.skyOf(now) or '-' }, { T.opRain, now and string.format(TEXTS.wxProb, math.floor(now.chance * 100 + 0.5)) or '-' } }
-          if now then S.cond[6] = { T.opWind, Radar.windText(now, true), dir = now.dir } end
+          if now then S.cond[7] = { T.opWind, Radar.windText(now, true), dir = now.dir } end
         end
       end
       if not S.at then return end
@@ -20965,6 +21031,7 @@ local drawDesktopUI = (function()
     drawSeparator(p1, p2, p1.y + 21 * s, s)
     local y = p1.y + 27 * s
     local pen = Panel.cellPenalties()
+    local wxNow = Desktop.wxNow and Desktop.wxNow()
     local rows = {
       { TEXTS.scrPosition, me and ('P' .. me.pos .. (me.class and string.format(TEXTS.posClassFmt, me.classPos, me.class) or '')) or '-' },
       { TEXTS.lobbyStops, string.format('%d / %d', PitRecord.stops, config.stopsRequired()) },
@@ -20974,7 +21041,7 @@ local drawDesktopUI = (function()
       { TEXTS.scrKmrCrashes, Audit.per100(Audit.crashes, Audit.crashRate) },
       { TEXTS.scrKmrInfr, Audit.per100(Audit.infractions, Audit.infractionRate) },
       { TEXTS.scrKmrKm, Audit.km and string.format('%.1f km', Audit.km) or '-' },
-      { TEXTS.lobbyWeather, string.format('%.0f / %.0f C', CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature)) },
+      { TEXTS.lobbyWeather, wxNow and string.format('%.0f / %.0f C / %.0f%%', wxNow.air, wxNow.road, wxNow.hum) or '-' },
     }
     for _, r in ipairs(rows) do
       drawText(r[1], FONT_TEXT, 10 * s, TMP.a:set(p1.x + 14 * s, y), COLOR_DIM)
