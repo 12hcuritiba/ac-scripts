@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V286 - 2026.11.07'
+local RC_VERSION = 'V287 - 2026.11.08'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16656,7 +16656,7 @@ float4 main(PS_IN pin) {
     local SAY_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.96)
     local ROLL = 0.45
     BC.ROLL = ROLL
-    BC.SCALE = 0.87
+    BC.SCALE = 0.86
     local BOX_TINT, BOX_SOFT, RES_PIN = rgbm(1, 1, 1, 0.04), rgbm(31 / 255, 104 / 255, 207 / 255, 0.30), rgbm(1, 1, 1, 0.22)
     ACCENT[#ACCENT + 1] = BOX_SOFT
     CR.va, CR.vb = vec2(0, 0), vec2(0, 0)
@@ -18290,7 +18290,7 @@ float4 main(PS_IN pin) {
       local pins = math.min(BC.opt.pins or 3, #rows)
       local y = ly1
       for n = 1, pins do
-        if y + rh <= ly2 then item(x1, y, k, rows[n], rows, n, multi, false, phaseGap, ended, false, x2 - x1, byClass) end
+        if y + rh <= ly2 + 0.5 * k then item(x1, y, k, rows[n], rows, n, multi, false, phaseGap, ended, false, x2 - x1, byClass) end
         y = y + rh
       end
       if pins > 0 then
@@ -18301,7 +18301,7 @@ float4 main(PS_IN pin) {
       local rest, room = #rows - pins + (parts and parts.n or 0), ly2 - y
       if rest <= 0 or room <= 0 then CR.towerSealsDraw(x2, ly1, ly2, k) return end
       local height = rest * rh
-      local run = height > room
+      local run = height > room + 0.5 * k
       local M = towerMove[key] or {}
       towerMove[key] = M
       local paged = BC.opt.vm == 'PAGE'
@@ -18349,12 +18349,67 @@ float4 main(PS_IN pin) {
       ui.popClipRect()
       CR.towerSealsDraw(x2, ly1, ly2, k)
     end
+    function CR.legLines(fn, left, right, gap)
+      local lines, lx = 1, left
+      if BC.opt.legend == 'CLASS' then
+        for _, key in ipairs(BC.classKeys) do
+          local iw = fn(false, key)
+          if lx > left and lx + iw > right then lx, lines = left, lines + 1 end
+          lx = lx + iw + gap
+        end
+      else
+        for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
+          if tname ~= '' then
+            local iw = fn(true, tname)
+            if lx > left and lx + iw > right then lx, lines = left, lines + 1 end
+            lx = lx + iw + gap
+          end
+        end
+      end
+      return lines
+    end
+    CR.segN = {}
+    function CR.segTop(keys, parts, room, cl, rh)
+      local n, S = #keys, CR.segN
+      for i = 1, math.max(n, #S) do S[i] = i <= n and #(parts[keys[i]] or {}) or nil end
+      table.sort(S)
+      local left, total = (room - n * cl) / rh, 0
+      for i = 1, n do total = total + S[i] end
+      if total <= left + 0.01 then return nil end
+      for i = 1, n do
+        local share = math.floor(left / (n - i + 1) + 0.01)
+        if S[i] > share then return math.max(share, 0) end
+        left = left - S[i]
+      end
+      return nil
+    end
     local function towerDraw(h, k, id)
       local x1, x2, ty1, ty2 = 44 * k, 416 * k, 104 * k, h - 60 * k
       local fk, ft = flagNow()
       local onlyBox = BC.opt.flag == 'AUTO'
       local hide, pre = CR.hideList(), CR.preOpen()
       if hide then ty2 = ty1 + 56 * k + (pre and 32 * k or 0) + (onlyBox and 0 or 42 * k) + 20 * k end
+      local seg, cyc, list, multi, legend, fixed, fixedL, fixedK, fixedB, top
+      local cl = 22 * k + ((BC.opt.pins or 3) > 0 and 2 * k or 0)
+      if not hide then
+        local segW = BC.opt.tower == 'SEG' and BC.opt.place == 'ALL'
+        cyc = select(2, placeNow())
+        list, multi = creditRows((segW or cyc) and towerParts or nil)
+        legend = (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '')
+        local lines = legend and CR.legLines(function(t, n) return legendItem(0, 0, k, t, n, nil, true) end, x1 + 22 * k, x2 - 22 * k, 14 * k) or 0
+        fixed, fixedL, fixedK, fixedB = fixedOf(list, (segW or cyc) and towerParts or nil)
+        local head = 56 * k + (pre and 32 * k or 0) + (onlyBox and 0 or 42 * k) + (legend and (10 + 22 * lines) * k or 0) + (fixed and 43 * k or 0) + 20 * k
+        if segW and multi then top = CR.segTop(BC.classKeys, towerParts, ty2 - ty1 - head, cl, 42 * k) end
+        seg = segW and multi and (top == nil or top >= 3)
+        if segW and not seg then fixed, fixedL, fixedK, fixedB = fixedOf(list, cyc and towerParts or nil) end
+        local need = 0
+        if seg then
+          for _, key in ipairs(BC.classKeys) do need = need + cl + math.min(#towerParts[key], top or #towerParts[key]) * 42 * k end
+        else
+          need = (math.min(BC.opt.pins or 3, #list) > 0 and 2 * k or 0) + #list * 42 * k
+        end
+        ty2 = math.min(ty1 + head + need, ty2)
+      end
       rect(x1, ty1, x2, ty2, BAR)
       rect(x1, ty1, x2, ty1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 340 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
@@ -18390,10 +18445,7 @@ float4 main(PS_IN pin) {
         strip(x1, x2, y, k, id.logoStrip, BAR.mult)
         return
       end
-      local seg = BC.opt.tower == 'SEG' and BC.opt.place == 'ALL'
-      local _, cyc = placeNow()
-      local list, multi = creditRows((seg or cyc) and towerParts or nil)
-      if (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '') then
+      if legend then
         rect(x1, y, x2, y + k, HAIR)
         local left, right = x1 + 22 * k, x2 - 22 * k
         local lx, ly = left, y + 8 * k
@@ -18414,7 +18466,6 @@ float4 main(PS_IN pin) {
         y = ly + 24 * k
       end
       local phaseGap = gapNow()
-      local fixed, fixedL, fixedK, fixedB = fixedOf(list, (seg or cyc) and towerParts or nil)
       if fixed then
         item(x1, y, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, false, x2 - x1, fixedB)
         CR.towerSealsDraw(x2, y, y + 42 * k, k)
@@ -18423,11 +18474,11 @@ float4 main(PS_IN pin) {
         y = y + k
       end
       local sy = ty2 - 20 * k
-      if seg and multi then
-        local partH = (sy - y) / #BC.classKeys
-        for n, key in ipairs(BC.classKeys) do
-          local py = y + (n - 1) * partH
+      if seg then
+        local py = y
+        for _, key in ipairs(BC.classKeys) do
           local rows = towerParts[key]
+          local partH = cl + math.min(#rows, top or #rows) * 42 * k
           local _, cc = classStyle(key)
           SEG_TINT.r, SEG_TINT.g, SEG_TINT.b, SEG_TINT.mult = cc.r, cc.g, cc.b, 0.34
           SEG_CLEAR.r, SEG_CLEAR.g, SEG_CLEAR.b = cc.r, cc.g, cc.b
@@ -18437,6 +18488,7 @@ float4 main(PS_IN pin) {
           local cars = string.format(TEXTS.bc.cars, #rows)
           drawText(cars, F.legend, 12 * k, TMP.a:set(x2 - 14 * k - textWidth(cars, F.legend, 12 * k), py + 5 * k), DIMW)
           towerList(x1, x2, py + 22 * k, py + partH, k, rows, multi, phaseGap, ended, true, key)
+          py = py + partH
         end
       else
         local gb
@@ -18984,9 +19036,9 @@ float4 main(PS_IN pin) {
         drawText(nm, F.legend, 10 * k, TMP.a:set(x + 19 * k, cy - 6.5 * k), (place == nil or place == 'ALL' or place == name) and PAPER or OFFW)
         return iw
       end
-      local function sessR(x, y, k, fs, kText, el, tot, note, pre)
+      local function sessR(x, y, k, fs, kText, el, tot, note, pre, up)
         drawText(kText, F.sessK, 10 * k, TMP.a:set(x, y), DIMW)
-        local vy = y + 12 * k
+        local vy = y + 12 * k - (up or 0)
         if note then drawText(note, F.notice, fs - 2 * k, TMP.a:set(x, vy), PAPER)
         elseif pre then
           local ow = Lang.letters.upper(TEXTS.bc.opensIn)
@@ -19012,7 +19064,7 @@ float4 main(PS_IN pin) {
         local T = TEXTS.bc
         local n = cardData(r, multi)
         local on = pageNow(n)
-        local y2 = h - 50 * k
+        local y2 = h - 44 * k
         local y1, cy = y2 - 30 * k, y2 - 15 * k
         local G = 6 * k
         local lt = textWidth('0:00.000', F.rb, 13 * k)
@@ -19100,7 +19152,7 @@ float4 main(PS_IN pin) {
       end
       function CR.barR(w, h, k, id)
         local T = TEXTS.bc
-        local y2 = h - 20 * k
+        local y2 = h - 14 * k
         local y1, cy = y2 - 30 * k, y2 - 15 * k
         local hide, pre = CR.hideList(), CR.preOpen()
         local fk, ft = flagNow()
@@ -19118,7 +19170,7 @@ float4 main(PS_IN pin) {
         ui.drawRectFilledMultiColor(TMP.a:set(0, y1 - k), TMP.b:set(math.min(240 * k, xEnd), y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
         local kText, el, tot, note, ended = sessionTexts()
         ui.pushClipRect(TMP.a:set(0, y1), TMP.b:set(sw - 4 * k, y2))
-        sessR(18 * k, y1 + 2 * k, k, 16 * k, kText, el, tot, note, pre)
+        sessR(18 * k, y1 + 2 * k, k, 16 * k, kText, el, tot, note, pre, 2 * k)
         ui.popClipRect()
         local x = sw
         if pre then
@@ -19132,7 +19184,7 @@ float4 main(PS_IN pin) {
         x = fEnd
         local multi0 = #(BC.classKeys or {}) > 1
         if hide then
-          strip(0, xEnd, h - 20 * k, k, id.logoStrip, BAR.mult)
+          strip(0, xEnd, h - 14 * k, k, id.logoStrip, BAR.mult, 14 * k)
           local list0 = creditRows(nil)
           measureR(list0, nil, k)
           cardHR(h, k, multi0)
@@ -19161,7 +19213,7 @@ float4 main(PS_IN pin) {
         measureR(list, fixed, k)
         if fixed then x = itemR(x, y1, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, nil, nil, fixedB) end
         crawl(x, y1, y2, w, k, list, multi, phaseGap, ended, cyc, itemR)
-        strip(w - w * 0.42, w, h - 20 * k, k, id.logoStrip, BAR.mult)
+        strip(w - w * 0.42, w, h - 14 * k, k, id.logoStrip, BAR.mult, 14 * k)
         cardHR(h, k, multi)
         CR.stack(k, y1)
       end
@@ -19170,42 +19222,34 @@ float4 main(PS_IN pin) {
         local fk, ft = flagNow()
         local onlyBox = BC.opt.flag == 'AUTO'
         local hide, pre = CR.hideList(), CR.preOpen()
-        local seg = BC.opt.tower == 'SEG' and BC.opt.place == 'ALL'
+        local segW = BC.opt.tower == 'SEG' and BC.opt.place == 'ALL'
         local _, cyc = placeNow()
-        local list, multi = creditRows((seg or cyc) and towerParts or nil)
+        local list, multi = creditRows((segW or cyc) and towerParts or nil)
         local legend = (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '')
         local sessH = 42 * k
         local lines, left, right = 1, x1 + 14 * k, x2 - 14 * k
-        if legend and not hide then
-          local lx = left
-          if BC.opt.legend == 'CLASS' then
-            for _, key in ipairs(BC.classKeys) do
-              local iw = legendR(0, 0, k, false, key, nil, true)
-              if lx > left and lx + iw > right then lx, lines = left, lines + 1 end
-              lx = lx + iw + 10 * k
-            end
-          else
-            for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
-              if tname ~= '' then
-                local iw = legendR(0, 0, k, true, tname, nil, true)
-                if lx > left and lx + iw > right then lx, lines = left, lines + 1 end
-                lx = lx + iw + 10 * k
-              end
-            end
-          end
-        end
+        if legend and not hide then lines = CR.legLines(function(t, n) return legendR(0, 0, k, t, n, nil, true) end, left, right, 10 * k) end
         local phaseGap = gapNow()
-        local fixed, fixedL, fixedK, fixedB = fixedOf(list, (seg or cyc) and towerParts or nil)
-        measureR(list, fixed, k)
+        local fixed, fixedL, fixedK, fixedB = fixedOf(list, (segW or cyc) and towerParts or nil)
         local headH = sessH + (pre and 28 * k or 0) + (onlyBox and 0 or 30 * k)
         local ty2
+        local seg, top
+        local cl = 18 * k + ((BC.opt.pins or 3) > 0 and 2 * k or 0)
         if hide then ty2 = ty1 + headH + 14 * k
         else
-          local pins = math.min(BC.opt.pins or 3, #list)
-          local need = headH + (legend and (lines * 16 * k + 6 * k) or 0) + (fixed and 27 * k or 0) + #list * 26 * k + (pins > 0 and 2 * k or 0)
-            + (seg and multi and #BC.classKeys * 18 * k or 0) + 14 * k
-          ty2 = math.min(ty1 + need, h - 60 * k)
+          local head = headH + (legend and (lines * 16 * k + 6 * k) or 0) + (fixed and 27 * k or 0) + 14 * k
+          if segW and multi then top = CR.segTop(BC.classKeys, towerParts, h - 60 * k - ty1 - head, cl, 26 * k) end
+          seg = segW and multi and (top == nil or top >= 3)
+          if segW and not seg then fixed, fixedL, fixedK, fixedB = fixedOf(list, cyc and towerParts or nil) end
+          local need = 0
+          if seg then
+            for _, key in ipairs(BC.classKeys) do need = need + cl + math.min(#towerParts[key], top or #towerParts[key]) * 26 * k end
+          else
+            need = (math.min(BC.opt.pins or 3, #list) > 0 and 2 * k or 0) + #list * 26 * k
+          end
+          ty2 = math.min(ty1 + head + need, h - 60 * k)
         end
+        measureR(list, fixed, k)
         rect(x1, ty1, x2, ty2, BAR)
         rect(x1, ty1, x2, ty1 + k, HAIR)
         ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 230 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
@@ -19259,11 +19303,11 @@ float4 main(PS_IN pin) {
           y = y + k
         end
         local sy = ty2 - 14 * k
-        if seg and multi then
-          local partH = (sy - y) / #BC.classKeys
-          for n, key in ipairs(BC.classKeys) do
-            local py = y + (n - 1) * partH
+        if seg then
+          local py = y
+          for _, key in ipairs(BC.classKeys) do
             local rows = towerParts[key]
+            local partH = cl + math.min(#rows, top or #rows) * 26 * k
             local _, cc = classStyle(key)
             SEG_TINT.r, SEG_TINT.g, SEG_TINT.b, SEG_TINT.mult = cc.r, cc.g, cc.b, 0.34
             SEG_CLEAR.r, SEG_CLEAR.g, SEG_CLEAR.b = cc.r, cc.g, cc.b
@@ -19273,6 +19317,7 @@ float4 main(PS_IN pin) {
             local cars = string.format(TEXTS.bc.cars, #rows)
             drawText(cars, F.legend, 10 * k, TMP.a:set(x2 - 10 * k - textWidth(cars, F.legend, 10 * k), py + 3 * k), DIMW)
             towerList(x1, x2, py + 18 * k, py + partH, k, rows, multi, phaseGap, ended, true, key, nil, itemR, 26)
+            py = py + partH
           end
         else
           local gb
