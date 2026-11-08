@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V285 - 2026.11.07'
+local RC_VERSION = 'V286 - 2026.11.07'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -560,6 +560,7 @@ local TEXTS = {
   scrEvent = 'EVENT', scrEventInfo = 'event info', evStarts = ' - starts %s', evRaceN = 'RACE %d',
   bc = { green = 'Green', lastLap = 'Last lap', extraLap = ' extra lap', red = 'Red', finished = 'Finished', yellowS = 'Yellow · S%d', sess = { [1] = 'Practice', [2] = 'Qualifying', [3] = 'Race' },
     raceN = 'Race %d', lap = 'lap %d', sessEnd = 'End of %s', next = 'Next: %s', laps = '%d L',
+    callIn = 'inlap', callOut = 'outlap', pitClosed = 'Pit closed', opensIn = 'Opens in ', lastI = 'LL', bestI = 'BL',
     cars = '%d cars',
     thTimes = 'Times', thFight = 'Battle', thClass = 'Class', lastLap = 'Last lap', bestLap = 'Best lap', ahead = 'Ahead', behind = 'Behind', classK = 'Class',
     classPos = 'Class position', narrator = 'Narrator', commentator = 'Commentator',
@@ -2494,6 +2495,9 @@ do
         if m then sec[m .. ':' .. q] = { ms = tonumber(ms), slot = tonumber(slot), driver = drv, wet = wet == '1' } end
       end
       D.sec = sec
+      local rep = {}
+      for slot in (tostring(res.body or ''):match('REP|([^\r\n]*)') or ''):gmatch('%d+') do rep[tonumber(slot)] = true end
+      D.rep = rep
     end)
   end
   function B.reportGet(path, params, cb)
@@ -12350,13 +12354,10 @@ local function drawLedLight(c, r, color, lit, s)
   end
 end
 function TMP.chequered(x1, y1, x2, y2, cols, rows, base, square)
-  ui.drawRectFilled(TMP.a:set(px(x1), px(y1)), TMP.b:set(px(x2), px(y2)), base)
   local cw, ch = (x2 - x1) / cols, (y2 - y1) / rows
   for r = 0, rows - 1 do
     for c = 0, cols - 1 do
-      if (r + c) % 2 == 0 then
-        ui.drawRectFilled(TMP.a:set(px(x1 + c * cw), px(y1 + r * ch)), TMP.b:set(px(x1 + (c + 1) * cw), px(y1 + (r + 1) * ch)), square)
-      end
+      ui.drawRectFilled(TMP.a:set(px(x1 + c * cw), px(y1 + r * ch)), TMP.b:set(px(x1 + (c + 1) * cw), px(y1 + (r + 1) * ch)), (r + c) % 2 == 0 and square or base)
     end
   end
 end
@@ -15820,16 +15821,19 @@ float4 main(PS_IN pin) {
     local BOOLS = { pb = true, pt = true, px = true, rs = true, rc = true, oe = true, ot = true, oi = true, sv = true, so = true, org = true }
     local CR_ORDER = { 'hm', 'hps', 'hw', 'vm', 'vps', 'vw', 'rpn', 'rw', 'ipn', 'iw', 'fl', 'fls', 'cl', 'cls', 'fcop', 'tk', 'tks', 'tkop', 'lc', 'lcs', 'lcop', 'gr', 'grs',
       'grm', 'grps', 'grop', 'sg', 'scl', 'st', 'sts', 'sx', 'sxs', 'pm', 'ptw', 'ptws', 'pbx', 'pbxs', 'allop', 'secop', 'pitop', 'grw', 'im', 'ips', 'qb', 'qbs', 'rh',
-      'pss', 'psc', 'psk', 'psd', 'pis', 'pic', 'pik', 'pid', 'pds', 'pdc', 'pps', 'ppc', 'pf', 'pq', 'pop', 'aa', 'atd', 'ati', 'atp', 'ad', 'of', 'ofs', 'dm' }
+      'pss', 'psc', 'psk', 'psd', 'pis', 'pic', 'pik', 'pid', 'pds', 'pdc', 'pps', 'ppc', 'pf', 'pq', 'pop', 'aa', 'atd', 'ati', 'atp', 'ad', 'of', 'ofs', 'dm',
+      'md', 'io', 'nl', 'dd', 'qbp', 'qbq', 'qbr' }
     local CR_KEYS = { hm = 'move', hps = 'page', hw = 'wait', vm = 'move', vps = 'page', vw = 'wait', rpn = 'pins', rw = 'wait', ipn = 'pins', iw = 'wait', fl = 'bool',
       fls = 'page', cl = 'bool', cls = 'page', fcop = 'op', tk = 'bool', tks = 'page', tkop = 'op', lc = 'bool', lcs = 'page', lcop = 'op', gr = 'bool', grs = 'page',
       grm = 'move', grps = 'page', grop = 'op', sg = 'bool', scl = 'bool', st = 'bool', sts = 'page', sx = 'bool', sxs = 'page', pm = 'bool', ptw = 'bool', ptws = 'page',
-      pbx = 'bool', pbxs = 'page', allop = 'op', secop = 'op', pitop = 'op', grw = 'wait', im = 'move', ips = 'page', qb = 'bool', qbs = 'wait', rh = 'wait',
+      pbx = 'bool', pbxs = 'page', allop = 'op', secop = 'op', pitop = 'op', grw = 'wait', im = 'move', ips = 'page', qb = 'tri', qbs = 'wait', rh = 'wait',
       pss = 'set', psc = 'cam', psk = 'slot', psd = 'dur', pis = 'set', pic = 'cam', pik = 'slot', pid = 'dur', pds = 'set', pdc = 'cam', pps = 'set', ppc = 'cam',
-      pf = 'fps', pq = 'qual', pop = 'op', aa = 'dest', atd = 'bool', ati = 'bool', atp = 'bool', ad = 'page', of = 'bool', ofs = 'wait', dm = 'qual' }
+      pf = 'fps', pq = 'qual', pop = 'op', aa = 'dest', atd = 'bool', ati = 'bool', atp = 'bool', ad = 'page', of = 'bool', ofs = 'wait', dm = 'qual',
+      md = 'one', io = 'bool', nl = 'bool', dd = 'one', qbp = 'bool', qbq = 'bool', qbr = 'bool' }
     local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 75,
       tk = true, tks = 10, tkop = 75, lc = true, lcs = 12, lcop = 75, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 75, sg = true, scl = true, st = true, sts = 5,
-      sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 90, secop = 75, pitop = 75, grw = 5, im = 'ROLL', ips = 8, qb = true, qbs = 0, rh = 5,
+      sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 90, secop = 75, pitop = 75, grw = 5, im = 'ROLL', ips = 8, qb = 1, qbs = 0, rh = 5,
+      md = 0, io = true, nl = true, dd = 0, qbp = false, qbq = true, qbr = false,
       pss = 0, psc = -1, psk = -1, psd = 0, pis = -2, pic = 0, pik = -1, pid = 0, pds = -1, pdc = 3, pps = 0, ppc = -1, pf = 15, pq = 1, pop = 75, aa = 2,
       atd = true, ati = true, atp = true, ad = 8, of = false, ofs = 30, dm = 0 }
     for k, v in pairs(CR_START) do
@@ -15851,6 +15855,8 @@ float4 main(PS_IN pin) {
       if kind == 'fps' then return math.min(math.max(n, 1), 240) end
       if kind == 'qual' then return math.min(math.max(n, 0), 2) end
       if kind == 'dest' then return math.min(math.max(n, 0), 3) end
+      if kind == 'one' then return math.min(math.max(n, 0), 1) end
+      if kind == 'tri' then return v == true and 1 or v == false and 0 or math.min(math.max(n, 0), 2) end
       return math.min(math.max(n, 2), 600)
     end
     local function crText(form)
@@ -16255,6 +16261,7 @@ float4 main(PS_IN pin) {
     local TWELVE = rgbm(0x1f / 255, 0x68 / 255, 0xcf / 255, 1)
     local NOCOLOR = rgbm(0x1f / 255, 0x68 / 255, 0xcf / 255, 0)
     local SEL_TOP, SEL_BOT = rgbm(31 / 255, 104 / 255, 207 / 255, 0.30), rgbm(31 / 255, 104 / 255, 207 / 255, 0.10)
+    local ACCENT = { TWELVE, NOCOLOR, SEL_TOP, SEL_BOT }
     local BAR = rgbm(10 / 255, 12 / 255, 16 / 255, 0.82)
     local BOXBG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.9)
     local LOGOBG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.82)
@@ -16294,17 +16301,22 @@ float4 main(PS_IN pin) {
       Q1:set(x1 + cut, y1) Q2:set(x2, y1) Q3:set(x2 - cut, y2) Q4:set(x1, y2)
       ui.drawQuadFilled(Q1, Q2, Q3, Q4, color)
     end
-    local function flagBox(bx, by, k, fk)
-      local bw, bh = 32 * k, 26 * k
+    local function chk(x1, y1, x2, y2, cols, rows, op, fade, lightEven)
+      STRIP.mult, STRIP_INK.mult = 0.85 * (fade or 1), op * (fade or 1)
+      if lightEven then TMP.chequered(x1, y1, x2, y2, cols, rows, STRIP_INK, STRIP) else TMP.chequered(x1, y1, x2, y2, cols, rows, STRIP, STRIP_INK) end
+    end
+    local function flagBox(bx, by, k, fk, small)
+      local bw, bh = (small and 24 or 32) * k, (small and 20 or 26) * k
+      local fl = (small and 2 or 2.5) * k
       if fk == 'end' then
-        local e = 1.25 * k
-        TMP.chequered(bx + e, by + e, bx + bw - e, by + bh - e, 6, 4, CHK_LIGHT, CHK_DARK)
-        frame(bx, by, bx + bw, by + bh, CHK_LIGHT, 2.5 * k)
+        local e = fl / 2
+        chk(bx + e, by + e, bx + bw - e, by + bh - e, 6, 4, BAR.mult, 1, false)
+        frame(bx, by, bx + bw, by + bh, CHK_LIGHT, fl)
         return
       end
       local fc = fk == 'red' and FLAGC.red or (fk == 'yellow' or fk == 'code') and FLAGC.yellow or fk == 'white' and FLAGC.white or FLAGC.green
       rect(bx, by, bx + bw, by + bh, fk == 'code' and FLAGC.yellow or BOXBG)
-      frame(bx, by, bx + bw, by + bh, fc, 2.5 * k)
+      frame(bx, by, bx + bw, by + bh, fc, fl)
     end
     local spacedCache = {}
     local function spaced(spec, px)
@@ -16509,19 +16521,26 @@ float4 main(PS_IN pin) {
       end
       return start - i
     end
-    local function posMark(bx1, bx2, by1, by2, k, d, ty)
-      local fs = 17 * k
+    local SKEW = math.tan(math.rad(14))
+    local function posMark(bx1, bx2, by1, by2, k, d, ty, small)
+      local fs = (small and 13 or 17) * k
       local t = (d and d ~= 0) and string.format('%+d', d) or '-'
       local tw = textWidth(t, F.rb, fs)
-      local aw = (d and d ~= 0) and 9 * k or 0
-      local gap = aw > 0 and 4 * k or 0
+      local aw, ah = (d and d ~= 0) and (small and 9.5 or 12) * k or 0, (small and 11 or 14) * k
+      local gap = aw > 0 and (small and 3 or 4) * k or 0
       local x = (bx1 + bx2) / 2 - (aw + gap + tw) / 2
       local cy = (by1 + by2) / 2
       if aw > 0 then
         local up = d > 0
-        local base = up and cy - k or cy + k
-        ui.drawTriangleFilled(TMP.a:set(x + aw / 2, up and cy - 7 * k or cy + 7 * k), TMP.b:set(x + aw, base), POS_V:set(x, base), WHITE)
-        rect(x + aw * 0.3, up and base or cy - 7 * k, x + aw * 0.7, up and cy + 7 * k or base, WHITE)
+        local top, bot = cy - ah / 2, cy + ah / 2
+        local hy = up and (top + ah * 7 / 15) or (bot - ah * 7 / 15)
+        local sx1, sx2 = x + aw * 4 / 13, x + aw * 9 / 13
+        local function px(xx, yy) return xx + (cy - yy) * SKEW end
+        local tip = up and top or bot
+        ui.drawTriangleFilled(TMP.a:set(px(x + aw / 2, tip), tip), TMP.b:set(px(x + aw, hy), hy), POS_V:set(px(x, hy), hy), WHITE)
+        local s1, s2 = up and hy or top, up and bot or hy
+        Q1:set(px(sx1, s1), s1) Q2:set(px(sx2, s1), s1) Q3:set(px(sx2, s2), s2) Q4:set(px(sx1, s2), s2)
+        ui.drawQuadFilled(Q1, Q2, Q3, Q4, WHITE)
       end
       drawText(t, F.rb, fs, TMP.a:set(x + aw + gap, ty), WHITE)
     end
@@ -16605,27 +16624,25 @@ float4 main(PS_IN pin) {
       return BC.opt.time
     end
     local function gapNow() return timePhase() == 'GAP' end
-    local function strip(sx1, xr, sy1, k, ls, op)
+    local function strip(sx1, xr, sy1, k, ls, op, hh)
+      local H = hh or 20 * k
       if BC.stripUrl ~= ls then BC.stripUrl, BC.stripAr = ls, nil end
       if ls and ls ~= '' and not BC.stripAr then
         local isz = ui.imageSize(ls)
         if isz.y > 0 then BC.stripAr = isz.x / isz.y end
       end
-      local sx2 = xr - 20 * k * (BC.stripAr or 640 / 172)
-      local q = 10 * k
+      local sx2 = xr - H * (BC.stripAr or 640 / 172)
+      local q = H / 2
       local cols = math.max(math.floor((sx2 - sx1) / q), 0)
       local qx = sx2 - cols * q
       for c = 0, cols - 1 do
         local fade = math.min(c / math.max(cols * 0.7, 1), 1)
-        STRIP.mult, STRIP_INK.mult = 0.85 * fade, (op or 0.82) * fade
-        for rr = 0, 1 do
-          rect(qx + c * q, sy1 + rr * q, qx + (c + 1) * q, sy1 + (rr + 1) * q, (c + rr) % 2 == 0 and STRIP or STRIP_INK)
-        end
+        chk(qx + c * q, sy1, qx + (c + 1) * q, sy1 + 2 * q, 1, 2, op or 0.82, fade, c % 2 == 0)
       end
       LOGOBG.mult = op or 0.82
-      rect(sx2, sy1, xr, sy1 + 20 * k, LOGOBG)
+      rect(sx2, sy1, xr, sy1 + H, LOGOBG)
       if ls and ls ~= '' then
-        ui.drawImage(ls, TMP.a:set(sx2, sy1), TMP.b:set(xr, sy1 + 20 * k), WHITE, UV0, UV1, ui.ImageFit.Fit)
+        ui.drawImage(ls, TMP.a:set(sx2, sy1), TMP.b:set(xr, sy1 + H), WHITE, UV0, UV1, ui.ImageFit.Fit)
       end
     end
     local function ring(rx, ry, k, tyre)
@@ -16641,6 +16658,7 @@ float4 main(PS_IN pin) {
     BC.ROLL = ROLL
     BC.SCALE = 0.87
     local BOX_TINT, BOX_SOFT, RES_PIN = rgbm(1, 1, 1, 0.04), rgbm(31 / 255, 104 / 255, 207 / 255, 0.30), rgbm(1, 1, 1, 0.22)
+    ACCENT[#ACCENT + 1] = BOX_SOFT
     CR.va, CR.vb = vec2(0, 0), vec2(0, 0)
     CR.barMove, CR.barStarts = {}, {}
     CR.fadeNow = 1
@@ -16785,18 +16803,23 @@ float4 main(PS_IN pin) {
       end
       if r.c.isInPitlane then
         if st.q then st.q, st.t0, st.done, st.prev = nil, nil, {}, nil end
-      elseif st.q ~= q then
-        if st.q and q == st.q % nS + 1 then
-          if st.t0 then
-            st.done[st.q] = secMark(Q, key, st.q, now - st.t0)
-            st.at = state.ui.clock
+        st.pl, st.out, st.lap0 = true, nil, nil
+      else
+        if st.pl then st.pl, st.out = nil, true end
+        if st.q ~= q then
+          if st.q and q == st.q % nS + 1 then
+            if st.t0 then
+              st.done[st.q] = secMark(Q, key, st.q, now - st.t0)
+              st.at = state.ui.clock
+            end
+            if q == 1 then st.prev, st.done = st.done, {} elseif q == 2 then st.prev = nil end
+            if q == 1 then st.out, st.lap0 = nil, now end
+            st.t0 = now
+          else
+            st.t0, st.done, st.prev, st.lap0 = nil, {}, nil, nil
           end
-          if q == 1 then st.prev, st.done = st.done, {} elseif q == 2 then st.prev = nil end
-          st.t0 = now
-        else
-          st.t0, st.done, st.prev = nil, {}, nil
+          st.q = q
         end
-        st.q = q
       end
       st.sp = r.sp
     end
@@ -16810,27 +16833,51 @@ float4 main(PS_IN pin) {
         end
       end
     end
-    function CR.qualiBars(x, cy, k, idx)
+    function CR.secOn()
+      local q = tonumber(BC.opt.qb) or 1
+      if q ~= 2 then return q == 1 end
+      local t = sim.raceSessionType
+      if t == ac.SessionType.Practice then return BC.opt.qbp == true end
+      if t == ac.SessionType.Qualify then return BC.opt.qbq == true end
+      if t == ac.SessionType.Race then return BC.opt.qbr == true end
+      return false
+    end
+    function CR.qualiW(k, small)
+      local nS = #Lap.readSplits() + 1
+      return small and (8 * k + nS * 8 * k + (nS - 1) * 2 * k) or (10 * k + nS * 13 * k + (nS - 1) * 2 * k)
+    end
+    function CR.qualiBars(x, cy, k, idx, small)
       local st = CR.q.cars[idx]
-      if not BC.opt.qb or not st or CR.q.sid ~= Session.id then return 0 end
-      if (BC.opt.qbs or 0) > 0 and state.ui.clock - (st.at or -1e9) > BC.opt.qbs then return 0 end
+      if not CR.qualiShown(idx) then return 0 end
       local sp = Lap.readSplits()
       local nS = #sp + 1
-      local bw = 10 * k + nS * 13 * k + (nS - 1) * 2 * k
-      rect(x, cy - 10 * k, x + bw, cy + 10 * k, BOXBG)
+      local bw = CR.qualiW(k, small)
+      local hh, sw, sh, pad = (small and 7 or 10) * k, (small and 8 or 13) * k, (small and 2 or 3) * k, (small and 4 or 5) * k
+      rect(x, cy - hh, x + bw, cy + hh, BOXBG)
       for q = 1, nS do
-        local bx = x + 5 * k + (q - 1) * 15 * k
-        rect(bx, cy - 3 * k, bx + 13 * k, cy + 3 * k, CR.qOff)
+        local bx = x + pad + (q - 1) * (sw + 2 * k)
+        rect(bx, cy - sh, bx + sw, cy + sh, CR.qOff)
         local c = st.done[q] or (st.prev and q ~= st.q and st.prev[q])
         if c then
-          rect(bx, cy - 3 * k, bx + 13 * k, cy + 3 * k, c == 'p' and PURPLE or c == 'g' and FLAGC.green or c == 'e' and YELLOW or CR.qOrange)
+          rect(bx, cy - sh, bx + sw, cy + sh, c == 'p' and PURPLE or c == 'g' and FLAGC.green or c == 'e' and YELLOW or CR.qOrange)
         elseif st.q == q and st.t0 and st.sp then
           local a, b = sp[q - 1] or 0, sp[q] or 1
           local f = math.min(math.max((st.sp - a) / math.max(b - a, 1e-6), 0), 1)
-          rect(bx, cy - 3 * k, bx + 13 * k * f, cy + 3 * k, PAPER)
+          rect(bx, cy - sh, bx + sw * f, cy + sh, PAPER)
         end
       end
       return bw
+    end
+    function CR.pitCall(r)
+      if not BC.opt.io or r.absent or not r.connected then return nil end
+      if r.inPit then
+        local ps = RaceTable.passes and RaceTable.passes[r.index]
+        if not ps or not ps.parked then return 'in' end
+        local c = ac.getCar(r.index)
+        return c and not CarRead.parked(c) and 'out' or nil
+      end
+      local st = CR.q.cars[r.index]
+      return st and st.out and CR.q.sid == Session.id and 'out' or nil
     end
     function CR.swapIcon(x, y, size, color)
       local q = size / 24
@@ -16919,6 +16966,109 @@ float4 main(PS_IN pin) {
       drawText(p.code, F.rb, 13 * k, TMP.a:set(x + 6 * k, y1 + 3 * k), p.kind == 'y' and SEAL_Y or WHITE)
       return sw
     end
+    function CR.repOf(idx)
+      local c = ac.getCar(idx)
+      local rep = RecordSync.base.dirPen.rep
+      return c ~= nil and rep ~= nil and rep[c.sessionID] == true
+    end
+    local MB_ORANGE = rgbm(1, 0x7a / 255, 0, 1)
+    function CR.mbW(k, small)
+      if small then return math.max(16 * k, math.max(textWidth('DT', F.rb, 10 * k), textWidth('SG', F.rb, 10 * k), textWidth('DQ', F.rb, 10 * k)) + 6 * k) end
+      return textWidth('DT', F.rb, 13 * k) + 12 * k
+    end
+    function CR.mbSeal(x, cy, k, small)
+      local sw, hh = CR.mbW(k, small), (small and 7 or 10) * k
+      rect(x, cy - hh, x + sw, cy + hh, SEAL_K)
+      ui.drawCircleFilled(TMP.a:set(x + sw / 2, cy), (small and 4 or 5.5) * k, MB_ORANGE, 20)
+      return sw
+    end
+    local function code2(p) return p.kind == 'y' and 'DT' or p.kind == 'r' and 'SG' or 'DQ' end
+    function CR.seal2W(p, k) return math.max(16 * k, textWidth(code2(p), F.rb, 10 * k) + 6 * k) end
+    function CR.seal2(x, cy, k, p)
+      local c, sw = code2(p), CR.seal2W(p, k)
+      local y1, y2 = cy - 7 * k, cy + 7 * k
+      if p.kind == 'y' then
+        rect(x, y1, x + sw, y2, BOXBG)
+        frame(x, y1, x + sw, y2, SEAL_Y, k)
+      else
+        rect(x, y1, x + sw, y2, p.kind == 'r' and SEAL_R or SEAL_K)
+      end
+      drawText(c, F.rb, 10 * k, TMP.a:set(x + sw / 2 - textWidth(c, F.rb, 10 * k) / 2, y1 + 1.5 * k), p.kind == 'y' and SEAL_Y or WHITE)
+      return sw
+    end
+    function CR.pit2(x, cy, k, r, measure)
+      local s = r.inPit and 'P' or (r.stops or 0) > 0 and ('P' .. tostring(r.stops)) or nil
+      local c = ac.getCar(r.index)
+      local swaps = c and (RecordSync.base.dirPen.pit[c.sessionID] or {}).swaps or 0
+      local y1, y2, w = cy - 7 * k, cy + 7 * k, 0
+      if s then
+        local sw = math.max(16 * k, textWidth(s, F.rb, 10 * k) + 6 * k)
+        if not measure then
+          if r.inPit then rect(x, y1, x + sw, y2, PAPER) else rect(x, y1, x + sw, y2, BOXBG) frame(x, y1, x + sw, y2, NUMB, k) end
+          drawText(s, F.rb, 10 * k, TMP.a:set(x + sw / 2 - textWidth(s, F.rb, 10 * k) / 2, y1 + 1.5 * k), r.inPit and LT_INK or DIMW)
+        end
+        w = sw
+      end
+      if swaps > 0 then
+        local n = tostring(swaps)
+        local sx = x + w + (w > 0 and 3 * k or 0)
+        local sw = 3 * k + 10 * k + 2 * k + textWidth(n, F.rb, 10 * k) + 3 * k
+        if not measure then
+          rect(sx, y1, sx + sw, y2, BOXBG)
+          frame(sx, y1, sx + sw, y2, NUMB, k)
+          CR.swapIcon(sx + 2 * k, cy - 5 * k, 10 * k, PAPER)
+          drawText(n, F.rb, 10 * k, TMP.a:set(sx + 15 * k, y1 + 1.5 * k), PAPER)
+        end
+        w = sx + sw - x
+      end
+      return w
+    end
+    function CR.preOpen()
+      return sim.raceSessionType ~= ac.SessionType.Race and isPitClosed()
+    end
+    function CR.opensMs()
+      local closed = (config.pit.closedSeconds[sim.raceSessionType] or 0) * 1000
+      if Session.beforeStart() then return closed + math.max(CarRead.num(sim.timeToSessionStart), -CarRead.num(sim.currentSessionTime), 0) end
+      return math.max(closed - Clock.ms('raw'), 0)
+    end
+    function CR.opensText()
+      local s = math.floor(CR.opensMs() / 1000 + 0.999)
+      if s >= 3600 then return string.format('%d:%02d:%02d', math.floor(s / 3600), math.floor(s / 60) % 60, s % 60) end
+      return string.format('%02d:%02d', math.floor(s / 60), s % 60)
+    end
+    function CR.anyOnTrack()
+      for _, r in ipairs(RaceTable.rows or {}) do
+        if not r.absent and r.connected and not r.inPit then return true end
+      end
+      return false
+    end
+    function CR.hideList()
+      return BC.opt.dd == 1 or CR.preOpen() or (BC.opt.nl == false and not CR.anyOnTrack())
+    end
+    function CR.pitClosedW(k, small)
+      local t = Lang.letters.upper(TEXTS.bc.pitClosed)
+      return small and (12 * k + 13 * k + 6 * k + textWidth(t, F.flag, 12 * k) + 12 * k) or (20 * k + 16 * k + 8 * k + textWidth(t, F.flag, 15 * k) + 20 * k)
+    end
+    function CR.pitClosed(x, cy, k, small)
+      local t = Lang.letters.upper(TEXTS.bc.pitClosed)
+      local mw, mh, fs = (small and 13 or 16) * k, (small and 8 or 10) * k, (small and 12 or 15) * k
+      slanted(x, cy - mh / 2, x + mw, cy + mh / 2, 3 * k, FLAGC.red)
+      drawText(t, F.flag, fs, TMP.a:set(x + mw + (small and 6 or 8) * k, cy - fs * 0.62), PAPER)
+    end
+    function CR.noTime(r)
+      local _, _, ms = Lap.of(r.index)
+      return (ms or 0) == 0 and (r.best or 0) == 0
+    end
+    function CR.callText(call, cx, cy, k, small)
+      local s = call == 'in' and TEXTS.bc.callIn or TEXTS.bc.callOut
+      local fs = (small and 11 or 14) * k
+      drawText(s, F.rb, fs, TMP.a:set(cx - textWidth(s, F.rb, fs) / 2, cy - fs * 0.62), LT_INK)
+    end
+    function CR.qualiShown(idx)
+      local st = CR.q.cars[idx]
+      if not CR.secOn() or not st or CR.q.sid ~= Session.id then return false end
+      return not ((BC.opt.qbs or 0) > 0 and state.ui.clock - (st.at or -1e9) > BC.opt.qbs)
+    end
     function CR.noteNow(q)
       local list = CR.notes[q]
       local n = list[1]
@@ -16957,13 +17107,13 @@ float4 main(PS_IN pin) {
       if n.sm ~= '' then drawText(n.sm, F.saySm, 13 * k, TMP.a:set(x + 16 * k, mid + k), DIMW) end
       ui.popClipRect()
     end
-    function CR.towerSeal(x, y, idx, p, r)
+    function CR.towerSeal(x, y, idx, p, r, small)
       local o = BC.opt
-      if not (o.pb or o.pt or o.pm or o.ptw or o.st or sim.raceSessionType == ac.SessionType.Qualify) then return end
+      if not (o.pb or o.pt or o.pm or o.ptw or o.st or sim.raceSessionType == ac.SessionType.Qualify or CR.secOn()) then return end
       CR.nSeals = CR.nSeals + 1
       local e = CR.seals[CR.nSeals] or {}
       CR.seals[CR.nSeals] = e
-      e.x, e.y, e.idx, e.p, e.r = x, y, idx, p, r
+      e.x, e.y, e.idx, e.p, e.r, e.small = x, y, idx, p, r, small
       e.f, e.lo, e.hi = CR.fadeNow, CR.fadeLo, CR.fadeHi
     end
     function CR.towerSealsDraw(x2, ly1, ly2, k)
@@ -16973,13 +17123,17 @@ float4 main(PS_IN pin) {
         local s = CR.seals[i]
         ui.pushClipRect(CR.va:set(x2, s.lo or ly1), CR.vb:set(x2 + 900 * k, s.hi or ly2), true)
         ui.pushStyleVar(ui.StyleVar.Alpha, s.f)
-        if n and n.idx == s.idx then CR.say(s.x, s.y, 42 * k, k, n, CR.roll(n, secs))
+        if n and n.idx == s.idx then CR.say(s.x, s.y, (s.small and 26 or 42) * k, k, n, CR.roll(n, secs))
         else
-          local mx = s.x
-          local qb = CR.qualiBars(mx, s.y + 21 * k, k, s.idx)
-          if qb > 0 then mx = mx + qb + 6 * k end
-          if s.p then mx = mx + CR.seal(mx, s.y + 21 * k, k, s.p) + 6 * k end
-          if BC.opt.pm and s.r then CR.marks(mx, s.y + 21 * k, k, s.r, true) end
+          local mx, gap = s.x, (s.small and 3 or 6) * k
+          local cy = s.y + (s.small and 13 or 21) * k
+          local qb = CR.qualiBars(mx, cy, k, s.idx, s.small)
+          if qb > 0 then mx = mx + qb + gap end
+          if s.p then mx = mx + (s.small and CR.seal2(mx, cy, k, s.p) or CR.seal(mx, cy, k, s.p)) + gap end
+          if BC.opt.pb and CR.repOf(s.idx) then mx = mx + CR.mbSeal(mx, cy, k, s.small) + gap end
+          if BC.opt.pm and s.r then
+            if s.small then CR.pit2(mx, cy, k, s.r) else CR.marks(mx, cy, k, s.r, true) end
+          end
         end
         ui.popStyleVar()
         ui.popClipRect()
@@ -17181,7 +17335,7 @@ float4 main(PS_IN pin) {
       drawText(cq, F.chq, 15 * k, TMP.a:set(cx, y1 + 24 * k), PAPER)
       cx = cx - 12 * k - 44 * k
       local e = 0.75 * k
-      TMP.chequered(cx + e, y1 + 16 * k + e, cx + 44 * k - e, y1 + 46 * k - e, 6, 4, LT_INK, PAPER)
+      chk(cx + e, y1 + 16 * k + e, cx + 44 * k - e, y1 + 46 * k - e, 6, 4, RES_BG.mult, 1, true)
       frame(cx, y1 + 16 * k, cx + 44 * k, y1 + 46 * k, PAPER, 1.5 * k)
       local y = y1 + headH
       if multi then
@@ -17868,7 +18022,7 @@ float4 main(PS_IN pin) {
         local m = flip and 5 - c or c
         local cy = y - 2.5 * k * math.sin((m + 0.5) / 6 * 2 * math.pi)
         local cx = x + c * q
-        for r = 0, 3 do rect(cx, cy + r * q, cx + q, cy + (r + 1) * q, (m + r) % 2 == 0 and CHK_LIGHT or CHK_DARK) end
+        chk(cx, cy, cx + q, cy + 4 * q, 1, 4, SN_BG.mult, 1, m % 2 == 0)
         rect(cx, cy - 0.5 * k, cx + q, cy + 0.5 * k, PAPER)
         rect(cx, cy + 4 * q - 0.5 * k, cx + q, cy + 4 * q + 0.5 * k, PAPER)
         if c == 0 or c == 5 then
@@ -18038,8 +18192,11 @@ float4 main(PS_IN pin) {
       local cls = multi and r.class
       local pen = BC.opt.pb and CR.penOf(r.index) or nil
       local penW = (pen and not tw) and (CR.sealW(pen, k) + 9 * k) or 0
+      local rep = BC.opt.pb and CR.repOf(r.index)
+      local repW = (rep and not tw) and (CR.mbW(k) + 9 * k) or 0
+      local qbW = (not tw and CR.qualiShown(r.index)) and (CR.qualiW(k) + 9 * k) or 0
       local markW = (BC.opt.pm and not tw) and (CR.marksW(k) + G) or 0
-      local W = tw or (14 * k + pw + G + nw + G + namew + (teamw > 0 and (G + teamw) or 0) + markW + G + 20 * k + G + ltw + (multi and 4.4 * k or 0) + 16 * k + penW)
+      local W = tw or (14 * k + pw + G + nw + G + namew + (teamw > 0 and (G + teamw) or 0) + markW + G + 20 * k + G + ltw + (multi and 4.4 * k or 0) + 16 * k + qbW + penW + repW)
       if measure then return x + W end
       local y2 = y1 + (tw and 42 or 44) * k
       if sel then
@@ -18098,14 +18255,26 @@ float4 main(PS_IN pin) {
       local d = gain and gained(r, list, i) or nil
       slanted(bx1, by1, bx2, by2, 6 * k, gain and (d and d > 0 and GREEN or d and d < 0 and RED or POS_EQ) or sel and WHITE
         or ((phaseGap and not ended) and MIST_GAP or MIST))
+      local call = not gain and not ended and tt == '-' and CR.noTime(r) and CR.pitCall(r)
       if gain then
         posMark(bx1, bx2, by1, by2, k, d, by1 + (tw and 2 or 3) * k)
+      elseif call then
+        CR.callText(call, (bx1 + bx2) / 2, (by1 + by2) / 2, k, false)
       else
         local ttw = textWidth(tt, F.rb, 17 * k)
         drawText(tt, F.rb, 17 * k, TMP.a:set((bx1 + bx2) / 2 - ttw / 2, by1 + (tw and 2 or 3) * k), bad and RED or LT_INK)
       end
       if r.index == BC.fastIdx then fastBadge(bx2 - 2 * k, by1 + k, k) end
-      if pen and not tw then CR.seal(bx2 + (cls and 3.72 * k or 0) + 9 * k, y1 + 22 * k, k, pen) end
+      local sx = bx2 + (cls and 3.72 * k or 0) + 9 * k
+      if qbW > 0 then
+        CR.qualiBars(sx, y1 + 22 * k, k, r.index)
+        sx = sx + qbW
+      end
+      if pen and not tw then
+        CR.seal(sx, y1 + 22 * k, k, pen)
+        sx = sx + penW
+      end
+      if rep and not tw then CR.mbSeal(sx, y1 + 22 * k, k) end
       if tw then CR.towerSeal(x + W + 6 * k, y1, r.index, pen, r) end
       if tw then rect(x, y1, x + W, y1 + k, HAIR) else vline(x + W, y1, y2, HAIR, k) end
       return x + W
@@ -18113,9 +18282,11 @@ float4 main(PS_IN pin) {
     local towerParts, towerMove = {}, {}
     local PIN_LINE = rgbm(1, 1, 1, 0.22)
     local FIX_LINE = rgbm(31 / 255, 104 / 255, 207 / 255, 0.30)
+    ACCENT[#ACCENT + 1] = FIX_LINE
     local SEG_TINT, SEG_CLEAR = rgbm(0, 0, 0, 0), rgbm(0, 0, 0, 0)
-    local function towerList(x1, x2, ly1, ly2, k, rows, multi, phaseGap, ended, byClass, key, parts)
-      local rh = 42 * k
+    local function towerList(x1, x2, ly1, ly2, k, rows, multi, phaseGap, ended, byClass, key, parts, it, rhU)
+      local item = it or item
+      local rh = (rhU or 42) * k
       local pins = math.min(BC.opt.pins or 3, #rows)
       local y = ly1
       for n = 1, pins do
@@ -18180,29 +18351,44 @@ float4 main(PS_IN pin) {
     end
     local function towerDraw(h, k, id)
       local x1, x2, ty1, ty2 = 44 * k, 416 * k, 104 * k, h - 60 * k
+      local fk, ft = flagNow()
+      local onlyBox = BC.opt.flag == 'AUTO'
+      local hide, pre = CR.hideList(), CR.preOpen()
+      if hide then ty2 = ty1 + 56 * k + (pre and 32 * k or 0) + (onlyBox and 0 or 42 * k) + 20 * k end
       rect(x1, ty1, x2, ty2, BAR)
       rect(x1, ty1, x2, ty1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 340 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
       local kText, el, tot, note, ended = sessionTexts()
-      local fk, ft = flagNow()
-      local onlyBox = BC.opt.flag == 'AUTO'
       ui.pushClipRect(TMP.a:set(x1, ty1), TMP.b:set(x2 - (onlyBox and 64 or 22) * k, ty1 + 56 * k))
       drawText(kText, F.sessK, 12 * k, TMP.a:set(x1 + 22 * k, ty1 + 12 * k), DIMW)
       if note then
         drawText(note, F.notice, 17 * k, TMP.a:set(x1 + 22 * k, ty1 + 26 * k), PAPER)
+      elseif pre then
+        local ow = Lang.letters.upper(TEXTS.bc.opensIn)
+        drawText(ow, F.sessT, 20 * k, TMP.a:set(x1 + 22 * k, ty1 + 25 * k), DIMW)
+        drawText(CR.opensText(), F.sessV, 20 * k, TMP.a:set(x1 + 22 * k + textWidth(ow, F.sessT, 20 * k), ty1 + 25 * k), PAPER)
       else
         drawText(el, F.sessV, 20 * k, TMP.a:set(x1 + 22 * k, ty1 + 25 * k), PAPER)
         drawText(tot, F.sessT, 20 * k, TMP.a:set(x1 + 22 * k + textWidth((el:gsub('%d', '0')), F.sessV, 20 * k), ty1 + 25 * k), DIMW)
       end
       ui.popClipRect()
       local y = ty1 + 56 * k
-      if onlyBox then
-        flagBox(x2 - 54 * k, ty1 + 15 * k, k, fk)
-      else
+      if onlyBox then flagBox(x2 - 54 * k, ty1 + 15 * k, k, fk) end
+      if pre then
+        rect(x1, y, x2, y + k, HAIR)
+        CR.pitClosed(x1 + 22 * k, y + 16 * k, k)
+        y = y + 32 * k
+      end
+      if not onlyBox then
         rect(x1, y, x2, y + k, HAIR)
         flagBox(x1 + 22 * k, y + 8 * k, k, fk)
         drawText(Lang.letters.upper(ft), F.flag, 15 * k, TMP.a:set(x1 + 64 * k, y + 11 * k), PAPER)
         y = y + 42 * k
+      end
+      if hide then
+        rect(x1, y, x2, y + k, HAIR)
+        strip(x1, x2, y, k, id.logoStrip, BAR.mult)
+        return
       end
       local seg = BC.opt.tower == 'SEG' and BC.opt.place == 'ALL'
       local _, cyc = placeNow()
@@ -18264,6 +18450,7 @@ float4 main(PS_IN pin) {
     local DOT_OFF = rgbm(1, 1, 1, 0.25)
     local LENS_BG = rgbm(31 / 255, 104 / 255, 207 / 255, 0.22)
     local ID_END = rgbm(31 / 255, 104 / 255, 207 / 255, 0.08)
+    ACCENT[#ACCENT + 1], ACCENT[#ACCENT + 2] = LENS_BG, ID_END
     local WHITE70, WHITE0 = rgbm(1, 1, 1, 0.7), rgbm(1, 1, 1, 0)
     local function lens(cx, cy, k)
       ui.drawCircle(TMP.a:set(cx, cy), 9 * k, PAPER, 32, 2 * k)
@@ -18377,17 +18564,17 @@ float4 main(PS_IN pin) {
       cardMeasure(k, multi)
       local n = cardData(r, multi)
       local on = pageNow(n)
-      local y2 = h - 66 * k
+      local y2 = h - 64 * k
       local y1 = y2 - 44 * k
       local nbw = math.max(46 * k, textWidth('#000', F.rb, 13 * k) + 12 * k)
-      local W = 62 * k + 16 * k + 26 * k + 9 * k + nbw + 9 * k + CW.name + 9 * k + 20 * k + 16 * k + 18 * k + CW.pages + 18 * k + 54 * k
+      local W = 16 * k + 26 * k + 9 * k + nbw + 9 * k + CW.name + 9 * k + 20 * k + 16 * k + 18 * k + CW.pages + 18 * k + 54 * k
+      local xv = 16 * k + 35 * k + nbw + 9 * k + CW.name + 9 * k + 36 * k
       rect(0, y1, W, y2, BAR)
       rect(0, y1, W, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(0, y1 - k), TMP.b:set(340 * k, y1 + k), WHITE70, WHITE0, WHITE0, WHITE70)
-      ui.drawRectFilledMultiColor(TMP.a:set(0, y1 + k), TMP.b:set(62 * k, y2), SEL_TOP, SEL_BOT, SEL_BOT, SEL_TOP)
-      rect(0, y1 + k, 62 * k, y1 + 3 * k, TWELVE)
-      lens(31 * k, y1 + 23.5 * k, k)
-      local x = 78 * k
+      ui.drawRectFilledMultiColor(TMP.a:set(0, y1 + k), TMP.b:set(xv, y2), SEL_TOP, SEL_BOT, SEL_BOT, SEL_TOP)
+      rect(0, y1 + k, xv, y1 + 3 * k, TWELVE)
+      local x = 16 * k
       local p = tostring(r.pos or '')
       drawText(p, F.rb, 22 * k, TMP.a:set(x + 26 * k - textWidth(p, F.rb, 22 * k), y1 + 9 * k), PAPER)
       x = x + 35 * k
@@ -18426,7 +18613,7 @@ float4 main(PS_IN pin) {
       if not r then return end
       local n = cardData(r, multi)
       local on = pageNow(n)
-      local x1, y1 = 424 * k, 104 * k
+      local x1, y1 = 416 * k, 104 * k
       local x2 = x1 + 372 * k
       local iy1, iy2 = y1 + k, y1 + 57 * k
       local ty2 = iy2 + k + 49 * k
@@ -18435,10 +18622,7 @@ float4 main(PS_IN pin) {
       ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x2, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, iy1), TMP.b:set(x2, iy2), SEL_TOP, ID_END, ID_END, SEL_TOP)
       rect(x1, iy1, x1 + 3 * k, iy2, TWELVE)
-      rect(x1 + 3 * k, iy1, x1 + 58 * k, iy2, LENS_BG)
-      rect(x1 + 58 * k, iy1, x1 + 59 * k, iy2, HAIR)
-      lens(x1 + 30.5 * k, iy1 + 28 * k, k)
-      local x = x1 + 69 * k
+      local x = x1 + 16 * k
       local p = tostring(r.pos or '')
       drawText(p, F.rb, 26 * k, TMP.a:set(x + 34 * k - textWidth(p, F.rb, 26 * k), iy1 + 13 * k), PAPER)
       x = x + 44 * k
@@ -18521,11 +18705,23 @@ float4 main(PS_IN pin) {
       end
       if cn then voiceBox(x1, x2, y - 36 * k, k, ln, fw, cn, 'n', now) end
     end
+    local accentKey = false
+    function CR.accent()
+      local key = config.bcIdentityText or ''
+      if key == accentKey then return end
+      accentKey = key
+      local a = identity().accent
+      local r, g, b = tostring(type(a) == 'table' and a.color or ''):match('^#?(%x%x)(%x%x)(%x%x)$')
+      local cr, cg, cb = 0x1f / 255, 0x68 / 255, 0xcf / 255
+      if r then cr, cg, cb = tonumber(r, 16) / 255, tonumber(g, 16) / 255, tonumber(b, 16) / 255 end
+      for _, c in ipairs(ACCENT) do c.r, c.g, c.b = cr, cg, cb end
+    end
     local drawCredits
     function BC.draw(w, h)
       local k = h / 1080 * BC.SCALE
       CR.k = k
       fonts(k)
+      CR.accent()
       RecordSync.base.dirPenAsk()
       CR.pitScan()
       CR.secScan()
@@ -18540,104 +18736,8 @@ float4 main(PS_IN pin) {
       CR.sname(w, h, k, id)
       CR.gridDraw(w, h, k, id)
     end
-    drawCredits = function(w, h, onlyLogos)
-      local k = h / 1080 * BC.SCALE
-      local id = identity()
-      local T = TEXTS.bc
-      if BC.opt.logos ~= 'NONE' then
-        local ev = id.logoEvent
-        if BC.evUrl ~= ev then BC.evUrl, BC.evAr = ev, nil end
-        if ev and ev ~= '' and not BC.evAr and ui.isImageReady(ev) then
-          local isz = ui.imageSize(ev)
-          if isz.y > 0 then BC.evAr = isz.x / isz.y end
-        end
-        if ev and ev ~= '' and BC.evAr then
-          LOGO_EV.mult = (tonumber(id.opEvent) or 34) / 100
-          ui.drawImage(ev, TMP.a:set(w - 194 * k, 36 * k), TMP.b:set(w - 44 * k, 36 * k + 150 * k / BC.evAr), LOGO_EV, UV0, UV1, ui.ImageFit.Fit)
-        end
-        if BC.opt.logos == 'BOTH' and id.logoChannel and id.logoChannel ~= '' then
-          LOGO_CH.mult = (tonumber(id.opChannel) or 80) / 100
-          ui.drawImage(id.logoChannel, TMP.a:set(44 * k, 36 * k), TMP.b:set(214 * k, 82 * k), LOGO_CH, UV0, UV1, ui.ImageFit.Fit)
-        end
-      end
-      BAR.mult = opOf(BC.opt.op, 75)
-      BOXBG.mult, SAY_BG.mult = 0.9 * opOf(100, 100), 0.96 * opOf(100, 100)
-      if onlyLogos then BC.barHid = true return end
-      if not BC.opt.bar then BC.barHid = true
-      elseif BC.barHid or not BC.altFrom then
-        BC.barHid, CR.barMove, towerMove = nil, {}, {}
-        BC.altFrom = state.ui.clock + (tonumber(BC.opt.form == 'V' and BC.opt.vw or BC.opt.hw) or 0)
-      end
-      CR.pipDraw(w, h, k)
-      if not BC.opt.bar then
-        voices(w, h, k, BC.opt.form == 'V')
-        return
-      end
-      if BC.opt.form == 'V' then
-        towerDraw(h, k, id)
-        cardV(k, #(BC.classKeys or {}) > 1)
-        voices(w, h, k, true)
-        return
-      end
-      local y2 = h - 20 * k
-      local y1 = y2 - 44 * k
-      rect(0, y1, w, y2, BAR)
-      rect(0, y1, w, y1 + k, HAIR)
-      ui.drawRectFilledMultiColor(TMP.a:set(0, y1 - k), TMP.b:set(340 * k, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
-      local kText, el, tot, note, ended = sessionTexts()
-      local sw = 250 * k - textWidth('00', F.sessV, 20 * k)
-      ui.pushClipRect(TMP.a:set(0, y1), TMP.b:set(sw - 6 * k, y2))
-      drawText(kText, F.sessK, 12 * k, TMP.a:set(26 * k, y1 + 4 * k), DIMW)
-      if note then
-        drawText(note, F.notice, 17 * k, TMP.a:set(26 * k, y1 + 18 * k), PAPER)
-      else
-        drawText(el, F.sessV, 20 * k, TMP.a:set(26 * k, y1 + 17 * k), PAPER)
-        drawText(tot, F.sessT, 20 * k, TMP.a:set(26 * k + textWidth((el:gsub('%d', '0')), F.sessV, 20 * k), y1 + 17 * k), DIMW)
-      end
-      ui.popClipRect()
-      local x = sw
-      vline(x, y1, y2, HAIR, k)
-      local fk, ft = flagNow()
-      ft = Lang.letters.upper(ft)
-      local bw = 32 * k
-      local bx = x + 46 * k - bw
-      flagBox(bx, y1 + 9 * k, k, fk)
-      local onlyBox = BC.opt.flag == 'AUTO'
-      if not onlyBox then drawText(ft, F.flag, 15 * k, TMP.a:set(bx + bw + 10 * k, y1 + 12 * k), PAPER) end
-      local fw = 0
-      for _, s in ipairs({ T.green, T.red, T.finished, string.format(T.yellowS, 0), 'CODE-80', 'VSC', 'SC' }) do fw = math.max(fw, textWidth(Lang.letters.upper(s), F.flag, 15 * k)) end
-      x = onlyBox and (bx + bw + 20 * k) or (bx + bw + 10 * k + fw + textWidth('0', F.flag, 15 * k) + 20 * k)
-      local _, cyc = placeNow()
-      local list, multi = creditRows(cyc and towerParts or nil)
-      local legend = (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '')
-      if legend then
-        local lw, cw2, tw2 = 0, 0, 0
-        if multi then
-          for _, key in ipairs(BC.classKeys) do cw2 = cw2 + legendItem(0, 0, k, false, key, nil, true) + 12 * k end
-        end
-        for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
-          if tname ~= '' then tw2 = tw2 + legendItem(0, 0, k, true, tname, nil, true) + 12 * k end
-        end
-        lw = 16 * k + math.max(cw2, tw2) - 12 * k + 16 * k + textWidth('0', F.legend, 13 * k)
-        local x0 = x
-        vline(x, y1, y2, HAIR, k)
-        x = x + 16 * k
-        local place = placeNow()
-        if BC.opt.legend == 'CLASS' then
-          for _, key in ipairs(BC.classKeys) do x = x + legendItem(x, y1 + 13 * k, k, false, key, place) + 12 * k end
-        else
-          for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
-            if tname ~= '' then x = x + legendItem(x, y1 + 13 * k, k, true, tname) + 12 * k end
-          end
-        end
-        x = x0 + lw
-      end
-      ui.drawLine(TMP.a:set(x + 3.1 * k, y2), TMP.b:set(x + 14.9 * k, y1), HAIR, k)
-      x = x + 18 * k
-      local phaseGap = gapNow()
-      local fixed, fixedL, fixedK, fixedB = fixedOf(list, cyc and towerParts or nil)
-      columns(list, fixed, k)
-      if fixed then x = item(x, y1, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, nil, nil, fixedB) end
+    local function crawl(x, y1, y2, w, k, list, multi, phaseGap, ended, cyc, it)
+      local item = it
       if #list > 0 and x < w then
         local width, cycW = 0, 0
         for n, r in ipairs(list) do
@@ -18706,6 +18806,610 @@ float4 main(PS_IN pin) {
         end
         ui.popClipRect()
       end
+    end
+    do
+      local RS = { k = 0, nw = 0, n3w = 0, t3w = 0, mkAll = false, mk = {} }
+      local function first3(t)
+        local out, n = {}, 0
+        for ch in tostring(t or ''):gmatch(UTF8) do
+          if ch:match('%S') then
+            n = n + 1
+            out[n] = ch
+            if n == 3 then break end
+          end
+        end
+        return Lang.letters.upper(table.concat(out))
+      end
+      local function n3Of(r)
+        local w = ''
+        for x in tostring(r.name or ''):gmatch('%S+') do w = x end
+        return first3(w)
+      end
+      local function t3Of(r) return first3(r.team or '') end
+      local function badgeOf(idx)
+        local cid = ac.getCarID(idx)
+        local p = RS.mk[cid]
+        if p == nil then
+          local ok, dir = pcall(ac.getFolder, ac.FolderID.ContentCars)
+          p = ok and dir and (dir .. '/' .. tostring(cid) .. '/ui/badge.png') or false
+          RS.mk[cid] = p
+        end
+        return p or nil
+      end
+      local function badgeReady(b) return b ~= nil and ui.isImageReady(b) and ui.imageSize(b).x > 0 end
+      local function measureR(list, extra, k)
+        if RS.k ~= k then
+          RS.k = k
+          local m = 0
+          for d = 0, 9 do m = math.max(m, textWidth('#' .. d .. d .. d, F.rb, 11 * k)) end
+          RS.nw = m + 8 * k
+        end
+        local nw, tw, all = 0, 0, #list > 0
+        for _, r in ipairs(list) do
+          nw = math.max(nw, textWidth(n3Of(r), F.name, 14 * k))
+          tw = math.max(tw, textWidth(t3Of(r), F.team, 10 * k))
+          if all and not badgeReady(badgeOf(r.index)) then all = false end
+        end
+        if extra then nw = math.max(nw, textWidth(n3Of(extra), F.name, 14 * k)) end
+        RS.n3w, RS.t3w, RS.mkAll = nw, tw, all
+      end
+      local function slotW(k) return RS.nw + 22 * k end
+      local function slotR(x, cy, k, r)
+        local w, nw = slotW(k), RS.nw
+        local nx = RS.mkAll and x or (x + (w - nw) / 2)
+        frame(nx, cy - 7 * k, nx + nw, cy + 7 * k, NUMB, k)
+        local num = '#' .. tostring(r.number or '')
+        drawText(num, F.rb, 11 * k, TMP.a:set(nx + nw / 2 - textWidth(num, F.rb, 11 * k) / 2, cy - 6.5 * k), PAPER)
+        if RS.mkAll then
+          local b = badgeOf(r.index)
+          if b then ui.drawImage(b, TMP.a:set(x + w - 15 * k, cy - 7 * k), TMP.b:set(x + w - k, cy + 7 * k), WHITE, UV0, UV1, ui.ImageFit.Fit) end
+        end
+        return w
+      end
+      local function ringR(rx, ry, k, tyre)
+        local sig, tc = tyreStyle(tyre or '')
+        ui.drawCircle(TMP.a:set(rx, ry), 6 * k, tc, 20, 1.75 * k)
+        local rs = ringSize(sig, 7.7 * k, 8.4 * k)
+        drawText(sig, F.rb, rs, TMP.a:set(rx - textWidth(sig, F.rb, rs) / 2, ry - 7 * k * rs / (11 * k)), PAPER)
+      end
+      local function clock1(ms)
+        ms = math.max(ms or 0, 0)
+        return string.format('%d:%04.1f', math.floor(ms / 60000), (ms % 60000) / 1000)
+      end
+      local function boxR(bx, cy, k, r, list, i, multi, sel, phaseGap, ended, byClass)
+        local x1, x2, y1, y2 = bx + 4 * k, bx + 64 * k, cy - 9 * k, cy + 9 * k
+        if multi and r.class then
+          local _, cc = classStyle(r.class)
+          slanted(bx, y1, bx + 68 * k, y2, 5 * k, cc)
+        end
+        local gain = timePhase() == 'POS' and not ended
+        local d = gain and gained(r, list, i) or nil
+        local st = CR.q.cars[r.index]
+        local run = not gain and not ended and sim.raceSessionType == ac.SessionType.Qualify and st ~= nil and st.lap0 ~= nil and not r.inPit and CR.q.sid == Session.id
+        slanted(x1, y1, x2, y2, 4 * k, gain and (d and d > 0 and GREEN or d and d < 0 and RED or POS_EQ) or (sel or run) and WHITE
+          or ((phaseGap and not ended) and MIST_GAP or MIST))
+        if gain then
+          posMark(x1, x2, y1, y2, k, d, y1 + 1.5 * k, true)
+        elseif run then
+          local t = clock1(serverTimeMs() - st.lap0)
+          drawText(t, F.rb, 13 * k, TMP.a:set((x1 + x2) / 2 - textWidth(t, F.rb, 13 * k) / 2, y1 + 1.5 * k), LT_INK)
+        else
+          local tt, bad = timeText(r, list, i, phaseGap, ended, byClass)
+          local call = not ended and tt == '-' and CR.noTime(r) and CR.pitCall(r)
+          if call then CR.callText(call, (x1 + x2) / 2, cy, k, true)
+          else drawText(tt, F.rb, 13 * k, TMP.a:set((x1 + x2) / 2 - textWidth(tt, F.rb, 13 * k) / 2, y1 + 1.5 * k), bad and RED or LT_INK) end
+        end
+        if r.index == BC.fastIdx then fastBadge(x2 - 1.5 * k, y1 + 0.7 * k, 0.7 * k) end
+      end
+      local function sealsR(x, cy, k, r, pen, rep, measure)
+        local w = 0
+        if pen then w = w + (measure and CR.seal2W(pen, k) or CR.seal2(x + w, cy, k, pen)) + 3 * k end
+        if rep then w = w + (measure and CR.mbW(k, true) or CR.mbSeal(x + w, cy, k, true)) + 3 * k end
+        if BC.opt.pm then
+          local pw = CR.pit2(x + w, cy, k, r, measure)
+          if pw > 0 then w = w + pw + 3 * k end
+        end
+        return w > 0 and w - 3 * k or 0
+      end
+      local function itemR(x, y1, k, r, list, i, multi, sel, phaseGap, ended, measure, tw, byClass)
+        local pos = r.absent and '' or ((byClass == nil and placeNow() ~= 'ALL' or byClass) and (r.classPos or i) or (r.pos or i))
+        local G = 6 * k
+        local pen = BC.opt.pb and CR.penOf(r.index) or nil
+        local rep = BC.opt.pb and CR.repOf(r.index)
+        local p = tostring(pos)
+        if tw then
+          if measure then return x + tw end
+          local y2, cy = y1 + 26 * k, y1 + 13 * k
+          if sel then
+            ui.drawRectFilledMultiColor(TMP.a:set(x, y1), TMP.b:set(x + tw, y2), SEL_TOP, SEL_BOT, SEL_BOT, SEL_TOP)
+            rect(x, y1, x + 3 * k, y2, TWELVE)
+          end
+          local cx = x + 6 * k
+          drawText(p, F.rb, 16 * k, TMP.a:set(cx + 20 * k - textWidth(p, F.rb, 16 * k), cy - 10 * k), PAPER)
+          cx = cx + 20 * k + G
+          cx = cx + slotR(cx, cy, k, r) + G
+          local bx = x + tw - 8 * k - 68 * k
+          local tx = bx - G - 14 * k - G - 26 * k
+          drawText(n3Of(r), F.name, 14 * k, TMP.a:set(cx, cy - 9 * k), PAPER)
+          drawText(t3Of(r), F.team, 10 * k, TMP.a:set(tx, cy - 6.5 * k), DIMW)
+          ringR(bx - G - 7 * k, cy, k, BroadcastAlerts.tyreOf[r.index])
+          boxR(bx, cy, k, r, list, i, multi, sel, phaseGap, ended, byClass)
+          CR.towerSeal(x + tw + 6 * k, y1, r.index, pen, r, true)
+          rect(x, y1, x + tw, y1 + k, HAIR)
+          return x + tw
+        end
+        local qb = CR.qualiShown(r.index)
+        local sealW = sealsR(0, 0, k, r, pen, rep, true)
+        local W = 8 * k + 16 * k + G + slotW(k) + G + RS.n3w + G + RS.t3w + G + 14 * k + G + 68 * k + (qb and (G + CR.qualiW(k, true)) or 0) + (sealW > 0 and (G + sealW) or 0) + 10 * k
+        if measure then return x + W end
+        local y2, cy = y1 + 30 * k, y1 + 15 * k
+        if sel then
+          ui.drawRectFilledMultiColor(TMP.a:set(x, y1), TMP.b:set(x + W, y2), SEL_TOP, SEL_TOP, SEL_BOT, SEL_BOT)
+          rect(x, y1, x + W, y1 + 2 * k, TWELVE)
+        end
+        local cx = x + 8 * k
+        drawText(p, F.rb, 16 * k, TMP.a:set(cx + 16 * k - textWidth(p, F.rb, 16 * k), cy - 10 * k), PAPER)
+        cx = cx + 16 * k + G
+        cx = cx + slotR(cx, cy, k, r) + G
+        drawText(n3Of(r), F.name, 14 * k, TMP.a:set(cx, cy - 9 * k), PAPER)
+        cx = cx + RS.n3w + G
+        drawText(t3Of(r), F.team, 10 * k, TMP.a:set(cx, cy - 6.5 * k), DIMW)
+        cx = cx + RS.t3w + G
+        ringR(cx + 7 * k, cy, k, BroadcastAlerts.tyreOf[r.index])
+        cx = cx + 14 * k + G
+        boxR(cx, cy, k, r, list, i, multi, sel, phaseGap, ended, byClass)
+        cx = cx + 68 * k
+        if qb then
+          CR.qualiBars(cx + G, cy, k, r.index, true)
+          cx = cx + G + CR.qualiW(k, true)
+        end
+        if sealW > 0 then sealsR(cx + G, cy, k, r, pen, rep, false) end
+        vline(x + W, y1, y2, HAIR, k)
+        return x + W
+      end
+      local function legendR(x, cy, k, tyre, name, place, measure)
+        if tyre then
+          local up = Lang.letters.upper(name)
+          local iw = 17 * k + textWidth(up, F.legend, 10 * k)
+          if measure then return iw end
+          ringR(x + 6 * k, cy, k, name)
+          drawText(up, F.legend, 10 * k, TMP.a:set(x + 17 * k, cy - 6.5 * k), PAPER)
+          return iw
+        end
+        local nm, cc = classStyle(name)
+        nm = Lang.letters.upper(nm)
+        local iw = 19 * k + textWidth(nm, F.legend, 10 * k)
+        if measure then return iw end
+        slanted(x, cy - 4 * k, x + 13 * k, cy + 4 * k, 3 * k, cc)
+        drawText(nm, F.legend, 10 * k, TMP.a:set(x + 19 * k, cy - 6.5 * k), (place == nil or place == 'ALL' or place == name) and PAPER or OFFW)
+        return iw
+      end
+      local function sessR(x, y, k, fs, kText, el, tot, note, pre)
+        drawText(kText, F.sessK, 10 * k, TMP.a:set(x, y), DIMW)
+        local vy = y + 12 * k
+        if note then drawText(note, F.notice, fs - 2 * k, TMP.a:set(x, vy), PAPER)
+        elseif pre then
+          local ow = Lang.letters.upper(TEXTS.bc.opensIn)
+          drawText(ow, F.sessT, fs, TMP.a:set(x, vy), DIMW)
+          drawText(CR.opensText(), F.sessV, fs, TMP.a:set(x + textWidth(ow, F.sessT, fs), vy), PAPER)
+        else
+          drawText(el, F.sessV, fs, TMP.a:set(x, vy), PAPER)
+          drawText(tot, F.sessT, fs, TMP.a:set(x + textWidth((el:gsub('%d', '0')), F.sessV, fs), vy), DIMW)
+        end
+      end
+      local function dotsR(x, cy, n, on, k)
+        for i = 1, n do ui.drawCircleFilled(TMP.a:set(x + 2.5 * k + (i - 1) * 8 * k, cy), 2.5 * k, i == on and PAPER or DOT_OFF, 12) end
+      end
+      local function pageR(pg)
+        local T = TEXTS.bc
+        if pg.name == T.thTimes then return T.lastI, pg.v1, T.bestI, pg.v2 end
+        if pg.name == T.thFight then return (tostring(pg.l1 or ''):match('#%S+') or T.ahead), pg.v1, (tostring(pg.l2 or ''):match('#%S+') or T.behind), pg.v2 end
+        return Lang.letters.upper((classStyle(pg.cls))), nil, T.classPos, pg.v2
+      end
+      local function cardHR(h, k, multi)
+        local r = cardRow()
+        if not r then return end
+        local T = TEXTS.bc
+        local n = cardData(r, multi)
+        local on = pageNow(n)
+        local y2 = h - 50 * k
+        local y1, cy = y2 - 30 * k, y2 - 15 * k
+        local G = 6 * k
+        local lt = textWidth('0:00.000', F.rb, 13 * k)
+        local pw = 0
+        for _, s in ipairs({ T.thTimes, T.thFight, T.thClass }) do pw = math.max(pw, textWidth(Lang.letters.upper(s), F.thn, 10 * k)) end
+        local colW = math.max(lt, textWidth(Lang.letters.upper(T.lastLap), F.lab, 9 * k), textWidth(Lang.letters.upper(T.bestLap), F.lab, 9 * k))
+        local xv = 12 * k + 16 * k + G + slotW(k) + G + RS.n3w + G + RS.t3w + G + 14 * k + 12 * k
+        local W = xv + 14 * k + pw + 12 * k + colW + 12 * k + colW + 14 * k + 10 * k + 3 * 8 * k + 10 * k
+        rect(0, y1, W, y2, BAR)
+        rect(0, y1, W, y1 + k, HAIR)
+        ui.drawRectFilledMultiColor(TMP.a:set(0, y1 - k), TMP.b:set(240 * k, y1 + k), WHITE70, WHITE0, WHITE0, WHITE70)
+        ui.drawRectFilledMultiColor(TMP.a:set(0, y1 + k), TMP.b:set(xv, y2), SEL_TOP, SEL_BOT, SEL_BOT, SEL_TOP)
+        rect(0, y1 + k, xv, y1 + 3 * k, TWELVE)
+        local x = 12 * k
+        local p = tostring(r.pos or '')
+        drawText(p, F.rb, 16 * k, TMP.a:set(x + 16 * k - textWidth(p, F.rb, 16 * k), cy - 10 * k), PAPER)
+        x = x + 16 * k + G
+        x = x + slotR(x, cy, k, r) + G
+        drawText(n3Of(r), F.name, 14 * k, TMP.a:set(x, cy - 9 * k), PAPER)
+        x = x + RS.n3w + G
+        drawText(t3Of(r), F.team, 10 * k, TMP.a:set(x, cy - 6.5 * k), DIMW)
+        x = x + RS.t3w + G
+        ringR(x + 7 * k, cy, k, BroadcastAlerts.tyreOf[r.index])
+        vline(xv, y1 + k, y2, HAIR, k)
+        x = xv + 14 * k
+        if n > 0 then
+          local pg = cardPages[on]
+          local nm = Lang.letters.upper(pg.name)
+          drawText(nm, F.thn, 10 * k, TMP.a:set(x, cy - 6.5 * k), SOFT_BLUE)
+          x = x + pw + 12 * k
+          if pg.cls then
+            local cn, cc = classStyle(pg.cls)
+            slanted(x, cy - 4 * k, x + 13 * k, cy + 4 * k, 3 * k, cc)
+            drawText(Lang.letters.upper(cn), F.cls, 12 * k, TMP.a:set(x + 19 * k, cy - 8 * k), PAPER)
+          else
+            drawText(Lang.letters.upper(pg.l1 or ''), F.lab, 9 * k, TMP.a:set(x, y1 + 4 * k), DIMW)
+            drawText(pg.v1 or '-', F.rb, 13 * k, TMP.a:set(x, y1 + 13 * k), pg.bad and RED or PAPER)
+          end
+          x = x + colW + 12 * k
+          drawText(fitText(Lang.letters.upper(pg.l2 or ''), F.lab, 9 * k, colW, '...'), F.lab, 9 * k, TMP.a:set(x, y1 + 4 * k), DIMW)
+          drawText(pg.v2 or '-', F.rb, 13 * k, TMP.a:set(x, y1 + 13 * k), pg.fast and PURPLE or PAPER)
+        end
+        dotsR(xv + 14 * k + pw + 12 * k + colW + 12 * k + colW + 14 * k, cy, n, on, k)
+      end
+      local function cardVR(k, multi, x1, y1, hh)
+        local r = cardRow()
+        if not r then return end
+        local n = cardData(r, multi)
+        local on = pageNow(n)
+        local x2, y2 = x1 + 250 * k, y1 + hh
+        local G = 6 * k
+        rect(x1, y1, x2, y2, BAR)
+        rect(x1, y1, x2, y1 + k, HAIR)
+        ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x2, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
+        ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 + k), TMP.b:set(x2, y2), SEL_TOP, ID_END, ID_END, SEL_TOP)
+        rect(x1, y1 + k, x1 + 3 * k, y2, TWELVE)
+        local c1, c2 = y1 + hh * 0.3, y1 + hh * 0.73
+        local x = x1 + 12 * k
+        local p = tostring(r.pos or '')
+        drawText(p, F.rb, 16 * k, TMP.a:set(x + 16 * k - textWidth(p, F.rb, 16 * k), c1 - 10 * k), PAPER)
+        x = x + 16 * k + G
+        x = x + slotR(x, c1, k, r) + G
+        local n3 = n3Of(r)
+        drawText(n3, F.name, 14 * k, TMP.a:set(x, c1 - 9 * k), PAPER)
+        drawText(t3Of(r), F.team, 10 * k, TMP.a:set(x + textWidth(n3, F.name, 14 * k) + G, c1 - 6.5 * k), DIMW)
+        ringR(x2 - 17 * k, c1, k, BroadcastAlerts.tyreOf[r.index])
+        if n > 0 then
+          local pg = cardPages[on]
+          local l1, v1, l2, v2 = pageR(pg)
+          x = x1 + 12 * k
+          for q = 1, 2 do
+            local l, v = q == 1 and l1 or l2, q == 1 and v1 or v2
+            if l and l ~= '' then
+              drawText(l, F.lab, 10 * k, TMP.a:set(x, c2 - 6 * k), DIMW)
+              x = x + textWidth(l, F.lab, 10 * k) + 4 * k
+            end
+            if v then
+              drawText(v, F.rb, 13 * k, TMP.a:set(x, c2 - 8 * k), q == 2 and pg.fast and PURPLE or q == 1 and pg.bad and RED or PAPER)
+              x = x + textWidth(v, F.rb, 13 * k)
+            end
+            x = x + 14 * k
+          end
+        end
+        dotsR(x2 - 10 * k - (math.max(n, 1) - 1) * 8 * k - 5 * k, c2, n, on, k)
+      end
+      function CR.barR(w, h, k, id)
+        local T = TEXTS.bc
+        local y2 = h - 20 * k
+        local y1, cy = y2 - 30 * k, y2 - 15 * k
+        local hide, pre = CR.hideList(), CR.preOpen()
+        local fk, ft = flagNow()
+        ft = Lang.letters.upper(ft)
+        local onlyBox = BC.opt.flag == 'AUTO'
+        local fw = 0
+        for _, s in ipairs({ T.green, T.red, T.finished, string.format(T.yellowS, 0), 'CODE-80', 'VSC', 'SC' }) do fw = math.max(fw, textWidth(Lang.letters.upper(s), F.flag, 12 * k)) end
+        local sw = 190 * k
+        local fx = sw + (pre and CR.pitClosedW(k, true) or 0)
+        local bx = fx + 12 * k
+        local fEnd = onlyBox and (bx + 24 * k + 12 * k) or (bx + 24 * k + 7 * k + fw + textWidth('0', F.flag, 12 * k) + 12 * k)
+        local xEnd = hide and fEnd or w
+        rect(0, y1, xEnd, y2, BAR)
+        rect(0, y1, xEnd, y1 + k, HAIR)
+        ui.drawRectFilledMultiColor(TMP.a:set(0, y1 - k), TMP.b:set(math.min(240 * k, xEnd), y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
+        local kText, el, tot, note, ended = sessionTexts()
+        ui.pushClipRect(TMP.a:set(0, y1), TMP.b:set(sw - 4 * k, y2))
+        sessR(18 * k, y1 + 2 * k, k, 16 * k, kText, el, tot, note, pre)
+        ui.popClipRect()
+        local x = sw
+        if pre then
+          vline(x, y1, y2, HAIR, k)
+          CR.pitClosed(x + 12 * k, cy, k, true)
+          x = fx
+        end
+        vline(x, y1, y2, HAIR, k)
+        flagBox(bx, y1 + 5 * k, k, fk, true)
+        if not onlyBox then drawText(ft, F.flag, 12 * k, TMP.a:set(bx + 31 * k, cy - 7.5 * k), PAPER) end
+        x = fEnd
+        local multi0 = #(BC.classKeys or {}) > 1
+        if hide then
+          strip(0, xEnd, h - 20 * k, k, id.logoStrip, BAR.mult)
+          local list0 = creditRows(nil)
+          measureR(list0, nil, k)
+          cardHR(h, k, multi0)
+          CR.stack(k, y1)
+          return
+        end
+        local _, cyc = placeNow()
+        local list, multi = creditRows(cyc and towerParts or nil)
+        if (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '') then
+          vline(x, y1, y2, HAIR, k)
+          x = x + 12 * k
+          local place = placeNow()
+          if BC.opt.legend == 'CLASS' then
+            for _, key in ipairs(BC.classKeys) do x = x + legendR(x, cy, k, false, key, place) + 10 * k end
+          else
+            for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
+              if tname ~= '' then x = x + legendR(x, cy, k, true, tname) + 10 * k end
+            end
+          end
+          x = x + 2 * k
+        end
+        ui.drawLine(TMP.a:set(x + 3.1 * k, y2), TMP.b:set(x + 14.9 * k, y1), HAIR, k)
+        x = x + 18 * k
+        local phaseGap = gapNow()
+        local fixed, fixedL, fixedK, fixedB = fixedOf(list, cyc and towerParts or nil)
+        measureR(list, fixed, k)
+        if fixed then x = itemR(x, y1, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, nil, nil, fixedB) end
+        crawl(x, y1, y2, w, k, list, multi, phaseGap, ended, cyc, itemR)
+        strip(w - w * 0.42, w, h - 20 * k, k, id.logoStrip, BAR.mult)
+        cardHR(h, k, multi)
+        CR.stack(k, y1)
+      end
+      function CR.towerR(h, k, id)
+        local x1, x2, ty1 = 44 * k, 294 * k, 104 * k
+        local fk, ft = flagNow()
+        local onlyBox = BC.opt.flag == 'AUTO'
+        local hide, pre = CR.hideList(), CR.preOpen()
+        local seg = BC.opt.tower == 'SEG' and BC.opt.place == 'ALL'
+        local _, cyc = placeNow()
+        local list, multi = creditRows((seg or cyc) and towerParts or nil)
+        local legend = (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '')
+        local sessH = 42 * k
+        local lines, left, right = 1, x1 + 14 * k, x2 - 14 * k
+        if legend and not hide then
+          local lx = left
+          if BC.opt.legend == 'CLASS' then
+            for _, key in ipairs(BC.classKeys) do
+              local iw = legendR(0, 0, k, false, key, nil, true)
+              if lx > left and lx + iw > right then lx, lines = left, lines + 1 end
+              lx = lx + iw + 10 * k
+            end
+          else
+            for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
+              if tname ~= '' then
+                local iw = legendR(0, 0, k, true, tname, nil, true)
+                if lx > left and lx + iw > right then lx, lines = left, lines + 1 end
+                lx = lx + iw + 10 * k
+              end
+            end
+          end
+        end
+        local phaseGap = gapNow()
+        local fixed, fixedL, fixedK, fixedB = fixedOf(list, (seg or cyc) and towerParts or nil)
+        measureR(list, fixed, k)
+        local headH = sessH + (pre and 28 * k or 0) + (onlyBox and 0 or 30 * k)
+        local ty2
+        if hide then ty2 = ty1 + headH + 14 * k
+        else
+          local pins = math.min(BC.opt.pins or 3, #list)
+          local need = headH + (legend and (lines * 16 * k + 6 * k) or 0) + (fixed and 27 * k or 0) + #list * 26 * k + (pins > 0 and 2 * k or 0)
+            + (seg and multi and #BC.classKeys * 18 * k or 0) + 14 * k
+          ty2 = math.min(ty1 + need, h - 60 * k)
+        end
+        rect(x1, ty1, x2, ty2, BAR)
+        rect(x1, ty1, x2, ty1 + k, HAIR)
+        ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 230 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
+        local kText, el, tot, note, ended = sessionTexts()
+        ui.pushClipRect(TMP.a:set(x1, ty1), TMP.b:set(x2 - (onlyBox and 44 or 14) * k, ty1 + sessH))
+        sessR(x1 + 14 * k, ty1 + 8 * k, k, 15 * k, kText, el, tot, note, pre)
+        ui.popClipRect()
+        local y = ty1 + sessH
+        if onlyBox then flagBox(x2 - 38 * k, ty1 + 11 * k, k, fk, true) end
+        if pre then
+          rect(x1, y, x2, y + k, HAIR)
+          CR.pitClosed(x1 + 14 * k, y + 14 * k, k, true)
+          y = y + 28 * k
+        end
+        if not onlyBox then
+          rect(x1, y, x2, y + k, HAIR)
+          flagBox(x1 + 14 * k, y + 5 * k, k, fk, true)
+          drawText(Lang.letters.upper(ft), F.flag, 12 * k, TMP.a:set(x1 + 45 * k, y + 7.5 * k), PAPER)
+          y = y + 30 * k
+        end
+        if hide then
+          rect(x1, y, x2, y + k, HAIR)
+          strip(x1, x2, y, k, id.logoStrip, BAR.mult, 14 * k)
+          cardVR(k, multi, x2, ty1, sessH)
+          return
+        end
+        if legend then
+          rect(x1, y, x2, y + k, HAIR)
+          local lx, ly = left, y + 5 * k + 8 * k
+          local place = placeNow()
+          if BC.opt.legend == 'CLASS' then
+            for _, key in ipairs(BC.classKeys) do
+              if lx > left and lx + legendR(0, 0, k, false, key, nil, true) > right then lx, ly = left, ly + 16 * k end
+              lx = lx + legendR(lx, ly, k, false, key, place) + 10 * k
+            end
+          else
+            for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
+              if tname ~= '' then
+                if lx > left and lx + legendR(0, 0, k, true, tname, nil, true) > right then lx, ly = left, ly + 16 * k end
+                lx = lx + legendR(lx, ly, k, true, tname) + 10 * k
+              end
+            end
+          end
+          y = y + lines * 16 * k + 6 * k
+        end
+        if fixed then
+          itemR(x1, y, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, false, x2 - x1, fixedB)
+          CR.towerSealsDraw(x2, y, y + 26 * k, k)
+          y = y + 26 * k
+          rect(x1, y, x2, y + k, FIX_LINE)
+          y = y + k
+        end
+        local sy = ty2 - 14 * k
+        if seg and multi then
+          local partH = (sy - y) / #BC.classKeys
+          for n, key in ipairs(BC.classKeys) do
+            local py = y + (n - 1) * partH
+            local rows = towerParts[key]
+            local _, cc = classStyle(key)
+            SEG_TINT.r, SEG_TINT.g, SEG_TINT.b, SEG_TINT.mult = cc.r, cc.g, cc.b, 0.34
+            SEG_CLEAR.r, SEG_CLEAR.g, SEG_CLEAR.b = cc.r, cc.g, cc.b
+            rect(x1, py, x2, py + k, HAIR)
+            ui.drawRectFilledMultiColor(TMP.a:set(x1, py + k), TMP.b:set(x1 + (x2 - x1) * 0.7, py + 18 * k), SEG_TINT, SEG_CLEAR, SEG_CLEAR, SEG_TINT)
+            legendR(x1 + 10 * k, py + 9.5 * k, k, false, key, 'ALL')
+            local cars = string.format(TEXTS.bc.cars, #rows)
+            drawText(cars, F.legend, 10 * k, TMP.a:set(x2 - 10 * k - textWidth(cars, F.legend, 10 * k), py + 3 * k), DIMW)
+            towerList(x1, x2, py + 18 * k, py + partH, k, rows, multi, phaseGap, ended, true, key, nil, itemR, 26)
+          end
+        else
+          local gb
+          if cyc then gb = false end
+          towerList(x1, x2, y, sy, k, list, multi, phaseGap, ended, gb, 'ALL', cyc and towerParts or nil, itemR, 26)
+        end
+        rect(x1, sy, x2, sy + k, HAIR)
+        strip(x1, x2, sy, k, id.logoStrip, BAR.mult, 14 * k)
+        cardVR(k, multi, x2, ty1, sessH)
+      end
+    end
+    drawCredits = function(w, h, onlyLogos)
+      local k = h / 1080 * BC.SCALE
+      local id = identity()
+      local T = TEXTS.bc
+      if BC.opt.logos ~= 'NONE' then
+        local ev = id.logoEvent
+        if BC.evUrl ~= ev then BC.evUrl, BC.evAr = ev, nil end
+        if ev and ev ~= '' and not BC.evAr and ui.isImageReady(ev) then
+          local isz = ui.imageSize(ev)
+          if isz.y > 0 then BC.evAr = isz.x / isz.y end
+        end
+        if ev and ev ~= '' and BC.evAr then
+          LOGO_EV.mult = (tonumber(id.opEvent) or 34) / 100
+          ui.drawImage(ev, TMP.a:set(w - 194 * k, 36 * k), TMP.b:set(w - 44 * k, 36 * k + 150 * k / BC.evAr), LOGO_EV, UV0, UV1, ui.ImageFit.Fit)
+        end
+        if BC.opt.logos == 'BOTH' and id.logoChannel and id.logoChannel ~= '' then
+          LOGO_CH.mult = (tonumber(id.opChannel) or 80) / 100
+          ui.drawImage(id.logoChannel, TMP.a:set(44 * k, 36 * k), TMP.b:set(214 * k, 82 * k), LOGO_CH, UV0, UV1, ui.ImageFit.Fit)
+        end
+      end
+      BAR.mult = opOf(BC.opt.op, 75)
+      BOXBG.mult, SAY_BG.mult = 0.9 * opOf(100, 100), 0.96 * opOf(100, 100)
+      if onlyLogos then BC.barHid = true return end
+      if not BC.opt.bar then BC.barHid = true
+      elseif BC.barHid or not BC.altFrom then
+        BC.barHid, CR.barMove, towerMove = nil, {}, {}
+        BC.altFrom = state.ui.clock + (tonumber(BC.opt.form == 'V' and BC.opt.vw or BC.opt.hw) or 0)
+      end
+      CR.pipDraw(w, h, k)
+      if not BC.opt.bar then
+        voices(w, h, k, BC.opt.form == 'V')
+        return
+      end
+      if BC.opt.form == 'V' then
+        if BC.opt.md == 1 then CR.towerR(h, k, id) else
+          towerDraw(h, k, id)
+          cardV(k, #(BC.classKeys or {}) > 1)
+        end
+        voices(w, h, k, true)
+        return
+      end
+      if BC.opt.md == 1 then
+        CR.barR(w, h, k, id)
+        voices(w, h, k, false)
+        return
+      end
+      local y2 = h - 20 * k
+      local y1 = y2 - 44 * k
+      local hide, pre = CR.hideList(), CR.preOpen()
+      local fk, ft = flagNow()
+      ft = Lang.letters.upper(ft)
+      local onlyBox = BC.opt.flag == 'AUTO'
+      local fw = 0
+      for _, s in ipairs({ T.green, T.red, T.finished, string.format(T.yellowS, 0), 'CODE-80', 'VSC', 'SC' }) do fw = math.max(fw, textWidth(Lang.letters.upper(s), F.flag, 15 * k)) end
+      local sw = 250 * k - textWidth('00', F.sessV, 20 * k)
+      local fx = sw + (pre and CR.pitClosedW(k) or 0)
+      local bw = 32 * k
+      local bx = fx + 46 * k - bw
+      local fEnd = onlyBox and (bx + bw + 20 * k) or (bx + bw + 10 * k + fw + textWidth('0', F.flag, 15 * k) + 20 * k)
+      local xEnd = hide and fEnd or w
+      rect(0, y1, xEnd, y2, BAR)
+      rect(0, y1, xEnd, y1 + k, HAIR)
+      ui.drawRectFilledMultiColor(TMP.a:set(0, y1 - k), TMP.b:set(math.min(340 * k, xEnd), y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
+      local kText, el, tot, note, ended = sessionTexts()
+      ui.pushClipRect(TMP.a:set(0, y1), TMP.b:set(sw - 6 * k, y2))
+      drawText(kText, F.sessK, 12 * k, TMP.a:set(26 * k, y1 + 4 * k), DIMW)
+      if note then
+        drawText(note, F.notice, 17 * k, TMP.a:set(26 * k, y1 + 18 * k), PAPER)
+      elseif pre then
+        local ow = Lang.letters.upper(T.opensIn)
+        drawText(ow, F.sessT, 20 * k, TMP.a:set(26 * k, y1 + 17 * k), DIMW)
+        drawText(CR.opensText(), F.sessV, 20 * k, TMP.a:set(26 * k + textWidth(ow, F.sessT, 20 * k), y1 + 17 * k), PAPER)
+      else
+        drawText(el, F.sessV, 20 * k, TMP.a:set(26 * k, y1 + 17 * k), PAPER)
+        drawText(tot, F.sessT, 20 * k, TMP.a:set(26 * k + textWidth((el:gsub('%d', '0')), F.sessV, 20 * k), y1 + 17 * k), DIMW)
+      end
+      ui.popClipRect()
+      local x = sw
+      if pre then
+        vline(x, y1, y2, HAIR, k)
+        CR.pitClosed(x + 20 * k, y1 + 22 * k, k)
+        x = fx
+      end
+      vline(x, y1, y2, HAIR, k)
+      flagBox(bx, y1 + 9 * k, k, fk)
+      if not onlyBox then drawText(ft, F.flag, 15 * k, TMP.a:set(bx + bw + 10 * k, y1 + 12 * k), PAPER) end
+      x = fEnd
+      if hide then
+        strip(0, xEnd, h - 20 * k, k, id.logoStrip, BAR.mult)
+        cardH(h, k, #(BC.classKeys or {}) > 1)
+        voices(w, h, k, false)
+        CR.stack(k, y1)
+        return
+      end
+      local _, cyc = placeNow()
+      local list, multi = creditRows(cyc and towerParts or nil)
+      local legend = (BC.opt.legend == 'CLASS' and multi) or (BC.opt.legend == 'TYRE' and BroadcastAlerts.tyres ~= '')
+      if legend then
+        local lw, cw2, tw2 = 0, 0, 0
+        if multi then
+          for _, key in ipairs(BC.classKeys) do cw2 = cw2 + legendItem(0, 0, k, false, key, nil, true) + 12 * k end
+        end
+        for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
+          if tname ~= '' then tw2 = tw2 + legendItem(0, 0, k, true, tname, nil, true) + 12 * k end
+        end
+        lw = 16 * k + math.max(cw2, tw2) - 12 * k + 16 * k + textWidth('0', F.legend, 13 * k)
+        local x0 = x
+        vline(x, y1, y2, HAIR, k)
+        x = x + 16 * k
+        local place = placeNow()
+        if BC.opt.legend == 'CLASS' then
+          for _, key in ipairs(BC.classKeys) do x = x + legendItem(x, y1 + 13 * k, k, false, key, place) + 12 * k end
+        else
+          for tname in (BroadcastAlerts.tyres .. ','):gmatch('([^,]*),') do
+            if tname ~= '' then x = x + legendItem(x, y1 + 13 * k, k, true, tname) + 12 * k end
+          end
+        end
+        x = x0 + lw
+      end
+      ui.drawLine(TMP.a:set(x + 3.1 * k, y2), TMP.b:set(x + 14.9 * k, y1), HAIR, k)
+      x = x + 18 * k
+      local phaseGap = gapNow()
+      local fixed, fixedL, fixedK, fixedB = fixedOf(list, cyc and towerParts or nil)
+      columns(list, fixed, k)
+      if fixed then x = item(x, y1, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, nil, nil, fixedB) end
+      crawl(x, y1, y2, w, k, list, multi, phaseGap, ended, cyc, item)
       strip(w - w * 0.42, w, h - 20 * k, k, id.logoStrip, BAR.mult)
       cardH(h, k, multi)
       voices(w, h, k, false)
