@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V287 - 2026.11.08'
+local RC_VERSION = 'V288 - 2026.11.08'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -18284,10 +18284,10 @@ float4 main(PS_IN pin) {
     local FIX_LINE = rgbm(31 / 255, 104 / 255, 207 / 255, 0.30)
     ACCENT[#ACCENT + 1] = FIX_LINE
     local SEG_TINT, SEG_CLEAR = rgbm(0, 0, 0, 0), rgbm(0, 0, 0, 0)
-    local function towerList(x1, x2, ly1, ly2, k, rows, multi, phaseGap, ended, byClass, key, parts, it, rhU)
+    local function towerList(x1, x2, ly1, ly2, k, rows, multi, phaseGap, ended, byClass, key, parts, it, rhU, pinMax)
       local item = it or item
       local rh = (rhU or 42) * k
-      local pins = math.min(BC.opt.pins or 3, #rows)
+      local pins = math.min(BC.opt.pins or 3, #rows, pinMax or #rows)
       local y = ly1
       for n = 1, pins do
         if y + rh <= ly2 + 0.5 * k then item(x1, y, k, rows[n], rows, n, multi, false, phaseGap, ended, false, x2 - x1, byClass) end
@@ -18368,6 +18368,9 @@ float4 main(PS_IN pin) {
       end
       return lines
     end
+    function CR.segPins(n, room, cl, rh)
+      return math.max(math.floor(math.floor((room - n * cl) / rh + 0.01) / n) - 3, 0)
+    end
     CR.segN = {}
     function CR.segTop(keys, parts, room, cl, rh)
       local n, S = #keys, CR.segN
@@ -18389,7 +18392,7 @@ float4 main(PS_IN pin) {
       local onlyBox = BC.opt.flag == 'AUTO'
       local hide, pre = CR.hideList(), CR.preOpen()
       if hide then ty2 = ty1 + 56 * k + (pre and 32 * k or 0) + (onlyBox and 0 or 42 * k) + 20 * k end
-      local seg, cyc, list, multi, legend, fixed, fixedL, fixedK, fixedB, top
+      local seg, cyc, list, multi, legend, fixed, fixedL, fixedK, fixedB, top, pinMax
       local cl = 22 * k + ((BC.opt.pins or 3) > 0 and 2 * k or 0)
       if not hide then
         local segW = BC.opt.tower == 'SEG' and BC.opt.place == 'ALL'
@@ -18404,6 +18407,8 @@ float4 main(PS_IN pin) {
         if segW and not seg then fixed, fixedL, fixedK, fixedB = fixedOf(list, cyc and towerParts or nil) end
         local need = 0
         if seg then
+          pinMax = CR.segPins(#BC.classKeys, ty2 - ty1 - head, cl, 42 * k)
+          cl = 22 * k + (math.min(BC.opt.pins or 3, pinMax) > 0 and 2 * k or 0)
           for _, key in ipairs(BC.classKeys) do need = need + cl + math.min(#towerParts[key], top or #towerParts[key]) * 42 * k end
         else
           need = (math.min(BC.opt.pins or 3, #list) > 0 and 2 * k or 0) + #list * 42 * k
@@ -18487,7 +18492,7 @@ float4 main(PS_IN pin) {
           legendItem(x1 + 14 * k, py + 4 * k, k, false, key, 'ALL')
           local cars = string.format(TEXTS.bc.cars, #rows)
           drawText(cars, F.legend, 12 * k, TMP.a:set(x2 - 14 * k - textWidth(cars, F.legend, 12 * k), py + 5 * k), DIMW)
-          towerList(x1, x2, py + 22 * k, py + partH, k, rows, multi, phaseGap, ended, true, key)
+          towerList(x1, x2, py + 22 * k, py + partH, k, rows, multi, phaseGap, ended, true, key, nil, nil, nil, pinMax)
           py = py + partH
         end
       else
@@ -19233,7 +19238,7 @@ float4 main(PS_IN pin) {
         local fixed, fixedL, fixedK, fixedB = fixedOf(list, (segW or cyc) and towerParts or nil)
         local headH = sessH + (pre and 28 * k or 0) + (onlyBox and 0 or 30 * k)
         local ty2
-        local seg, top
+        local seg, top, pinMax
         local cl = 18 * k + ((BC.opt.pins or 3) > 0 and 2 * k or 0)
         if hide then ty2 = ty1 + headH + 14 * k
         else
@@ -19243,6 +19248,8 @@ float4 main(PS_IN pin) {
           if segW and not seg then fixed, fixedL, fixedK, fixedB = fixedOf(list, cyc and towerParts or nil) end
           local need = 0
           if seg then
+            pinMax = CR.segPins(#BC.classKeys, h - 60 * k - ty1 - head, cl, 26 * k)
+            cl = 18 * k + (math.min(BC.opt.pins or 3, pinMax) > 0 and 2 * k or 0)
             for _, key in ipairs(BC.classKeys) do need = need + cl + math.min(#towerParts[key], top or #towerParts[key]) * 26 * k end
           else
             need = (math.min(BC.opt.pins or 3, #list) > 0 and 2 * k or 0) + #list * 26 * k
@@ -19316,7 +19323,7 @@ float4 main(PS_IN pin) {
             legendR(x1 + 10 * k, py + 9.5 * k, k, false, key, 'ALL')
             local cars = string.format(TEXTS.bc.cars, #rows)
             drawText(cars, F.legend, 10 * k, TMP.a:set(x2 - 10 * k - textWidth(cars, F.legend, 10 * k), py + 3 * k), DIMW)
-            towerList(x1, x2, py + 18 * k, py + partH, k, rows, multi, phaseGap, ended, true, key, nil, itemR, 26)
+            towerList(x1, x2, py + 18 * k, py + partH, k, rows, multi, phaseGap, ended, true, key, nil, itemR, 26, pinMax)
             py = py + partH
           end
         else
