@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V290 - 2026.11.09'
+local RC_VERSION = 'V291 - 2026.11.09'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2673,6 +2673,14 @@ do
         end
       end
       config.eventId = body:match('evId=([%w%-_]+)') or config.eventId
+      local tl = body:match('tracks=([^|]*)')
+      if tl then
+        local me = tostring(ac.getTrackID() or ''):lower()
+        config.trackName, config.trackLayout = '', ''
+        for fo, nm, ly in tl:gmatch('([^:;]*):([^:;]*):([^:;]*)') do
+          if fo:lower() == me then config.trackName, config.trackLayout = nm, ly end
+        end
+      end
       if BroadcastEvent then BroadcastEvent.ask() end
       config.eventRaces = tonumber(body:match('races=(%d+)')) or 1
       config.raceOverTime = tonumber(body:match('raceOverTime=(%d+)')) or config.raceOverTime
@@ -13243,13 +13251,13 @@ local drawStatus
           local t, o, bt = num(w.tyreCoreTemperature), num(w.tyreOptimumTemperature), num(w.discTemperature)
           local tt, btx = string.format('%d°', math.floor(t + 0.5)), string.format('%d°', math.floor(bt + 0.5))
           local tc, bc = F1.tyreHeat(t, o), F1.heat(bt, 150, 600, 800)
-          local w3 = sd > 0 and TMP.width('000°', FONT_MONO, math.max(8 * s, Desktop.text.minPx)) or 0
-          local a = P(sd * 31, mid - 4)
-          drawTextRight(tt, FONT_MONO, 8 * s, a.x + w3, a.y, tc)
-          local b = P(sd * 28, mid + 8.7)
+          local w3 = sd > 0 and TMP.width('000°', FONT_MONO, math.max(9 * s, Desktop.text.minPx)) or 0
+          local a = P(sd * 31, mid - 4.9 - 4.5)
+          drawTextRight(tt, FONT_MONO, 9 * s, a.x + w3, a.y, tc)
+          local b = P(sd * 28, mid + 4.9)
           ui.drawCircle(b, 1.8 * s, bc, 10, 0.7 * s)
-          local c = P(sd * 31, mid + 4.7)
-          drawTextRight(btx, FONT_MONO, 8 * s, c.x + w3, c.y, bc)
+          local c = P(sd * 31, mid + 4.9 - 4.5)
+          drawTextRight(btx, FONT_MONO, 9 * s, c.x + w3, c.y, bc)
         end
       end
     end
@@ -15540,7 +15548,7 @@ float4 main(PS_IN pin) {
         end
       elseif k == 'track' then
         local t = RecordSync.base.trackKey()
-        out[#out + 1] = { label = t, q = { track = t } }
+        out[#out + 1] = { label = (config.trackName or '') ~= '' and config.trackName or t, q = { track = t } }
       else
         for t = 1, 3 do out[#out + 1] = { label = TEXTS.rep.types[t], q = { type = t } } end
       end
@@ -15798,7 +15806,7 @@ float4 main(PS_IN pin) {
         y = y + ROW * s
         for i = fixed + P.top + 1, math.min(#list, fixed + P.top + rows) do
           local x2 = list[i].sess
-          line(i, { { when(x2.start), 14 }, { H.types[tonumber(x2.type) or 0] or '-', 104, COLOR_DIM }, { tostring(x2.track or ''), 200 },
+          line(i, { { when(x2.start), 14 }, { H.types[tonumber(x2.type) or 0] or '-', 104, COLOR_DIM }, { tostring((x2.trackName or '') ~= '' and x2.trackName or x2.track or ''), 200 },
             { tostring(x2.drivers or '-'), 520, nil, true }, { tostring(x2.laps or '-'), 580, nil, true } }, function() openSession(x2.key) end)
         end
       elseif P.page == 'session' then
@@ -18557,6 +18565,21 @@ float4 main(PS_IN pin) {
       end
       return nil
     end
+    function CR.logoIn(id) return id.logoMode == 'TOWER' end
+    function CR.towerLogo(x1, x2, ty1, k, id, lw, ns, mx)
+      rect(x1, 36 * k, x2, ty1, BAR)
+      ui.drawRectFilledMultiColor(TMP.a:set(x1, 36 * k - k), TMP.b:set(x1 + lw, 36 * k + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
+      local t = Lang.letters.upper(tostring(id.towerText or ''))
+      local foot = ty1 - 6 * k
+      if (id.logoTower or '') ~= '' then
+        LOGO_CH.mult = (tonumber(id.opChannel) or 80) / 100
+        ui.drawImage(id.logoTower, TMP.a:set(x1 + mx * k, 44 * k), TMP.b:set(x2 - mx * k, t ~= '' and foot - (ns + 4) * k or ty1 - 8 * k), LOGO_CH, UV0, UV1, ui.ImageFit.Fit)
+      end
+      if t ~= '' then
+        local s = fitText(t, F.name, ns * k, x2 - x1 - 2 * mx * k, '.')
+        drawText(s, F.name, ns * k, TMP.a:set((x1 + x2) / 2 - textWidth(s, F.name, ns * k) / 2, foot - ns * k), PAPER)
+      end
+    end
     local function towerDraw(h, k, id)
       local x1, x2, ty1, ty2 = 44 * k, 416 * k, 104 * k, h - 60 * k
       local fk, ft = flagNow()
@@ -18586,9 +18609,10 @@ float4 main(PS_IN pin) {
         end
         ty2 = math.min(ty1 + head + need, ty2)
       end
+      if CR.logoIn(id) then CR.towerLogo(x1, x2, ty1, k, id, 340 * k, 19, 22) end
       rect(x1, ty1, x2, ty2, BAR)
       rect(x1, ty1, x2, ty1 + k, HAIR)
-      ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 340 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
+      if not CR.logoIn(id) then ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 340 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE) end
       local kText, el, tot, note, ended = sessionTexts()
       ui.pushClipRect(TMP.a:set(x1, ty1), TMP.b:set(x2 - (onlyBox and 64 or 22) * k, ty1 + 56 * k))
       drawText(kText, F.sessK, 12 * k, TMP.a:set(x1 + 22 * k, ty1 + 12 * k), DIMW)
@@ -19433,9 +19457,10 @@ float4 main(PS_IN pin) {
           ty2 = math.min(ty1 + head + need, h - 60 * k)
         end
         measureR(list, fixed, k)
+        if CR.logoIn(id) then CR.towerLogo(x1, x2, ty1, k, id, 230 * k, 14, 14) end
         rect(x1, ty1, x2, ty2, BAR)
         rect(x1, ty1, x2, ty1 + k, HAIR)
-        ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 230 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
+        if not CR.logoIn(id) then ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 230 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE) end
         local kText, el, tot, note, ended = sessionTexts()
         ui.pushClipRect(TMP.a:set(x1, ty1), TMP.b:set(x2 - (onlyBox and 44 or 14) * k, ty1 + sessH))
         sessR(x1 + 14 * k, ty1 + 8 * k, k, 15 * k, kText, el, tot, note, pre)
@@ -19527,7 +19552,7 @@ float4 main(PS_IN pin) {
           LOGO_EV.mult = (tonumber(id.opEvent) or 34) / 100
           ui.drawImage(ev, TMP.a:set(w - 194 * k, 36 * k), TMP.b:set(w - 44 * k, 36 * k + 150 * k / BC.evAr), LOGO_EV, UV0, UV1, ui.ImageFit.Fit)
         end
-        if BC.opt.logos == 'BOTH' and id.logoChannel and id.logoChannel ~= '' then
+        if BC.opt.logos == 'BOTH' and id.logoChannel and id.logoChannel ~= '' and not CR.logoIn(id) then
           LOGO_CH.mult = (tonumber(id.opChannel) or 80) / 100
           ui.drawImage(id.logoChannel, TMP.a:set(44 * k, 36 * k), TMP.b:set(214 * k, 82 * k), LOGO_CH, UV0, UV1, ui.ImageFit.Fit)
         end
@@ -19998,7 +20023,8 @@ do
       local okI, ini = pcall(ac.INIConfig.trackData, 'surfaces.ini')
       local alt = okI and ini and tonumber(ini:get('ALTITUDE', 'BASE', -1e9)) or -1e9
       if alt <= -1e8 and okI and ini then alt = tonumber(ini:get('_EXTENSION', 'PIT_ALTITUDE', -1e9)) or -1e9 end
-      BroadcastEvent.track = { name = tostring(t.name or ac.getTrackName() or ''), description = tostring(t.description or ''), layout = layout, length = text(t.length),
+      BroadcastEvent.track = { name = (config.trackName or '') ~= '' and config.trackName or tostring(t.name or ac.getTrackName() or ''), description = tostring(t.description or ''),
+        layout = (config.trackLayout or '') ~= '' and config.trackLayout or layout, length = text(t.length),
         width = text(t.width), pitboxes = text(t.pitboxes), city = text(t.city), country = text(t.country), altitude = alt > -1e8 and alt or nil }
     end)
   end
