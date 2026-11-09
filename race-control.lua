@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V292 - 2026.11.09'
+local RC_VERSION = 'V293 - 2026.11.09'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -18571,9 +18571,14 @@ float4 main(PS_IN pin) {
       ui.drawRectFilledMultiColor(TMP.a:set(x1, 36 * k - k), TMP.b:set(x1 + lw, 36 * k + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
       local t = Lang.letters.upper(tostring(id.towerText or ''))
       local foot = ty1 - 6 * k
-      if (id.logoTower or '') ~= '' then
+      if CR.tlUrl ~= id.logoTower then CR.tlUrl, CR.tlAr = id.logoTower, nil end
+      if (id.logoTower or '') ~= '' and not CR.tlAr and ui.isImageReady(id.logoTower) then local isz = ui.imageSize(id.logoTower); if isz.y > 0 then CR.tlAr = isz.x / isz.y end end
+      if (id.logoTower or '') ~= '' and CR.tlAr then
+        local bx1, bx2, by1, by2 = x1 + mx * k, x2 - mx * k, 44 * k, t ~= '' and foot - (ns + 4) * k or ty1 - 8 * k
+        local w = math.min(bx2 - bx1, (by2 - by1) * CR.tlAr)
+        local cx, cy, hh = (bx1 + bx2) / 2, (by1 + by2) / 2, w / CR.tlAr / 2
         LOGO_CH.mult = (tonumber(id.opChannel) or 80) / 100
-        ui.drawImage(id.logoTower, TMP.a:set(x1 + mx * k, 44 * k), TMP.b:set(x2 - mx * k, t ~= '' and foot - (ns + 4) * k or ty1 - 8 * k), LOGO_CH, UV0, UV1, ui.ImageFit.Fit)
+        ui.drawImage(id.logoTower, TMP.a:set(cx - w / 2, cy - hh), TMP.b:set(cx + w / 2, cy + hh), LOGO_CH, UV0, UV1, ui.ImageFit.Fit)
       end
       if t ~= '' then
         local s = fitText(t, F.name, ns * k, x2 - x1 - 2 * mx * k, '.')
