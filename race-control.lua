@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V291 - 2026.11.09'
+local RC_VERSION = 'V292 - 2026.11.09'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -18566,7 +18566,7 @@ float4 main(PS_IN pin) {
       return nil
     end
     function CR.logoIn(id) return id.logoMode == 'TOWER' end
-    function CR.towerLogo(x1, x2, ty1, k, id, lw, ns, mx)
+    function CR.towerLogo(x1, x2, ty1, k, id, lw, ns, mx, up)
       rect(x1, 36 * k, x2, ty1, BAR)
       ui.drawRectFilledMultiColor(TMP.a:set(x1, 36 * k - k), TMP.b:set(x1 + lw, 36 * k + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
       local t = Lang.letters.upper(tostring(id.towerText or ''))
@@ -18577,7 +18577,7 @@ float4 main(PS_IN pin) {
       end
       if t ~= '' then
         local s = fitText(t, F.name, ns * k, x2 - x1 - 2 * mx * k, '.')
-        drawText(s, F.name, ns * k, TMP.a:set((x1 + x2) / 2 - textWidth(s, F.name, ns * k) / 2, foot - ns * k), PAPER)
+        drawText(s, F.name, ns * k, TMP.a:set((x1 + x2) / 2 - textWidth(s, F.name, ns * k) / 2, foot - (ns + up) * k), PAPER)
       end
     end
     local function towerDraw(h, k, id)
@@ -18609,7 +18609,7 @@ float4 main(PS_IN pin) {
         end
         ty2 = math.min(ty1 + head + need, ty2)
       end
-      if CR.logoIn(id) then CR.towerLogo(x1, x2, ty1, k, id, 340 * k, 19, 22) end
+      if CR.logoIn(id) then CR.towerLogo(x1, x2, ty1, k, id, 340 * k, 19, 22, 2) end
       rect(x1, ty1, x2, ty2, BAR)
       rect(x1, ty1, x2, ty1 + k, HAIR)
       if not CR.logoIn(id) then ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 340 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE) end
@@ -19457,7 +19457,7 @@ float4 main(PS_IN pin) {
           ty2 = math.min(ty1 + head + need, h - 60 * k)
         end
         measureR(list, fixed, k)
-        if CR.logoIn(id) then CR.towerLogo(x1, x2, ty1, k, id, 230 * k, 14, 14) end
+        if CR.logoIn(id) then CR.towerLogo(x1, x2, ty1, k, id, 230 * k, 14, 14, 1) end
         rect(x1, ty1, x2, ty2, BAR)
         rect(x1, ty1, x2, ty1 + k, HAIR)
         if not CR.logoIn(id) then ui.drawRectFilledMultiColor(TMP.a:set(x1, ty1 - k), TMP.b:set(x1 + 230 * k, ty1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE) end
