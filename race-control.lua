@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V289 - 2026.11.09'
+local RC_VERSION = 'V290 - 2026.11.09'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -4235,6 +4235,7 @@ do
       end
       cols[c] = col
     end
+    for i = 1, n do cols.clutch[i] = 1000 - cols.clutch[i] end
     return cols, n, dt
   end
   function LapTrace.idxAt(L, ms)
@@ -15521,7 +15522,7 @@ float4 main(PS_IN pin) {
       mark = tonumber(ac.storage['rc.reportMark'] or '') }
     local FILTERS = { 'driver', 'car', 'track', 'type' }
     local LIST = 12
-    local CW, CH, MAPW = 1024, 416, 230
+    local CW, MAPW = 1024, 230
     local CHANNELS = { { 'speed', 0.1, 'spd', 3 }, { 'brake', 0.1, 'brk', 2 }, { 'gas', 0.1, 'thr', 2 }, { 'clutch', 0.1, 'clu', 2 }, { 'gear', 1, 'gear', 1 }, { 'steer', 0.1, 'str', 2 }, dq = 2 }
     local COLOR_A, COLOR_B = rgbm(0.494, 0.627, 1, 1), rgbm(1, 0.851, 0.251, 1)
     local function options(k)
@@ -15641,11 +15642,14 @@ float4 main(PS_IN pin) {
       local span = D[hi] - D[lo]
       return span > 0 and T[lo] + (T[hi] - T[lo]) * (d - D[lo]) / span or T[lo]
     end
-    local function paint(A, B)
-      P.canvas = P.canvas or ui.ExtraCanvas(vec2(CW, CH))
+    local function paint(A, B, cw, ch)
+      if P.canvas and (P.cw ~= cw or P.ch ~= ch) then P.canvas:dispose(); P.canvas = nil end
+      P.canvas = P.canvas or ui.ExtraCanvas(vec2(cw, ch))
+      P.cw, P.ch = cw, ch
+      local mw = MAPW * cw / CW
       local units = B and CHANNELS.dq or 0
       for _, c in ipairs(CHANNELS) do units = units + c[4] end
-      local gw, uh = CW - MAPW - 12, CH / units
+      local gw, uh = cw - mw - 12, ch / units
       local maxT = math.max(A.cols.time[A.n], 1)
       local pt = vec2(0, 0)
       local function xA(j) return A.cols.time[j] / maxT * gw end
@@ -15686,13 +15690,13 @@ float4 main(PS_IN pin) {
           band(CHANNELS.dq, -m, m, { { A, function(j) return dl[j] end, COLOR_TITLE, xA } })
           P.dl = dl
         end
-        for t = 0, maxT, 5000 do local xx = t / maxT * gw; ui.drawSimpleLine(vec2(xx, 0), vec2(xx, CH), rgbm(1, 1, 1, 0.06), 1) end
+        for t = 0, maxT, 5000 do local xx = t / maxT * gw; ui.drawSimpleLine(vec2(xx, 0), vec2(xx, ch), rgbm(1, 1, 1, 0.06), 1) end
         local x0, x1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
         for _, L in ipairs({ A, B }) do
           for j = 1, L.n do x0, x1 = math.min(x0, L.cols.x[j]), math.max(x1, L.cols.x[j]); z0, z1 = math.min(z0, L.cols.z[j]), math.max(z1, L.cols.z[j]) end
         end
-        local k = math.min((MAPW - 16) / math.max(x1 - x0, 1), (CH - 16) / math.max(z1 - z0, 1))
-        local ox, oz = CW - MAPW + (MAPW - (x1 - x0) * k) / 2, (CH - (z1 - z0) * k) / 2
+        local k = math.min((mw - 16) / math.max(x1 - x0, 1), (ch - 16) / math.max(z1 - z0, 1))
+        local ox, oz = cw - mw + (mw - (x1 - x0) * k) / 2, (ch - (z1 - z0) * k) / 2
         local la = A.lap
         if la and tostring(la.idx_track or '') == RecordSync.base.trackKey() and Radar.geometry() and Radar.line and Radar.line.W then
           local Ls, Rs = Radar.sides(Radar.line.P, Radar.line.W)
@@ -15734,22 +15738,23 @@ float4 main(PS_IN pin) {
       for i = 1, #K do out[i] = (L[i] or '-') .. '/' .. K[i] end
       return table.concat(out, ' ')
     end
-    local function layout()
+    local function layout(hu)
       if P.page == 'search' and not P.sessions and not P.busy and not P.err then search() end
       local list = items()
       P.sel = math.max(1, math.min(P.sel, math.max(#list, 1)))
       local fixed = P.page == 'search' and #FILTERS or P.page == 'laps' and 2 or 0
-      local shownRows = math.min(LIST, #list - fixed)
+      local rows = hu and math.max(LIST, math.floor((hu - 28) / ROW) - (fixed + 3)) or LIST
+      local shownRows = math.min(rows, #list - fixed)
       if P.sel > fixed then
-        if P.sel - fixed > P.top + LIST then P.top = P.sel - fixed - LIST end
+        if P.sel - fixed > P.top + rows then P.top = P.sel - fixed - rows end
         if P.sel - fixed <= P.top then P.top = P.sel - fixed - 1 end
       end
-      P.top = math.max(0, math.min(P.top, math.max(#list - fixed - LIST, 0)))
-      return list, fixed, P.page == 'lap' and 25 or (fixed + 2 + math.max(shownRows, 1) + 1)
+      P.top = math.max(0, math.min(P.top, math.max(#list - fixed - rows, 0)))
+      return list, fixed, P.page == 'lap' and 25 or (fixed + 2 + math.max(shownRows, 1) + 1), rows
     end
     Desktop.reportRows = function() return select(3, layout()) end
-    Desktop.reportBody = function(p1, p2, y, s, right)
-      local list, fixed = layout()
+    Desktop.reportBody = function(p1, p2, y, s, right, sizing)
+      local list, fixed, _, rows = layout((p2.y - p1.y) / s)
       local x = right
       if P.page ~= 'search' then x = chip('<', x, p1.y, s, false, back) end
       if P.page == 'lap' then
@@ -15791,7 +15796,7 @@ float4 main(PS_IN pin) {
         y = y + 8 * s
         row(p1, y, s, { { H.hdrDate, 14, COLOR_AXIS }, { H.hdrType, 104, COLOR_AXIS }, { H.track, 200, COLOR_AXIS }, { H.hdrDrivers, 520, COLOR_AXIS, true }, { H.hdrLaps, 580, COLOR_AXIS, true } })
         y = y + ROW * s
-        for i = fixed + P.top + 1, math.min(#list, fixed + P.top + LIST) do
+        for i = fixed + P.top + 1, math.min(#list, fixed + P.top + rows) do
           local x2 = list[i].sess
           line(i, { { when(x2.start), 14 }, { H.types[tonumber(x2.type) or 0] or '-', 104, COLOR_DIM }, { tostring(x2.track or ''), 200 },
             { tostring(x2.drivers or '-'), 520, nil, true }, { tostring(x2.laps or '-'), 580, nil, true } }, function() openSession(x2.key) end)
@@ -15799,7 +15804,7 @@ float4 main(PS_IN pin) {
       elseif P.page == 'session' then
         row(p1, y, s, { { 'P', 24, COLOR_AXIS, true }, { H.driver, 34, COLOR_AXIS }, { H.car, 250, COLOR_AXIS }, { H.hdrLaps, 480, COLOR_AXIS, true }, { H.hdrBest, 580, COLOR_AXIS, true } })
         y = y + ROW * s
-        for i = P.top + 1, math.min(#list, P.top + LIST) do
+        for i = P.top + 1, math.min(#list, P.top + rows) do
           local d = list[i].drv
           line(i, { { tostring(d.pos or '-'), 24, nil, true }, { tostring(d.driver or ''), 34, nil, false, FONT_TEXT }, { tostring(d.car or ''), 250, COLOR_DIM },
             { tostring(d.laps or 0), 480, nil, true }, { lapTime(tonumber(d.best)), 580, nil, true } }, function() openDriver(d) end)
@@ -15813,30 +15818,33 @@ float4 main(PS_IN pin) {
         end
         drawSeparator(p1, p2, y + 3 * s, s)
         y = y + 8 * s
-        row(p1, y, s, { { H.lap, 30, COLOR_AXIS, true }, { H.hdrTime, 100, COLOR_AXIS, true }, { 'S1', 156, COLOR_AXIS, true }, { 'S2', 206, COLOR_AXIS, true },
-          { 'S3', 256, COLOR_AXIS, true }, { H.hdrValid, 266, COLOR_AXIS }, { H.hdrPit, 296, COLOR_AXIS }, { H.hdrFuel, 370, COLOR_AXIS, true },
-          { H.hdrTyre, 380, COLOR_AXIS }, { H.hdrTel, 510, COLOR_AXIS } })
+        local lx = 14 + math.max(textWidth('0000', FONT_MONO, FS * s), textWidth(H.lap, FONT_MONO, FS * s)) / s
+        local d = lx - 30
+        row(p1, y, s, { { H.lap, lx, COLOR_AXIS, true }, { H.hdrTime, 100 + d, COLOR_AXIS, true }, { 'S1', 156 + d, COLOR_AXIS, true }, { 'S2', 206 + d, COLOR_AXIS, true },
+          { 'S3', 256 + d, COLOR_AXIS, true }, { H.hdrValid, 266 + d, COLOR_AXIS }, { H.hdrPit, 296 + d, COLOR_AXIS }, { H.hdrFuel, 370 + d, COLOR_AXIS, true },
+          { H.hdrTyre, 380 + d, COLOR_AXIS }, { H.hdrTel, 510 + d, COLOR_AXIS } })
         y = y + ROW * s
-        for i = fixed + P.top + 1, math.min(#list, fixed + P.top + LIST) do
+        for i = fixed + P.top + 1, math.min(#list, fixed + P.top + rows) do
           local l = list[i].lap
           local ss = {}
           for v in tostring(l.sectors or ''):gmatch('[^/,;%s]+') do ss[#ss + 1] = tonumber(v) end
           local col = tonumber(l.valid) == 1 and nil or RED
-          line(i, { { tostring(l.lap or ''), 30, col, true }, { lapTime(tonumber(l.ms)), 100, col, true }, { secs(ss[1]), 156, col, true }, { secs(ss[2]), 206, col, true },
-            { secs(ss[3]), 256, col, true }, { tonumber(l.valid) == 1 and 'V' or '-', 266, col }, { tonumber(l.pit) == 1 and 'P' or '-', 296, COLOR_DIM },
-            { l.fuel and string.format('%.1f', tonumber(l.fuel) or 0) or '-', 370, COLOR_DIM, true }, { cell(l.compound), 380, COLOR_DIM },
-            { l.trace and 'T' or '-', 510, COLOR_DIM } }, function() openLap(l.id) end, l.id)
+          line(i, { { tostring(l.lap or ''), lx, col, true }, { lapTime(tonumber(l.ms)), 100 + d, col, true }, { secs(ss[1]), 156 + d, col, true }, { secs(ss[2]), 206 + d, col, true },
+            { secs(ss[3]), 256 + d, col, true }, { tonumber(l.valid) == 1 and 'V' or '-', 266 + d, col }, { tonumber(l.pit) == 1 and 'P' or '-', 296 + d, COLOR_DIM },
+            { l.fuel and string.format('%.1f', tonumber(l.fuel) or 0) or '-', 370 + d, COLOR_DIM, true }, { cell(l.compound), 380 + d, COLOR_DIM },
+            { l.trace and 'T' or '-', 510 + d, COLOR_DIM } }, function() openLap(l.id) end, l.id)
         end
       else
         local A = P.L[P.lapId]
         local Bm = P.mark and P.mark ~= P.lapId and P.over and P.L[P.mark] or nil
         local B = Bm and Bm.cols and Bm or nil
-        local a, b = vec2(p1.x + 10 * s, y), vec2(p2.x - 10 * s, y + 228 * s)
+        local a, b = vec2(p1.x + 10 * s, y), vec2(p2.x - 10 * s, y + (228 + math.max((p2.y - p1.y) / s - 28 - 25 * ROW, 0)) * s)
         if A and A.cols and ui.ExtraCanvas then
-          local key = tostring(P.lapId) .. '|' .. tostring(B and P.mark or '')
-          if P.canvasKey ~= key then paint(A, B); P.canvasKey = key end
+          local cw, ch = math.floor((b.x - a.x) / s * CW / 580 + 0.5), math.floor((b.y - a.y) / s * CW / 580 + 0.5)
+          local key = tostring(P.lapId) .. '|' .. tostring(B and P.mark or '') .. '|' .. cw .. '|' .. ch
+          if P.canvasKey ~= key and not (sizing and P.canvas) then paint(A, B, cw, ch); P.canvasKey = key end
           ui.drawImage(P.canvas, a, b)
-          local sxk, syk, endMs, now = (b.x - a.x) / CW, (b.y - a.y) / CH, A.cols.time[A.n], state.ui.clock
+          local sxk, syk, endMs, now = (b.x - a.x) / P.cw, (b.y - a.y) / P.ch, A.cols.time[A.n], state.ui.clock
           if P.play then
             P.cur = math.min(P.cur + math.min(now - (P.at or now), 0.5) * 1000, endMs)
             if P.cur >= endMs then P.play = false end
@@ -15875,8 +15883,9 @@ float4 main(PS_IN pin) {
           end
           local lab = P.cur > 0 and lapTime(P.cur) or '0:00.000'
           local lw = textWidth(lab, FONT_MONO, 8 * s)
-          ui.drawRectFilled(TMP.a:set(cx - lw / 2 - 2 * s, b.y + s), TMP.b:set(cx + lw / 2 + 2 * s, b.y + 11 * s), COLOR_TITLE)
-          drawText(lab, FONT_MONO, 8 * s, TMP.a:set(cx - lw / 2, b.y + 2 * s), TMP.dark)
+          local bx = math.min(math.max(cx - lw / 2 - 2 * s, a.x), a.x + P.gw * sxk - lw - 4 * s)
+          ui.drawRectFilled(TMP.a:set(bx, b.y + s), TMP.b:set(bx + lw + 4 * s, b.y + 11 * s), COLOR_TITLE)
+          drawText(lab, FONT_MONO, 8 * s, TMP.a:set(bx + 2 * s, b.y + 2 * s), TMP.dark)
         else
           drawText((A and not A.busy) and H.noTrace or H.loading, FONT_MONO, 9 * s, TMP.a:set(a.x + 4 * s, a.y + 4 * s), COLOR_OFF)
         end
@@ -15905,10 +15914,10 @@ float4 main(PS_IN pin) {
         drawText(msg, FONT_TEXT, FS * s, TMP.a:set(p1.x + 14 * s, y), P.err and RED or COLOR_DIM)
         if P.err then Drag.clickable(vec2(p1.x + 10 * s, y), vec2(p2.x - 60 * s, y + ROW * s), reload) end
       end
-      if P.page ~= 'lap' and #list - fixed > LIST then
-        drawTextRight(string.format('%d-%d / %d', P.top + 1, math.min(P.top + LIST, #list - fixed), #list - fixed), FONT_MONO, 9 * s, p2.x - 54 * s, y, COLOR_DIM)
-        stepBox('-', vec2(p2.x - 48 * s, y), s, function() P.top = math.max(P.top - LIST, 0); P.sel = fixed + P.top + 1 end)
-        stepBox('+', vec2(p2.x - 30 * s, y), s, function() P.top = P.top + LIST; P.sel = math.min(fixed + P.top + 1, #list) end)
+      if P.page ~= 'lap' and #list - fixed > rows then
+        drawTextRight(string.format('%d-%d / %d', P.top + 1, math.min(P.top + rows, #list - fixed), #list - fixed), FONT_MONO, 9 * s, p2.x - 54 * s, y, COLOR_DIM)
+        stepBox('-', vec2(p2.x - 48 * s, y), s, function() P.top = math.max(P.top - rows, 0); P.sel = fixed + P.top + 1 end)
+        stepBox('+', vec2(p2.x - 30 * s, y), s, function() P.top = P.top + rows; P.sel = math.min(fixed + P.top + 1, #list) end)
       end
     end
   end
@@ -20398,9 +20407,10 @@ local drawDesktopUI = (function()
   local drag = nil
   local moving = nil
   local sizing = nil
-  local function windowAt(id, W, H, w, h, s, resizable)
+  local function windowAt(id, W, H, w, h, s, resizable, anchored)
     local k = h / 1080
-    local ox, oy = tostring(ac.storage['rc.win.' .. id] or ''):match('^(%-?[%d%.]+),(%-?[%d%.]+)$')
+    local key = (anchored and 'rc.winat.' or 'rc.win.') .. id
+    local ox, oy = tostring(ac.storage[key] or ''):match('^(%-?[%d%.]+),(%-?[%d%.]+)$')
     local o = vec2((tonumber(ox) or 0) * k, (tonumber(oy) or 0) * k)
     local m = ui.mousePos()
     if resizable then
@@ -20411,23 +20421,26 @@ local drawDesktopUI = (function()
         if ui.mouseDown() then
           W = math.min(math.max(sizing.W0 + (m.x - sizing.m0.x) / s, minW), (w - sizing.x) / s)
           H = math.min(math.max(sizing.H0 + (m.y - sizing.m0.y) / s, minH), (h - sizing.y) / s)
-          o = vec2(sizing.x - (w / 2 - W * s / 2), sizing.y - (h / 2 - H * s / 2))
+          o = anchored and vec2(sizing.x, sizing.y) or vec2(sizing.x - (w / 2 - W * s / 2), sizing.y - (h / 2 - H * s / 2))
           ac.storage['rc.winsz.' .. id] = string.format('%.0f,%.0f', W, H)
-          ac.storage['rc.win.' .. id] = string.format('%.0f,%.0f', o.x / k, o.y / k)
+          ac.storage[key] = string.format('%.0f,%.0f', o.x / k, o.y / k)
         else
           sizing = nil
         end
       end
     end
     local bw, bh = W * s, H * s
+    local bx, by = anchored and 0 or w / 2 - bw / 2, anchored and 0 or h / 2 - bh / 2
+    if anchored and not ox then o = vec2(w / 2 - bw / 2, h / 2 - bh / 2) end
     if moving and moving.id == id then
       if ui.mouseDown() then o = vec2(m.x - moving.grab.x, m.y - moving.grab.y)
       else moving = nil end
     end
-    local x = math.min(math.max(w / 2 - bw / 2 + o.x, 0), math.max(w - bw, 0))
-    local y = math.min(math.max(h / 2 - bh / 2 + o.y, 0), math.max(h - bh, 0))
-    o = vec2(x - (w / 2 - bw / 2), y - (h / 2 - bh / 2))
-    if moving and moving.id == id then ac.storage['rc.win.' .. id] = string.format('%.0f,%.0f', o.x / k, o.y / k) end
+    local x = math.min(math.max(bx + o.x, 0), math.max(w - bw, 0))
+    local y = math.min(math.max(by + o.y, 0), math.max(h - bh, 0))
+    local pushed = anchored and (not ox or math.abs(bx + o.x - x) > k or math.abs(by + o.y - y) > k)
+    o = vec2(x - bx, y - by)
+    if (moving and moving.id == id) or pushed then ac.storage[key] = string.format('%.0f,%.0f', o.x / k, o.y / k) end
     local p1 = vec2(math.floor(x), math.floor(y))
     local p2 = vec2(p1.x + bw, p1.y + bh)
     local onTitle = m.x >= p1.x and m.x <= p2.x - 34 * s and m.y >= p1.y and m.y <= p1.y + 21 * s
@@ -20718,7 +20731,7 @@ local drawDesktopUI = (function()
   end
   local function reportWindow(w, h, s)
     if not ac.getCar(0).isInPit then Desktop.reportOpen = false return end
-    local p1, p2 = windowAt('report', 600, 28 + Desktop.reportRows() * 13, w, h, s)
+    local p1, p2 = windowAt('report', 600, 28 + Desktop.reportRows() * 13, w, h, s, true, true)
     Drag.group = nil
     Drag.modal = { p1, p2 }
     local m = ui.mousePos()
@@ -20727,7 +20740,7 @@ local drawDesktopUI = (function()
     drawText(TEXTS.scrReport, FONT_TITLE, 12 * s, TMP.a:set(p1.x + 14 * s, p1.y + 4 * s), COLOR_TITLE)
     chip('X', vec2(p2.x - 28 * s, p1.y + 4 * s), s, false, COLOR_TITLE, function() Desktop.reportOpen = false end)
     drawSeparator(p1, p2, p1.y + 21 * s, s)
-    Desktop.reportBody(p1, p2, p1.y + 26 * s, s, p2.x - 34 * s)
+    Desktop.reportBody(p1, p2, p1.y + 26 * s, s, p2.x - 34 * s, sizing ~= nil and sizing.id == 'report')
   end
   local AUDIT_ROWS = 16
   local SRC_COLOR = { KMR = PANEL_COLORS.yellow, ACSM = PANEL_COLORS.blue }
