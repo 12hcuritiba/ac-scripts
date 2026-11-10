@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V293 - 2026.11.09'
+local RC_VERSION = 'V294 - 2026.11.10'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -19582,6 +19582,10 @@ float4 main(PS_IN pin) {
         end
         voices(w, h, k, true)
         return
+      end
+      if CR.logoIn(id) then
+        if BC.opt.md == 1 then CR.towerLogo(44 * k, 294 * k, 104 * k, k, id, 230 * k, 14, 14, 1) rect(44 * k, 104 * k, 294 * k, 105 * k, HAIR)
+        else CR.towerLogo(44 * k, 416 * k, 104 * k, k, id, 340 * k, 19, 22, 2) rect(44 * k, 104 * k, 416 * k, 105 * k, HAIR) end
       end
       if BC.opt.md == 1 then
         CR.barR(w, h, k, id)
