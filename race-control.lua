@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V294 - 2026.11.10'
+local RC_VERSION = 'V295 - 2026.11.10'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -570,7 +570,7 @@ local TEXTS = {
     resK = 'Results', resAll = 'Overall', resHead = { 'Pos.', 'No.', 'Driver', 'Team', 'Tyre', 'Laps', 'Best lap', 'Gap' }, chq = 'Chequered flag',
     opSessions = 'Sessions', opRules = 'Rules', opDrivers = 'Drivers per team', opStops = 'Pit stops required', opSwaps = 'Driver swaps required',
     opStint = 'Minimum stint', opStintMax = 'Maximum stint', opClasses = 'Classes', opDate = 'Date', opTrack = 'Track', opLayout = 'Layout', opTime = 'Time',
-    opFrom = '%s to %s', opTrackK = 'Track and weather', opGrip = 'Grip', opAir = 'Air', opRoad = 'Track', opHum = 'Humidity', opNow = 'Now', opRain = 'Rain',
+    opFrom = '%s to %s', opAnd = ' / ', opMonths = { 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec' }, opTrackK = 'Track and weather', opGrip = 'Grip', opAir = 'Air', opRoad = 'Track', opHum = 'Humidity', opNow = 'Now', opRain = 'Rain',
     opList = 'Entrants', opHead = { 'No.', 'Drivers', 'Team', 'Car', 'Class' }, snK = 'Session', snStart = { 'Rolling start', 'Standing start' }, snStartKmr = 'KMR rolling start',
     gridClass = 'Grid by class', gridClassRev = 'Grid by class reversed (%s per class)', gridAll = 'all', minutes = '%d min',
     coolDown = 'Cool-down lap', winner = 'Winner', winners = 'Winners',
@@ -17646,21 +17646,38 @@ float4 main(PS_IN pin) {
     function CR.grid4(x, y, cw, k, cells, draw)
       local hh = 10 * k + 33 * k + 18 * k + 20 * k
       if not draw then return hh end
-      local gw = (cw - (#cells - 1) * 18 * k) / #cells
-      for i, c in ipairs(cells) do
-        local cx = x + (i - 1) * (gw + 18 * k)
-        rect(cx, y, cx + gw, y + k, HAIR)
+      local fixed, free = 0, 0
+      for _, c in ipairs(cells) do if c.w then fixed = fixed + c.w * k else free = free + 1 end end
+      local gw = free > 0 and (cw - fixed - (#cells - 1) * 18 * k) / free or 0
+      local cx = x
+      for _, c in ipairs(cells) do
+        local cg = c.w and c.w * k or gw
+        rect(cx, y, cx + cg, y + k, HAIR)
         local vx = cx
         if c.dir then
           CR.windArrow(cx, y + 17 * k, 22 * k, c.dir, PAPER)
           vx = cx + 28 * k
         end
-        drawText(fitText(tostring(c[2] or '-'), F.rb, 30 * k, gw - (vx - cx), '.'), F.rb, 30 * k, TMP.a:set(vx, y + 10 * k), PAPER)
-        drawText(Lang.letters.upper(c[1]), F.lab, 13 * k, TMP.a:set(cx, y + 45 * k), DIMW)
-        if c[3] and c[3] ~= '' then
-          local ls = CR.wrap(c[3], F.saySm, 14 * k, gw, 1)
-          if ls[1] then drawText(ls[1], F.saySm, 14 * k, TMP.a:set(cx, y + 63 * k), DIMW) end
+        drawText(fitText(tostring(c[2] or '-'), F.rb, 30 * k, cg - (vx - cx), '.'), F.rb, 30 * k, TMP.a:set(vx, y + 10 * k), PAPER)
+        if c.two then
+          local sv, sw = tostring(c.sub or ''), 0
+          if sv ~= '' then
+            sv = fitText(sv, F.rb, 20 * k, cg, '.')
+            drawText(sv, F.rb, 20 * k, TMP.a:set(cx, y + 44 * k), PAPER)
+            sw = textWidth(sv, F.rb, 20 * k)
+          end
+          if c[3] and c[3] ~= '' and cg - sw > 30 * k then
+            drawText(fitText((sw > 0 and ' · ' or '') .. c[3], F.saySm, 13 * k, cg - sw, '.'), F.saySm, 13 * k, TMP.a:set(cx + sw, y + 50 * k), DIMW)
+          end
+          drawText(Lang.letters.upper(c[1]), F.lab, 13 * k, TMP.a:set(cx, y + 68 * k), DIMW)
+        else
+          drawText(Lang.letters.upper(c[1]), F.lab, 13 * k, TMP.a:set(cx, y + 45 * k), DIMW)
+          if c[3] and c[3] ~= '' then
+            local ls = CR.wrap(c[3], F.saySm, 14 * k, cg, 1)
+            if ls[1] then drawText(ls[1], F.saySm, 14 * k, TMP.a:set(cx, y + 63 * k), DIMW) end
+          end
         end
+        cx = cx + cg + 18 * k
       end
       return hh
     end
@@ -17706,10 +17723,20 @@ float4 main(PS_IN pin) {
         end
         yy = yy + bh + 18 * k
         local e1, e2 = CR.epochOf(ev.start), CR.epochOf(ev['end'])
-        local d1, d2 = e1 and os.date('%d/%m/%Y', e1), e2 and os.date('%d/%m/%Y', e2)
-        yy = yy + CR.grid4(x, yy, cw, k, { { T.opDate, (d1 and d2 and d1 ~= d2) and (d1 .. ' - ' .. d2) or (d1 or '-') },
-          { T.opTrack, tr.name or ac.getTrackName(), tr.description }, { T.opLayout, (tr.layout and tr.layout ~= '') and tr.layout or '-' },
-          { T.opTime, e1 and string.format(T.opFrom, os.date('%H:%M', e1), e2 and os.date('%H:%M', e2) or '') or '-' } }, draw)
+        local date = '-'
+        if e1 then
+          local a, b = os.date('*t', e1), os.date('*t', e2 or e1)
+          local function part(d1, d2, mo) return (d1 == d2 and string.format('%02d', d1) or string.format('%02d-%02d', d1, d2)) .. ' ' .. (T.opMonths[mo] or '') end
+          if a.year == b.year and a.month == b.month then date = part(a.day, b.day, a.month) .. ' ' .. a.year
+          else
+            local last = os.date('*t', os.time({ year = a.year, month = a.month + 1, day = 0, hour = 12 })).day
+            local p1, p2 = part(a.day, last, a.month), part(1, b.day, b.month)
+            date = a.year == b.year and (p1 .. T.opAnd .. p2 .. ' ' .. b.year) or (p1 .. ' ' .. a.year .. T.opAnd .. p2 .. ' ' .. b.year)
+          end
+        end
+        yy = yy + CR.grid4(x, yy, cw, k, { { T.opDate .. ' · ' .. T.opTime, date, two = true, w = 400,
+            sub = e1 and string.format(T.opFrom, os.date('%H:%M', e1), e2 and os.date('%H:%M', e2) or '') or '-' },
+          { T.opTrack .. ' · ' .. T.opLayout, tr.name or ac.getTrackName(), tr.description, two = true, sub = tr.layout } }, draw)
         return yy - y
       end
     end
