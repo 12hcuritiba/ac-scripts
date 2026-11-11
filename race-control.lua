@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V295 - 2026.11.10'
+local RC_VERSION = 'V296 - 2026.11.11'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -558,7 +558,8 @@ local TEXTS = {
   scrWeatherAnim = 'forecast in segments of 10 min', scrWeatherStatic = 'no forecast', scrWxPage = '< %d/%d >',
   scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track / humidity', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
   scrEvent = 'EVENT', scrEventInfo = 'event info', evStarts = ' - starts %s', evRaceN = 'RACE %d',
-  bc = { green = 'Green', lastLap = 'Last lap', extraLap = ' extra lap', red = 'Red', finished = 'Finished', yellowS = 'Yellow · S%d', sess = { [1] = 'Practice', [2] = 'Qualifying', [3] = 'Race' },
+  bc = { green = 'Green', lastLap = 'Last lap', extraLap = ' extra lap', red = 'Red', finished = 'Finished', yellow = 'Yellow', closed = 'Closed', formation = 'Formation', flagGreen = 'Green flag', startAborted = 'Start aborted',
+    newForm = 'New formation lap', secLapS = 'Lap %d · sectors', secLapT = 'Lap %d · time', sess = { [1] = 'Practice', [2] = 'Qualifying', [3] = 'Race' },
     raceN = 'Race %d', lap = 'lap %d', sessEnd = 'End of %s', next = 'Next: %s', laps = '%d L',
     callIn = 'inlap', callOut = 'outlap', pitClosed = 'Pit closed', opensIn = 'Opens in ', lastI = 'LL', bestI = 'BL', ftF = 'F', ftT = 'T',
     cars = '%d cars',
@@ -1016,7 +1017,7 @@ local config = (function()
     raceProcedure = structKey('raceProcedure', { procedure1 = 'KMR', grid1 = 'NORMAL', reverse1 = 0, procedure2 = 'KMR', grid2 = 'NORMAL', reverse2 = 0,
       maxKmh = 150, overSeconds = 10, speedLaps = 1, minKmh = 30, slowSeconds = 15, slowLaps = 3, giveBackSeconds = 20, passLaps = 3, passFarM = 100,
       leaderSlowKmh = 30, slowFarKmh = 40, slowFarM = 75, alignMeters = 0.7, alignKmh = 1, alignSeconds = 60, approachM = 400, limitSpline = 0.788,
-      pitExitSpline = 0.024 }),
+      pitExitSpline = 0.024, abortSpline = 0.85, abortEndSpline = 0.15 }),
     driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
     kmrPoints = kmrPoints,
     kmrRating = kmrRating,
@@ -1517,6 +1518,17 @@ local function tyreCurve(idx, compound, i, prefix, key)
     tyreCurves[id] = lut
   end
   return lut
+end
+local tanks = {}
+function CarRead.tankOf(idx)
+  local id = tostring(ac.getCarID(idx))
+  local v = tanks[id]
+  if v == nil then
+    local ini = ac.INIConfig.carData(idx, 'car.ini')
+    v = ini and tonumber(ini:get('FUEL', 'MAX_FUEL', 0)) or 0
+    tanks[id] = v
+  end
+  return v
 end
 local function tyreWearState(idx, compound, i, km)
   local lut = tyreCurve(idx, compound, i, '', 'WEAR_CURVE')
@@ -2507,6 +2519,9 @@ do
         car[tonumber(slot)] = { fuel = tonumber(f) or 0, compound = tonumber(c) or 0, km = km }
       end
       D.car = car
+      local open = {}
+      for slot in (tostring(res.body or ''):match('OPEN|([^\r\n]*)') or ''):gmatch('%d+') do open[tonumber(slot)] = true end
+      D.open = open
     end)
   end
   function B.reportGet(path, params, cb)
@@ -2693,6 +2708,8 @@ do
       R.procedure2 = body:match('|procedure2=(%u+)') or R.procedure2
       R.grid2 = body:match('|grid2=(%u+)') or R.grid2
       R.reverse2 = tonumber(body:match('|reverse2=(%-?%d+)')) or R.reverse2
+      R.abortSpline = tonumber(body:match('|abortSpline=([%d%.]+)')) or R.abortSpline
+      R.abortEndSpline = tonumber(body:match('|abortEndSpline=([%d%.]+)')) or R.abortEndSpline
       R.procedure = R[config.raceNo == 2 and 'procedure2' or 'procedure1']
       local cc = body:match('carClasses=([^|]*)')
       if cc and cc ~= '' and cc ~= config.carClassesText then
@@ -3515,7 +3532,7 @@ local function parseGoDuration(text)
   return found and total or nil
 end
 local Clock = {}
-sessionPart('clock', Clock, function() return { greenMs = SESSION_NONE, endMs = SESSION_NONE, text = '', lightsMs = SESSION_NONE } end)
+sessionPart('clock', Clock, function() return { greenMs = SESSION_NONE, endMs = SESSION_NONE, text = '', lightsMs = SESSION_NONE, validMs = SESSION_NONE, validAt = SESSION_NONE } end)
 do
   local B = RecordSync.base
   function Clock.ms(kind, s)
@@ -3538,15 +3555,19 @@ do
     if sim.raceSessionType == ac.SessionType.Race then return Clock.greenMs end
     return 0
   end
+  function Clock.startValid(ms)
+    if not Clock.validAt then Clock.validAt = math.floor(ms) end
+  end
   function Clock.lightsOut(ms)
     if not Clock.lightsMs then Clock.lightsMs = math.floor(ms) end
+    Clock.startValid(ms)
   end
   B.clockRead = function(text)
     text = tostring(text or '')
     if text == Clock.text then return end
     Clock.text = text
-    local g, e = text:match('^([^|]*)|?(.*)$')
-    local ms, endMs = tonumber(g), tonumber(e)
+    local g, e, v = text:match('^([^|]*)|?([^|]*)|?(.*)$')
+    local ms, endMs, validMs = tonumber(g), tonumber(e), tonumber(v)
     if ms ~= Clock.greenMs then
       Clock.greenMs = ms
       ac.log('race-control: start of the race from the base: ' .. (ms and string.format('%.1f s of the session', ms / 1000) or 'not given'))
@@ -3555,9 +3576,14 @@ do
       Clock.endMs = endMs
       ac.log('race-control: end of the race from the base: ' .. (endMs and string.format('%.1f s of the session', endMs / 1000) or 'not given'))
     end
+    if validMs ~= Clock.validMs then
+      Clock.validMs = validMs
+      ac.log('race-control: valid start of the race from the base: ' .. (validMs and string.format('%.1f s of the session', validMs / 1000) or 'not given'))
+    end
   end
   B.clockOut = function()
     return string.format(',"now":%d', math.floor(serverTimeMs())) .. ((Clock.lightsMs and not Clock.greenMs) and string.format(',"go":%d', Clock.lightsMs) or '')
+      .. ((Clock.validAt and not Clock.validMs) and string.format(',"vs":%d', Clock.validAt) or '')
   end
   B.clockAsk = function() return Clock.text end
 end
@@ -3750,7 +3776,7 @@ do
   local SPIN_SETTLE = 1
   local function newInfo() return { crash = 0, cut = 0, spin = 0, pen = {} } end
   sessionPart('lap', Lap, function()
-    return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false }, last = SESSION_NONE, others = {},
+    return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false, form = false, closed = false }, last = SESSION_NONE, others = {},
       best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false, baseDone = false, baseBusy = false, baseTries = 0,
       ownBt = 0 }
   end, { 'splits' })
@@ -3777,10 +3803,10 @@ do
   Lap.readSplits = splits
   function Lap.valid(m)
     m = m or Lap.marks
-    return not (m.cut or m.overdue or m.fuel)
+    return not (m.cut or m.overdue or m.fuel or m.form or m.closed)
   end
   function Lap.invalidNow() return not Lap.valid(Lap.marks) end
-  local function why(m) return (m.cut and 'C' or '') .. (m.overdue and 'V' or '') .. (m.fuel and 'F' or '') end
+  local function why(m) return (m.cut and 'C' or '') .. (m.overdue and 'V' or '') .. (m.fuel and 'F' or '') .. (m.form and 'P' or '') .. (m.closed and 'S' or '') end
   Lap.why = why
   function Lap.mark(kind, text)
     if Lap.marks[kind] == nil then return end
@@ -3808,6 +3834,8 @@ do
     Lap.marks.cut = Lap.marks.cut or m:find('C') ~= nil
     Lap.marks.overdue = Lap.marks.overdue or m:find('V') ~= nil
     Lap.marks.fuel = Lap.marks.fuel or m:find('F') ~= nil
+    Lap.marks.form = Lap.marks.form or m:find('P') ~= nil
+    Lap.marks.closed = Lap.marks.closed or m:find('S') ~= nil
     if out == '1' then P.pit.started = true elseif out == '0' then P.pit.started = false end
     P.recDriver = tonumber(driver)
     ac.log(string.format('race-control: lap %d of the car taken back (%s, marks %s)', tonumber(n), P.open and ('open, start ' .. start) or 'no lap open',
@@ -3871,6 +3899,14 @@ do
     end
     if P.start then binsAlong(p0, p1, t0, t1, P.trace, P.start) end
   end
+  local function preMarks(car, opening)
+    local m = Lap.marks
+    if sim.raceSessionType == ac.SessionType.Race then
+      if opening and (Lap.number() == 0 or (Lap.formRunning ~= nil and Lap.formRunning())) then m.form = true end
+      if P.pit.left and (state.restart ~= nil or state.postRed == true) then m.form = true end
+    end
+    if Lap.trackClosed and Lap.trackClosed() then m.closed = true end
+  end
   local function close(car, t, viaPit)
     Lap.count = Lap.count + 1
     local ms = P.start and math.max(math.floor(t - P.start + 0.5), 0) or 0
@@ -3889,7 +3925,7 @@ do
     end
     local m = Lap.marks
     Lap.last = { lap = Lap.number(), ms = ms, s = s, valid = Lap.valid(m), why = why(m), pit = viaPit == true,
-      out = P.pit.started or P.pit.left, inLap = P.pit.entered or viaPit == true, crash = P.info.crash, cut = P.info.cut, spin = P.info.spin,
+      out = P.pit.started or P.pit.left, inLap = P.pit.entered or viaPit == true, outside = m.form or m.closed, crash = P.info.crash, cut = P.info.cut, spin = P.info.spin,
       pen = table.concat(P.info.pen, '/'), fuel = CarRead.num(car.fuel), t = t }
     local L = Lap.last
     if L.valid and ms > 0 and not P.broken and (Lap.best.ms == 0 or ms < Lap.best.ms) then
@@ -3902,9 +3938,10 @@ do
     end
     ac.log(string.format('race-control: line - lap %d %s %d ms%s%s%s', L.lap, L.valid and 'valid' or ('invalid ' .. L.why), ms,
       #s > 0 and (' sectors ' .. table.concat(s, '/')) or '', L.out and ' out lap' or '', L.inLap and ' in lap' or ''))
-    m.cut, m.overdue, m.fuel = false, false, false
+    m.cut, m.overdue, m.fuel, m.form, m.closed = false, false, false, false, false
     P.start, P.secT, P.broken, P.trace, P.info = t, {}, false, {}, newInfo()
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
+    preMarks(car, true)
     P.lineT = state.ui.clock
     Lap.save()
   end
@@ -3916,8 +3953,9 @@ do
   end
   local function open(car, t)
     P.open, P.start, P.secT, P.broken, P.trace, P.info = true, t, {}, false, {}, newInfo()
-    Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel = false, false, false
+    Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel, Lap.marks.form, Lap.marks.closed = false, false, false, false, false
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
+    preMarks(car, true)
     P.lineT = state.ui.clock
     ac.log(string.format('race-control: line - lap %d opened (no lap open before)', Lap.number() + 1))
     Lap.save()
@@ -3959,6 +3997,7 @@ do
     if not car.isInPitlane and P.pit.wasIn then P.pit.left = true end
     P.pit.wasIn = car.isInPitlane == true
     spinWatch(car)
+    if P.open then preMarks(car, false) end
     local closed = false
     if Lap.over then
       if crossT or gameLine then P.prog = crossT and math.max(sp, 0) or 0 end
@@ -4010,7 +4049,7 @@ do
     end
     return b
   end
-  local function otherKeep(i, n, best, sec, last, lastOk, lastSec, lastT, bestT)
+  local function otherKeep(i, n, best, sec, last, lastOk, lastSec, lastT, bestT, lastOut)
     local o = Lap.others[i]
     if not o then
       o = { n = 0, best = 0, last = 0, lastOk = false, s = {}, t = state.ui.clock }
@@ -4026,7 +4065,7 @@ do
       local k = 0
       for v in tostring(sec or ''):gmatch('%d+') do o.s[k], k = tonumber(v), k + 1 end
     end
-    if last > 0 and recent then o.last, o.lastOk = last, lastOk end
+    if last > 0 and recent then o.last, o.lastOk, o.lastOut = last, lastOk, lastOut or 0 end
     if recent and (lastT or 0) > 0 then o.ct = lastT end
     if recent and lastSec and lastSec ~= '' then
       local s, k = {}, 0
@@ -4045,10 +4084,11 @@ do
     lapSid = ac.StructItem.uint32(),
     lapLastSec = ac.StructItem.string(48),
     lapT = ac.StructItem.uint32(),
+    lapOut = ac.StructItem.uint8(),
   }, function(sender, msg)
     if not sender or sender.index == 0 or tonumber(msg.lapSid) ~= (Session.id or 0) then return end
     otherKeep(sender.index, tonumber(msg.lapN) or 0, tonumber(msg.lapBest) or 0, msg.lapSec, tonumber(msg.lapLast) or 0, tonumber(msg.lapOk) == 1, msg.lapLastSec,
-      tonumber(msg.lapT) or 0, 0)
+      tonumber(msg.lapT) or 0, 0, tonumber(msg.lapOut) or 0)
   end, nil, nil, { processPostponed = true })
   local BASE_TRIES = 3
   RecordSync.base.beat[#RecordSync.base.beat + 1] = function()
@@ -4069,7 +4109,8 @@ do
         local car = slotOf and slot and slot ~= mine and slotOf(slot) or nil
         if car and car.index ~= 0 then
           otherKeep(car.index, tonumber(c.laps) or 0, tonumber(c.best) or 0, type(c.bestS) == 'table' and table.concat(c.bestS, '/') or '',
-            tonumber(c.last) or 0, c.lastValid ~= false, type(c.lastS) == 'table' and table.concat(c.lastS, '/') or '', tonumber(c.cross) or 0, tonumber(c.bestT) or 0)
+            tonumber(c.last) or 0, c.lastValid ~= false, type(c.lastS) == 'table' and table.concat(c.lastS, '/') or '', tonumber(c.cross) or 0, tonumber(c.bestT) or 0,
+            tonumber(c.lastOut) or 0)
           if Broadcast and Broadcast.secBase then Broadcast.secBase(car.index, c.drv) end
           n = n + 1
         end
@@ -4093,17 +4134,18 @@ do
     for _, v in ipairs(Lap.last and Lap.last.s or {}) do lastParts[#lastParts + 1] = tostring(math.floor(v)) end
     local msg = { lapN = math.min(n, 65535), lapBest = math.floor(best), lapSec = table.concat(parts, '/'),
       lapLast = Lap.last and math.max(math.floor(Lap.last.ms or 0), 0) or 0, lapOk = Lap.last and Lap.last.valid and 1 or 0, lapSid = Session.id or 0,
-      lapLastSec = table.concat(lastParts, '/'), lapT = Lap.last and math.max(math.floor(Lap.last.t or 0), 0) or 0 }
+      lapLastSec = table.concat(lastParts, '/'), lapT = Lap.last and math.max(math.floor(Lap.last.t or 0), 0) or 0,
+      lapOut = Lap.last and (Lap.last.outside and 2 or Lap.last.out and 1 or 0) or 0 }
     if all.lap and Lap.last and all.lap.lap == Lap.last.lap and (Lap.last.t or 0) > 0 then Lap.ownBt = Lap.last.t end
     Lap.sentBest, Lap.sentT = { n = n, ms = best, lap = all.lap, msg = msg }, state.ui.clock
     OnlineQueue.push(sendLap, msg, nil, true)
   end
   function Lap.of(i)
     if i == 0 then return Lap.number(), Lap.ownBest and Lap.ownBest() or 0, Lap.last and Lap.last.ms or 0, Lap.last ~= nil and Lap.last.valid == true,
-      Lap.last and Lap.last.t or 0, Lap.ownBt or 0 end
+      Lap.last and Lap.last.t or 0, Lap.ownBt or 0, Lap.last and (Lap.last.outside and 2 or Lap.last.out and 1 or 0) or 0 end
     local o = Lap.others[i]
     if not o then return nil end
-    return o.n, o.best, o.last or 0, o.lastOk == true, o.ct or 0, o.bt or 0
+    return o.n, o.best, o.last or 0, o.lastOk == true, o.ct or 0, o.bt or 0, o.lastOut or 0
   end
   function Lap.sessionBest()
     local best = Lap.ownBest and Lap.ownBest() or 0
@@ -4852,6 +4894,7 @@ local function isPitClosed()
   if Session.beforeStart() then return true end
   return Clock.ms('raw') < closedSeconds * 1000
 end
+function Lap.trackClosed() return Session.beforeStart() or (sim.raceSessionType ~= ac.SessionType.Race and isPitClosed()) end
 local function isInZone(zone, p)
   if zone.startPos < zone.endPos then
     return p >= zone.startPos and p <= zone.endPos
@@ -8424,6 +8467,7 @@ do
     if kind ~= Flags.sentKind or (kind ~= INC.none and clock - Flags.sentT >= INC_RESEND) then
       if kind ~= Flags.sentKind then
         rcLog(TEXTS.rc.incident, kind == INC.none and 'cleared' or incNames[kind])
+        if kind == INC.spin then Audit.add('RC', TEXTS.bc.pipAl.spin, true, 'points') end
         if Flags.sentKind == INC.stopped and kind == INC.none then Flags.regained(0) end
       end
       Flags.sentKind, Flags.sentT = kind, clock
@@ -9058,7 +9102,7 @@ do
       end
       if sr.go and sr.sent == 'go' and clock - sr.goT > 3 then send('off') end
       if Flags.abortUntil then
-        if clock < Flags.abortUntil then
+        if clock < Flags.abortUntil or (Flags.formation and Flags.formation.abortLine) then
           send('abort')
           return
         end
@@ -9330,11 +9374,17 @@ do
   local FALLBACK_SECONDS = 20
   local PASS_SPLINE = 0.02
   local TRACK_EVENT = 'race-control.start'
+  local ABORT_TAIL_S = 5
   local sendT0 = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.start'),
     startMs = ac.StructItem.uint32(),
+    abortMs = ac.StructItem.uint32(),
   }, function(sender, msg)
     if not sender or sender.index == 0 then return end
+    if (tonumber(msg.abortMs) or 0) > 0 then
+      Formation.abortTold(tonumber(msg.abortMs))
+      return
+    end
     if (tonumber(msg.startMs) or 0) > 0 and Formation.phase == 'end' and not Formation.t0 then
       Formation.t0 = tonumber(msg.startMs)
       ac.log('race-control: standing start: lights at session time ' .. math.floor(Formation.t0) .. ' (from car ' .. sender.index .. ')')
@@ -9363,7 +9413,8 @@ do
       t0Sent = -1e9, firstAligned = SESSION_NONE, pitStart = false, missed = false, armed = false, goT = SESSION_NONE, gridAt = SESSION_NONE,
       leftGrid = false, speedWarn = SESSION_NONE, trackSent = SESSION_NONE, trackT = -1e9, logged = false, pitPass = false, spun = false, limitDone = false, late = {}, out = {},
       lineJump = false, lockT = SESSION_NONE, turnAt = {}, myTurnT = SESSION_NONE, fellBack = false,
-      boxed = false, placed = false, slot = {}, lastSlot = 0, boxLeave = false }
+      boxed = false, placed = false, slot = {}, lastSlot = 0, boxLeave = false,
+      gridSp = SESSION_NONE, abortLine = false, abortWay = false, abortTail = SESSION_NONE, abortBehind = SESSION_NONE, relightAt = SESSION_NONE, abortMs = SESSION_NONE }
   end)
   local function tag(i) return string.format('#%s', tostring(CarRead.number(i))) end
   local function lapLen() return tonumber(sim.trackLengthM) or 0 end
@@ -9380,6 +9431,63 @@ do
   local function moved(j)
     local r = CarsTick.byIndex[j]
     return r ~= nil and r.movedT ~= nil and Formation.lockT ~= nil and r.movedT >= Formation.lockT
+  end
+  function Formation.gridBack()
+    if Formation.gridSp ~= nil then return Formation.gridSp or nil end
+    local last = 0
+    for i = 0, (sim.carsCount or 1) - 1 do
+      local c = alive(i)
+      if c and CarRead.num(c.racePosition) > 0 and not CarRead.isStaff(i) then last = math.max(last, CarRead.gridPlace(i) or CarRead.num(c.racePosition)) end
+    end
+    local gb = last > 0 and (GridPlace.node(last))
+    Formation.gridSp = gb and CarRead.num(ac.worldCoordinateToTrackProgress(gb)) or false
+    return Formation.gridSp or nil
+  end
+  function Formation.stoppedCars(standing)
+    local r = rule()
+    local from = math.min(r.abortSpline, Formation.gridBack() or 1)
+    local out = nil
+    for i = 0, (sim.carsCount or 1) - 1 do
+      local c = alive(i)
+      if c and CarRead.num(c.racePosition) > 0 and not CarRead.isStaff(i) and not c.isInPitlane then
+        local sp = CarRead.num(c.splinePosition)
+        local held = standing and Formation.slot[i] and GridPlace.inside(c, Formation.slot[i])
+        if ((sp >= from or sp <= r.abortEndSpline) and Flags.stoppedOf(i) and not held) or (Formation.lockT and not moved(i)) then
+          out = out or {}
+          out[#out + 1] = i
+        end
+      end
+    end
+    return out
+  end
+  local function outOfGrid(list)
+    for _, i in ipairs(list) do
+      Formation.locked[i] = nil
+      if i == 0 then Formation.k = nil end
+      ac.log(string.format('race-control: formation lap: car %d stuck, out of the grid', i))
+      rcLog(rule().procedure == 'ROLLING' and TEXTS.rc.rollingStart or TEXTS.rc.standingStart, string.format('car %d stuck: start aborted, out of the grid', i))
+    end
+  end
+  function Formation.abortTold(ms)
+    if Formation.abortMs == ms or Formation.abortWay or Formation.relightAt then return end
+    Formation.abortMs = ms
+    if not Formation.on() or (Formation.phase ~= 'lap' and Formation.phase ~= 'end') then return end
+    local list = Formation.stoppedCars(rule().procedure == 'STANDING')
+    if rule().procedure == 'ROLLING' then
+      Formation.abort('car stopped or the field out of its order')
+      Formation.abortWay, Formation.abortLine, Formation.abortTail, Formation.abortBehind = true, true, nil, nil
+    else
+      Formation.relightAt = state.ui.clock + config.restart.abortSeconds
+      Flags.abortUntil = Formation.relightAt
+    end
+    if list then outOfGrid(list) end
+  end
+  local function abortSend(ms)
+    Formation.abortTold(ms)
+    OnlineQueue.push(sendT0, { startMs = 0, abortMs = math.floor(ms) }, nil)
+  end
+  function Formation.startGiven()
+    return Clock.greenMs ~= nil and (Clock.validMs ~= nil or not Formation.on())
   end
   local function firstConnected(inControl)
     local best, bi = math.huge, nil
@@ -9463,6 +9571,23 @@ do
     if not c then return true end
     local prev = p > 1 and at[p - 1] and alive(at[p - 1])
     return Flags.passAllowed(i, CarRead.num(c.speedKmh), prev and gapM(c, prev) or nil, r.slowFarKmh, r.slowFarM, r.passFarM, p == 1 and r.leaderSlowKmh or nil)
+  end
+  function Formation.fieldInverted()
+    local at = byPlace()
+    for i, p in pairs(Formation.locked) do
+      local a = alive(i)
+      if a and not a.isInPitlane and not passAllowed(i, p, at) then
+        for j, q in pairs(Formation.locked) do
+          local c = q > p and alive(j)
+          if c and not c.isInPitlane then
+            local d = CarRead.num(c.splinePosition) - CarRead.num(a.splinePosition)
+            if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
+            if d > 0 then return true end
+          end
+        end
+      end
+    end
+    return false
   end
   local function lineJump(text)
     if Formation.lineJump then return end
@@ -9568,6 +9693,14 @@ do
   end
   local function slotPos(k) return (GridPlace.node(k)) end
   local function dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
+  local function light(car)
+    Formation.lockT = state.ui.clock
+    Formation.leader = firstConnected()
+    Formation.prog, Formation.lastSp = 0, nil
+    Formation.gridAt = car.position and { x = car.position.x, z = car.position.z } or nil
+    Formation.leftGrid = Formation.gridAt == nil
+    Formation.myTurnT, Formation.turnAt, Formation.fellBack = nil, {}, false
+  end
   local function wait(car)
     local k = CarRead.gridPlace(0)
     if not Formation.boxed then
@@ -9603,6 +9736,14 @@ do
       end
     end
     if Formation.aligned and not state.restart then Lock.want('grid') else Lock.release('grid') end
+    if Formation.relightAt then
+      if clock >= Formation.relightAt then
+        Formation.relightAt = nil
+        Formation.abort('car stopped', true)
+        light(car)
+      end
+      return
+    end
     if Formation.t0 or state.restart then return end
     if firstConnected() == 0 then
       local all, any = true, false
@@ -9621,6 +9762,10 @@ do
       local now = serverTimeMs()
       local t0 = (all and any and now + T0_AFTER_ALL_MS)
         or (Formation.firstAligned and now >= Formation.firstAligned + r.alignSeconds * 1000 and now)
+      if t0 and Formation.stoppedCars(true) then
+        abortSend(now)
+        return
+      end
       if t0 then
         Formation.t0 = t0
         ac.log(string.format('race-control: standing start: lights at session time %d (%s)', math.floor(t0),
@@ -9638,7 +9783,7 @@ do
     rcLog(TEXTS.rc.standingStart, 'start given by the race direction')
     return true
   end
-  function Formation.abort(reason)
+  function Formation.abort(reason, quiet)
     if not Formation.on() or (Formation.phase ~= 'lap' and Formation.phase ~= 'end') then return false end
     Formation.t0, Formation.t0Sent, Formation.armed, Formation.goT = nil, -1e9, false, nil
     Formation.endT, Formation.aligned, Formation.firstAligned = nil, false, nil
@@ -9648,14 +9793,14 @@ do
     Formation.prog, Formation.lastSp = 0, nil
     Formation.phase = 'lap'
     state.restart = nil
-    Flags.abortUntil = state.ui.clock + config.restart.abortSeconds
-    ac.log('race-control: standing start aborted by the race direction: formation lap again')
-    rcLog(TEXTS.rc.standingStart, 'start aborted - formation lap again' .. (reason and reason ~= '' and (' - ' .. reason) or ''))
+    if not quiet then Flags.abortUntil = state.ui.clock + config.restart.abortSeconds end
+    ac.log('race-control: start aborted' .. ((reason and reason ~= '') and (' (' .. reason .. ')') or ' by the race direction') .. ': formation lap again')
+    rcLog(rule().procedure == 'ROLLING' and TEXTS.rc.rollingStart or TEXTS.rc.standingStart, 'start aborted - formation lap again' .. (reason and reason ~= '' and (' - ' .. reason) or ''))
     return true
   end
   local function trackTell()
     local ev = 'off'
-    if rule().procedure == 'ROLLING' and (Formation.phase == 'pre' or Formation.phase == 'lap') then ev = 'hold:rolling' end
+    if rule().procedure == 'ROLLING' and (Formation.phase == 'pre' or Formation.phase == 'lap') and not Formation.abortLine then ev = 'hold:rolling' end
     if Formation.goT and state.ui.clock - Formation.goT < config.flags.greenSeconds then ev = 'go' end
     if ev ~= Formation.trackSent or (ev ~= 'off' and state.ui.clock - Formation.trackT >= 2) then
       Formation.trackSent, Formation.trackT = ev, state.ui.clock
@@ -9683,7 +9828,7 @@ do
       wait(car)
       return
     end
-    local green = Clock.greenMs ~= nil
+    local green = Formation.startGiven()
     if Formation.phase == nil and green then
       Formation.phase = 'done'
       ac.log('race-control: formation lap: the start was given before this Racing Control started, no formation lap on this car')
@@ -9705,13 +9850,18 @@ do
         Formation.lastSlot = math.max(Formation.lastSlot, Formation.slot[x.i])
       end
       Formation.k = Formation.slot[0]
-      Formation.lockT = state.ui.clock
-      Formation.leader = firstConnected()
-      Formation.prog, Formation.lastSp = 0, nil
-      Formation.gridAt = car.position and { x = car.position.x, z = car.position.z } or nil
-      Formation.leftGrid = Formation.gridAt == nil
+      light(car)
       ac.log(string.format('race-control: formation lap (%s): order locked, place P%s', r.procedure, tostring(Formation.k)))
       rcLog(TEXTS.rc.formation, string.format('%s - place P%s', r.procedure, tostring(Formation.k)))
+    end
+    if Formation.abortBehind then
+      for j in pairs(Formation.abortBehind) do
+        local c = alive(j)
+        if not c or not Formation.locked[j] or c.isInPitlane or Flags.offField(j) or Formation.out[j] or CarRead.num(c.splinePosition) < 0.5 then Formation.abortBehind[j] = nil end
+      end
+      if next(Formation.abortBehind) == nil then Formation.abortBehind, Formation.abortTail = nil, state.ui.clock + ABORT_TAIL_S end
+    elseif Formation.abortTail and state.ui.clock >= Formation.abortTail then
+      Formation.abortLine, Formation.abortTail = false, nil
     end
     if Formation.phase == 'lap' then
       if not Formation.leftGrid and car.position and dist(car.position, Formation.gridAt) > ALIGNED_METERS then
@@ -9727,7 +9877,19 @@ do
         if Formation.lastSp then
           local d = sp - Formation.lastSp
           if d > 0.5 then d = d - 1 elseif d < -0.5 then d = d + 1 end
-          if d > 0 and Formation.lastSp > 0.9 and sp < 0.1 and Formation.prog >= 0.5 then crossed = true end
+          local line = d > 0 and Formation.lastSp > 0.9 and sp < 0.1
+          if line and Formation.prog >= 0.5 then crossed = true end
+          if line and Formation.abortWay then
+            Formation.abortWay, Formation.prog, Formation.abortBehind = false, 0, {}
+            for j in pairs(Formation.locked) do
+              local c = j ~= Formation.leader and alive(j)
+              if c and not c.isInPitlane and not Flags.offField(j) and not Formation.out[j] and CarRead.num(c.splinePosition) >= 0.5 then Formation.abortBehind[j] = true end
+            end
+          end
+          if r.procedure == 'ROLLING' and Formation.leader == 0 and Formation.prog >= 0.5 and sp >= r.abortSpline and sp < Start.GREEN_SPLINE
+              and (Formation.stoppedCars(false) or Formation.fieldInverted()) then
+            abortSend(serverTimeMs())
+          end
           if r.procedure == 'ROLLING' and d > 0 and sp >= Start.GREEN_SPLINE and Formation.prog >= 0.5 then crossed = true end
           Formation.prog = Formation.prog + math.max(d, 0)
         end
@@ -9737,6 +9899,7 @@ do
         Formation.phase = 'done'
         Formation.goT = state.ui.clock
         Flags.srGoUntil = state.ui.clock + config.flags.greenSeconds
+        if crossed then Clock.startValid(serverTimeMs()) end
         ac.log(string.format('race-control: rolling start: the leader at %.2f of the lap, green flag', sp or 0))
         rcLog(TEXTS.rc.rollingStart, 'green flag')
       elseif r.procedure == 'STANDING' and green then
@@ -9883,6 +10046,7 @@ do
   state.formationStart = Formation.startNow
   state.formationAbort = Formation.abort
   state.formationPitHeld = Formation.pitHeld
+  Lap.formRunning = Formation.running
 end
 local PassMirror = {}
 sessionPart('passMirror', PassMirror, function() return { seq = 0, loaded = 0, last = SESSION_NONE, red = SESSION_NONE } end)
@@ -10066,6 +10230,10 @@ do
     if a.laps ~= b.laps then return nil, math.max(a.laps - b.laps, 0) end
     if (a.ct or 0) > 0 and (b.ct or 0) > 0 then return (b.ct - a.ct) / 1000, 0 end
     return nil, nil
+  end
+  function Flags.stoppedOf(i)
+    local r = RaceTable.byIndex and RaceTable.byIndex[i]
+    return r ~= nil and r.stopped == true
   end
   function RaceTable.refresh()
     local session = ac.getSession(Session.index)
@@ -12468,7 +12636,6 @@ do
   local ZONE = { rgbm(0.12, 0.77, 0.23, 1), rgbm(1, 0.54, 0.11, 1), rgbm(0.88, 0.09, 0.09, 1) }
   K.FLAG = { yellow = rgbm(1, 0.83, 0, 1), white = rgbm(1, 1, 1, 1), blue = rgbm(0.11, 0.31, 0.85, 1) }
   K.FILL, K.DARK, K.LIGHT, K.TYRE = rgbm(0.04, 0.04, 0.05, 0.9), rgbm(0.04, 0.05, 0.06, 1), rgbm(1, 1, 1, 1), rgbm(0.04, 0.05, 0.06, 1)
-  K.OWN = rgbm(1, 0.85, 0.25, 0.18)
   local near, nearN = {}, 0
   local my = { p = vec3(), f = vec3(), rt = vec3(), w = 2, l = 4.6, ok = false }
   local img = { size = 0 }
@@ -12659,12 +12826,10 @@ do
     me.rw, me.rl = my.w, my.l
     local hw, hl = me.rw / 2, me.rl * K.LEN / 2
     H.body(me, hw, hl, cx, cy, m)
-    ui.pathFillConvex(K.OWN)
+    ui.pathStroke(PANEL_COLORS.yellow, true, 1.6 * s)
     for _, q in ipairs(K.TYRES) do
       for _, sd in ipairs({ -1, 1 }) do H.quad(me, sd * hw - 0.12 * hw, q[1] * hl, sd * hw + 0.12 * hw, q[2] * hl, K.TYRE, cx, cy, m) end
     end
-    H.body(me, hw, hl, cx, cy, m)
-    ui.pathStroke(PANEL_COLORS.yellow, true, 1.6 * s)
     Drag.icons('carradar', p1, p2, s)
   end
 end
@@ -13571,7 +13736,8 @@ local drawRaceScreens = (function()
     local first = math.max(1, math.min(mine - 4, #list - 9))
     local last = math.min(#list, first + 9)
     local p1, p2, y = frame('standings', w, h, s, last - first + 2, TEXTS.scrStandings, nil)
-    chips('standings', p1, p2, s)
+    local cx = chips('standings', p1, p2, s)
+    drawTextRight(Broadcast.standingsRight(), FONT_MONO, 11 * s, cx - 8 * s, p1.y + 5 * s, COLOR_TITLE)
     local H = TEXTS.hdr
     row(p1, y, s, { { H.pos, 32, COLOR_AXIS, true }, { H.classPos, 52, COLOR_AXIS, true }, { '#', 58, COLOR_AXIS },
       { H.driver, 88, COLOR_AXIS }, { H.class, 214, COLOR_AXIS }, { H.laps, 270, COLOR_AXIS, true },
@@ -15945,18 +16111,21 @@ float4 main(PS_IN pin) {
     local CR_ORDER = { 'hm', 'hps', 'hw', 'vm', 'vps', 'vw', 'rpn', 'rw', 'ipn', 'iw', 'fl', 'fls', 'cl', 'cls', 'fcop', 'tk', 'tks', 'tkop', 'lc', 'lcs', 'lcop', 'gr', 'grs',
       'grm', 'grps', 'grop', 'sg', 'scl', 'st', 'sts', 'sx', 'sxs', 'pm', 'ptw', 'ptws', 'pbx', 'pbxs', 'allop', 'secop', 'pitop', 'grw', 'im', 'ips', 'qb', 'qbs', 'rh',
       'pss', 'psc', 'psk', 'psd', 'pis', 'pic', 'pik', 'pid', 'pds', 'pdc', 'pps', 'ppc', 'pf', 'pq', 'pop', 'aa', 'atd', 'ati', 'atp', 'ad', 'of', 'ofs', 'dm',
-      'md', 'io', 'nl', 'dd', 'qbp', 'qbq', 'qbr', 'vsp', 'ft', 'ftp', 'ftq', 'ftr' }
+      'md', 'io', 'nl', 'dd', 'qbp', 'qbq', 'qbr', 'vsp', 'ft', 'ftp', 'ftq', 'ftr',
+      'fxs', 'cpm', 'cps', 'cpc', 'fgt', 'fgts', 'fgx', 'fgxs', 'fgop' }
     local CR_KEYS = { hm = 'move', hps = 'page', hw = 'wait', vm = 'move', vps = 'page', vw = 'wait', rpn = 'pins', rw = 'wait', ipn = 'pins', iw = 'wait', fl = 'bool',
       fls = 'page', cl = 'bool', cls = 'page', fcop = 'op', tk = 'bool', tks = 'page', tkop = 'op', lc = 'bool', lcs = 'page', lcop = 'op', gr = 'bool', grs = 'page',
       grm = 'move', grps = 'page', grop = 'op', sg = 'bool', scl = 'bool', st = 'bool', sts = 'page', sx = 'bool', sxs = 'page', pm = 'bool', ptw = 'bool', ptws = 'page',
       pbx = 'bool', pbxs = 'page', allop = 'op', secop = 'op', pitop = 'op', grw = 'wait', im = 'move', ips = 'page', qb = 'tri', qbs = 'wait', rh = 'wait',
       pss = 'set', psc = 'cam', psk = 'slot', psd = 'dur', pis = 'set', pic = 'cam', pik = 'slot', pid = 'dur', pds = 'set', pdc = 'cam', pps = 'set', ppc = 'cam',
       pf = 'fps', pq = 'qual', pop = 'op', aa = 'dest', atd = 'bool', ati = 'bool', atp = 'bool', ad = 'page', of = 'bool', ofs = 'wait', dm = 'qual',
-      md = 'one', io = 'bool', nl = 'bool', dd = 'one', qbp = 'bool', qbq = 'bool', qbr = 'bool', vsp = 'speed', ft = 'tri', ftp = 'bool', ftq = 'bool', ftr = 'bool' }
+      md = 'one', io = 'bool', nl = 'bool', dd = 'one', qbp = 'bool', qbq = 'bool', qbr = 'bool', vsp = 'speed', ft = 'tri', ftp = 'bool', ftq = 'bool', ftr = 'bool',
+      fxs = 'wait', cpm = 'dest', cps = 'set', cpc = 'cam', fgt = 'bool', fgts = 'page', fgx = 'bool', fgxs = 'page', fgop = 'op' }
     local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 75,
       tk = true, tks = 10, tkop = 75, lc = true, lcs = 12, lcop = 75, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 75, sg = true, scl = true, st = true, sts = 5,
       sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 90, secop = 75, pitop = 75, grw = 5, im = 'ROLL', ips = 8, qb = 1, qbs = 0, rh = 5,
       md = 0, io = true, nl = true, dd = 0, qbp = false, qbq = true, qbr = false, vsp = 60, ft = 0, ftp = false, ftq = false, ftr = false,
+      fxs = 0, cpm = 0, cps = -1, cpc = -1, fgt = true, fgts = 5, fgx = true, fgxs = 5, fgop = 75,
       pss = 0, psc = -1, psk = -1, psd = 0, pis = -2, pic = 0, pik = -1, pid = 0, pds = -1, pdc = 3, pps = 0, ppc = -1, pf = 15, pq = 1, pop = 75, aa = 2,
       atd = true, ati = true, atp = true, ad = 8, of = false, ofs = 30, dm = 0 }
     for k, v in pairs(CR_START) do
@@ -16182,10 +16351,16 @@ float4 main(PS_IN pin) {
       elseif a == 'SET' then
         local s = setOf(w[2])
         if not s then return false end
+        BC.opt.cpm, BC.opt.cps, BC.opt.cpc = 0, s.index, -1
+        if BC.wait.on then stateSave() return true end
         release()
         trackMode(s.index)
         BC.cam.mode, BC.cam.set, BC.cam.cam, BC.cam.free = 'set', s.index, nil, false
       elseif a == 'CAM' then
+        local s0 = setOf(w[2])
+        if not s0 then return false end
+        BC.opt.cpm, BC.opt.cps, BC.opt.cpc = 1, s0.index, math.max(math.floor(tonumber(w[3]) or 0), 0)
+        if BC.wait.on then stateSave() return true end
         if BC.cam.free then
           local s = setOf(w[2])
           local c = s and s.cams[(tonumber(w[3]) or -1) + 1]
@@ -16204,16 +16379,22 @@ float4 main(PS_IN pin) {
           elseif not putCam(w[2], w[3], 'cam') then return false end
         end
       elseif a == 'AUTO' then
+        BC.opt.cpm, BC.opt.cpc = 0, -1
+        if BC.wait.on then stateSave() return true end
         release()
         trackMode(BC.cam.set)
         BC.cam.mode, BC.cam.cam, BC.cam.free = 'set', nil, false
       elseif a == 'RANDOM' then
+        BC.opt.cpm, BC.opt.cpc = 2, -1
+        if BC.wait.on then stateSave() return true end
         release()
         trackMode(nil)
         AppLink.key(KEY_F2)
         BC.cam.mode, BC.cam.cam, BC.cam.free = 'random', nil, false
       elseif a == 'FREE' then
         local on = (w[2] or ''):upper() ~= 'OFF'
+        BC.opt.cpm = on and 3 or 0
+        if BC.wait.on then stateSave() return true end
         local pos, fwd, fov = ac.getCameraPosition():clone(), ac.getCameraForward():clone(), CarRead.num(ac.getCameraFOV())
         release()
         if on then
@@ -16258,7 +16439,11 @@ float4 main(PS_IN pin) {
         local m = (w[2] or ''):upper()
         if m == 'OFF' then
           BC.wait.on = false
-          if BC.cam.mode == 'wait' then release(); trackMode(BC.cam.set); BC.cam.mode = 'set' end
+          if BC.cam.mode == 'wait' or BC.cam.mode == 'waitset' then
+            local o = BC.opt
+            BC.command(o.cpm == 3 and 'FREE ON' or o.cpm == 2 and 'RANDOM' or (o.cpm == 1 and o.cps >= 0 and o.cpc >= 0) and string.format('CAM %d %d', o.cps, o.cpc)
+              or o.cps >= 0 and ('SET ' .. o.cps) or 'AUTO')
+          end
         elseif m == 'NAV' or m == 'FIX' then
           BC.wait.on, BC.wait.mode, BC.wait.set = true, m, tonumber(w[3])
           BC.wait.cam = m == 'FIX' and tonumber(w[4]) or nil
@@ -16429,7 +16614,8 @@ float4 main(PS_IN pin) {
       STRIP.mult, STRIP_INK.mult = 0.85 * (fade or 1), op * (fade or 1)
       if lightEven then TMP.chequered(x1, y1, x2, y2, cols, rows, STRIP_INK, STRIP) else TMP.chequered(x1, y1, x2, y2, cols, rows, STRIP, STRIP_INK) end
     end
-    local function flagBox(bx, by, k, fk, small)
+    local FLAG_NONE = rgbm(0, 0, 0, 1)
+    local function flagBox(bx, by, k, fk, small, sig)
       local bw, bh = (small and 24 or 32) * k, (small and 20 or 26) * k
       local fl = (small and 2 or 2.5) * k
       if fk == 'end' then
@@ -16438,9 +16624,10 @@ float4 main(PS_IN pin) {
         frame(bx, by, bx + bw, by + bh, CHK_LIGHT, fl)
         return
       end
-      local fc = fk == 'red' and FLAGC.red or (fk == 'yellow' or fk == 'code') and FLAGC.yellow or fk == 'white' and FLAGC.white or FLAGC.green
+      local fc = fk == 'none' and FLAG_NONE or fk == 'red' and FLAGC.red or (fk == 'yellow' or fk == 'code') and FLAGC.yellow or fk == 'white' and FLAGC.white or FLAGC.green
       rect(bx, by, bx + bw, by + bh, fk == 'code' and FLAGC.yellow or BOXBG)
       frame(bx, by, bx + bw, by + bh, fc, fl)
+      if sig then BC.flagSig(bx, by, bw, bh, k, fk, small, sig) end
     end
     local spacedCache = {}
     local function spaced(spec, px)
@@ -16545,17 +16732,34 @@ float4 main(PS_IN pin) {
       local T = TEXTS.bc
       if sessionOver() then return 'end', T.finished end
       if state.redFlag then return 'red', T.red end
-      if state.code80 then return 'code', state.code80 end
+      if Lap.trackClosed() then return 'red', T.closed end
+      if sim.raceSessionType == ac.SessionType.Race and Formation.on() and Clock.validMs == nil then
+        if BC.abortUp() then return 'code', T.yellow, 'FCY' end
+        if Clock.greenMs ~= nil or BC.formCrossed() then return 'none', T.formation end
+        return 'green', T.green
+      end
+      if state.restart then return 'red', T.red end
+      if state.code80 then return 'code', T.yellow, state.code80 == 'CODE-80' and 'FCY' or state.code80 end
       for i in pairs(Flags.incidents) do
         local _, flag, pos = Flags.incidentOf(i)
         if flag == 'yellow' and pos and not CarRead.isStaff(i) then
           local sec, sp = 1, Lap.splits or {}
           for k, v in ipairs(sp) do if pos >= v then sec = k + 1 end end
-          return 'yellow', string.format(T.yellowS, sec)
+          return 'yellow', T.yellow, 'S' .. sec
         end
       end
       if sim.raceSessionType == ac.SessionType.Race and (Flags.ending == 'lastLap' or Flags.ending == 'raceOver' or Flags.ending == 'finished') then return 'white', T.lastLap end
       return 'green', T.green
+    end
+    function Broadcast.standingsRight()
+      local H = TEXTS.hdr
+      local ss = ac.getSession(Session.index)
+      if ss and ss.type == ac.SessionType.Race and (ss.durationMinutes or 0) <= 0 and (ss.laps or 0) > 0 then
+        local lead = RaceTable.rows and RaceTable.rows[1]
+        return string.format('%s %d/%d', H.laps, math.max((lead and lead.laps or 0) - 1, 0), ss.laps)
+      end
+      local tot = Clock.ms('total', ss)
+      return H.time .. ' ' .. hms(Clock.ms()) .. (tot and (' / ' .. hms(tot)) or '')
     end
     local function sessionLine()
       local T = TEXTS.bc
@@ -16681,8 +16885,8 @@ float4 main(PS_IN pin) {
         if sim.raceSessionType == ac.SessionType.Race then return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-') end
         return (r.best > 0 and ahead.best > 0) and string.format('+%.3f', (r.best - ahead.best) / 1000) or '-'
       end
-      local _, _, ms, ok = Lap.of(r.index)
-      if (ms or 0) > 0 then return lapTime(ms), not ok end
+      local _, _, ms, ok, _, _, out = Lap.of(r.index)
+      if (ms or 0) > 0 and not (out == 2 or (out == 1 and sim.raceSessionType ~= ac.SessionType.Race)) then return lapTime(ms), not ok end
       return r.best > 0 and lapTime(r.best) or '-'
     end
     local function ringSize(sig, size, room)
@@ -16726,7 +16930,7 @@ float4 main(PS_IN pin) {
       drawText(nm, F.legend, 13 * k, TMP.a:set(x + 22 * k, ty), (place == 'ALL' or place == name) and PAPER or OFFW)
       return iw
     end
-    local function fixedOf(list, parts)
+    local function fixedPick(list, parts)
       local rows = RaceTable.rows or {}
       if not rows.anyLap then return nil end
       local shown = placeNow()
@@ -16741,6 +16945,13 @@ float4 main(PS_IN pin) {
       local L = cls and (parts and parts[shown] or list) or rows
       for n, r in ipairs(L) do if r == me then return me, L, n, cls end end
       return nil
+    end
+    local function fixedOf(list, parts)
+      if BC.opt.fix == 'NONE' then return nil end
+      local r, L, n, cls = fixedPick(list, parts)
+      if r and r.index ~= BC.fixIdx then BC.fixIdx, BC.fixAt = r.index, state.ui.clock end
+      if r and (BC.opt.fxs or 0) > 0 and state.ui.clock - (BC.fixAt or 0) >= BC.opt.fxs then return nil end
+      return r, L, n, cls
     end
     local ALT_PHASES = { 'LAST', 'GAP', 'POS' }
     local function timePhase()
@@ -16775,7 +16986,8 @@ float4 main(PS_IN pin) {
       local rs = ringSize(sig, 11 * k, 12 * k)
       drawText(sig, F.rb, rs, TMP.a:set(rx - textWidth(sig, F.rb, rs) / 2, ry - 7 * k * rs / (11 * k)), PAPER)
     end
-    local CR = { pen = {}, notes = { t = {}, b = {} }, seals = {}, nSeals = 0, res = { at = nil, rows = nil, pages = nil }, sn = { at = nil, secs = 6, sid = nil, pending = false } }
+    local CR = { pen = {}, notes = { t = {}, b = {} }, seals = {}, nSeals = 0, res = { at = nil, rows = nil, pages = nil }, sn = { at = nil, secs = 6, sid = nil, pending = false },
+      fg = { sid = nil, k = nil } }
     local SEAL_Y, SEAL_R, SEAL_K = rgbm(1, 212 / 255, 0, 1), rgbm(224 / 255, 23 / 255, 23 / 255, 1), rgbm(0, 0, 0, 1)
     local SAY_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.96)
     local ROLL = 0.45
@@ -16830,8 +17042,15 @@ float4 main(PS_IN pin) {
         if #q < 10 then q[#q + 1] = { kind = 'pen', idx = idx, b = Lang.letters.upper(b), sm = sm, col = col, t = nil } end
       end
     end
+    function CR.flagPush()
+      local sm = select(4, sessionLine()) or ''
+      for _, q in pairs(CR.notes) do
+        if #q < 10 then q[#q + 1] = { kind = 'flag', b = Lang.letters.upper(TEXTS.bc.flagGreen), sm = sm, col = FLAGC.green, t = nil } end
+      end
+    end
     function CR.noteOpt(q, kind)
       local o = BC.opt
+      if kind == 'flag' then if q == 't' then return o.fgt, o.fgts end return o.fgx, o.fgxs end
       if kind == 'pit' then if q == 't' then return o.ptw, o.ptws end return o.pbx, o.pbxs end
       if kind == 'sec' then if q == 't' then return o.st, o.sts end return o.sx, o.sxs end
       if q == 't' then return o.pt, o.pts end
@@ -16864,6 +17083,7 @@ float4 main(PS_IN pin) {
       if first then CR.secSid, CR.secKept = Session.id, {} end
       local T = TEXTS.bc
       local multi = #RaceTable.classKeys() > 1
+      local cars = {}
       for key, s in pairs(sec) do
         local was = CR.secKept[key]
         CR.secKept[key] = s.ms
@@ -16881,12 +17101,33 @@ float4 main(PS_IN pin) {
           local useAll, useCls = all and BC.opt.sg, mine and BC.opt.scl
           local idx = (useAll or useCls) and slotCar(s.slot)
           if idx then
-            local tag = useAll and useCls and (T.resAll .. ' · ' .. (classStyle(cls))) or useAll and T.resAll or (classStyle(cls))
-            local b = Lang.letters.upper(string.format(T.secK, q) .. ' · ' .. (s.ms < 60000 and secs(s.ms) or lapTime(s.ms)))
-            for _, qq in pairs(CR.notes) do
-              if #qq < 10 then qq[#qq + 1] = { kind = 'sec', idx = idx, b = b, sm = T.secFast .. ' · ' .. tag, col = PURPLE, wet = s.wet, t = nil } end
-            end
+            local c = cars[idx] or { best = {}, wet = false }
+            cars[idx] = c
+            c.best[tonumber(q)] = s.ms
+            c.wet = c.wet or s.wet
           end
+        end
+      end
+      for idx, c in pairs(cars) do CR.secPush(idx, c.best, c.wet) end
+    end
+    function CR.secPush(idx, best, wet)
+      local T = TEXTS.bc
+      local n, _, ms = Lap.of(idx)
+      local o = Lap.others[idx]
+      local ls = o and o.lastS or {}
+      local parts, txt = {}, {}
+      for q = 1, #Lap.readSplits() + 1 do
+        local v = ls[q - 1] or best[q]
+        if v and v > 0 then
+          if #parts > 0 then parts[#parts + 1] = { ' · ', PAPER } end
+          parts[#parts + 1] = { 'S' .. q .. ' ' .. (v < 60000 and secs(v) or lapTime(v)), best[q] and PURPLE or PAPER }
+        end
+      end
+      for _, pp in ipairs(parts) do txt[#txt + 1] = pp[1] end
+      for _, qq in pairs(CR.notes) do
+        if #qq < 9 then
+          qq[#qq + 1] = { kind = 'sec', idx = idx, b = table.concat(txt), parts = parts, sm = string.format(T.secLapS, n or 0), col = PURPLE, wet = wet, t = nil }
+          if (ms or 0) > 0 then qq[#qq + 1] = { kind = 'sec', idx = idx, b = Lang.letters.upper(TEXTS.hdr.lap .. ' ' .. lapTime(ms)), sm = string.format(T.secLapT, n or 0), col = PURPLE, t = nil } end
         end
       end
     end
@@ -16936,7 +17177,7 @@ float4 main(PS_IN pin) {
               st.done[st.q] = secMark(Q, key, st.q, now - st.t0)
               st.at = state.ui.clock
             end
-            if q == 1 then st.prev, st.done = st.done, {} elseif q == 2 then st.prev = nil end
+            if q == 1 then st.prev, st.done = nil, {} end
             if q == 1 then st.out, st.lap0 = nil, now end
             st.t0 = now
           else
@@ -17004,7 +17245,7 @@ float4 main(PS_IN pin) {
         local c = ac.getCar(idx)
         local e = c and all and all[c.sessionID]
         if e then
-          local mf = CarRead.num(c.maxFuel)
+          local mf = CarRead.tankOf(idx)
           local sum, n = 0, 0
           for i = 0, 3 do
             local l = CarRead.tyreLifeOf(idx, e.compound, i, e.km[i + 1] or 0)
@@ -17152,6 +17393,17 @@ float4 main(PS_IN pin) {
       ui.drawCircleFilled(TMP.a:set(x + sw / 2, cy), (small and 4 or 5.5) * k, MB_ORANGE, 20)
       return sw
     end
+    function CR.chkOf(r)
+      local _, endAt = sessionOver()
+      return endAt ~= nil and (r.ct or 0) >= endAt
+    end
+    function CR.chkSeal(x, cy, k, small)
+      local sw, hh, fl = CR.mbW(k, small), (small and 7 or 10) * k, (small and 1 or 1.5) * k
+      local e = fl / 2
+      chk(x + e, cy - hh + e, x + sw - e, cy + hh - e, 6, 4, BAR.mult, 1, false)
+      frame(x, cy - hh, x + sw, cy + hh, CHK_LIGHT, fl)
+      return sw
+    end
     local function code2(p) return p.kind == 'y' and 'DT' or p.kind == 'r' and 'SG' or 'DQ' end
     function CR.seal2W(p, k) return math.max(16 * k, textWidth(code2(p), F.rb, 10 * k) + 6 * k) end
     function CR.seal2(x, cy, k, p)
@@ -17207,11 +17459,30 @@ float4 main(PS_IN pin) {
       return string.format('%02d:%02d', math.floor(s / 60), s % 60)
     end
     function CR.anyOnTrack()
+      if CR.leftSid == Session.id then return true end
       for _, r in ipairs(RaceTable.rows or {}) do
-        if not r.absent and r.connected and not r.inPit then return true end
+        if not r.absent and r.connected and (not r.inPit or (r.laps or 0) > 0) then
+          CR.leftSid = Session.id
+          return true
+        end
       end
       return false
     end
+    function BC.formCrossed()
+      local sid = Session.id
+      if BC.fx == sid then return true end
+      local open = RecordSync.base.dirPen.open or {}
+      local any = false
+      for _, r in ipairs(RaceTable.rows or {}) do
+        if not r.absent and r.connected and not r.inPit and not CarRead.isStaff(r.index) and not Flags.offField(r.index) then
+          if r.pending == nil and not open[r.slot] then return false end
+          any = true
+        end
+      end
+      if any then BC.fx = sid end
+      return any
+    end
+    function BC.abortUp() return Formation.abortMs ~= nil and CR.sn.ab == Formation.abortMs and CR.sn.abN ~= true end
     function CR.hideList()
       return BC.opt.dd == 1 or CR.preOpen() or (BC.opt.nl == false and not CR.anyOnTrack())
     end
@@ -17231,6 +17502,10 @@ float4 main(PS_IN pin) {
     end
     CR.MID_B, CR.MID_R = 0.65, 0.6085
     function CR.midTop(cy, size, r) return cy - math.max(size, Desktop.text.minPx) * r end
+    function BC.flagSig(bx, by, bw, bh, k, fk, small, sig)
+      local fs = (small and 9 or 12) * k
+      drawText(sig, F.rb, fs, TMP.a:set(bx + bw / 2 - textWidth(sig, F.rb, fs) / 2, CR.midTop(by + bh / 2, fs, CR.MID_R)), fk == 'code' and LT_INK or FLAGC.yellow)
+    end
     function CR.callText(call, cx, cy, k, small)
       local s = call == 'in' and TEXTS.bc.callIn or TEXTS.bc.callOut
       local fs = (small and 11 or 14) * k
@@ -17255,37 +17530,65 @@ float4 main(PS_IN pin) {
       end
       return nil
     end
-    function CR.noteOp(n) return opOf(n.kind == 'sec' and BC.opt.secop or n.kind == 'pit' and BC.opt.pitop or 100, 100) end
+    function CR.noteOp(n) return opOf(n.kind == 'sec' and BC.opt.secop or n.kind == 'pit' and BC.opt.pitop or n.kind == 'flag' and BC.opt.fgop or 100, 100) end
+    function CR.flagUp(q) local n = CR.noteNow(q) return n ~= nil and n.kind == 'flag' end
+    function CR.flagTower(k)
+      local n, secs = CR.noteNow('t')
+      if n and n.kind == 'flag' and CR.fgX then CR.say(CR.fgX + 6 * k, CR.fgY, CR.fgH, k, n, CR.roll(n, secs)) end
+    end
     function CR.roll(n, secs)
       local d = state.ui.clock - n.t
       return math.min(math.max(math.min(d / ROLL, (secs + 2 * ROLL - d) / ROLL), 0), 1)
     end
-    function CR.sayW(n, k)
-      return math.max(textWidth(n.b, F.sayB, 15 * k) + (n.wet and 26 * k or 0), n.sm ~= '' and textWidth(n.sm, F.saySm, 13 * k) or 0) + 28 * k
+    function CR.saySizes(n, hh, k)
+      if n.kind ~= 'sec' then return 15, 13 end
+      if hh < 30 * k then return 11, 9 end
+      return 14, 12
+    end
+    function CR.sayW(n, k, hh)
+      local fb, fs = CR.saySizes(n, hh or 40 * k, k)
+      return math.max(textWidth(n.b, F.sayB, fb * k) + (n.wet and (fb + 11) * k or 0), n.sm ~= '' and textWidth(n.sm, F.saySm, fs * k) or 0) + 28 * k
     end
     function CR.say(x, y, hh, k, n, out)
       if out <= 0 then return end
-      local ww = CR.sayW(n, k)
+      local fb, fs = CR.saySizes(n, hh, k)
+      local ww = CR.sayW(n, k, hh)
       ui.pushClipRect(CR.va:set(x, y), CR.vb:set(x + ww * out, y + hh), true)
       SAY_BG.mult = 0.96 * CR.noteOp(n)
       rect(x, y, x + ww, y + hh, SAY_BG)
       rect(x, y, x + 4 * k, y + hh, n.col)
       local mid = y + hh / 2
-      drawText(n.b, F.sayB, 15 * k, TMP.a:set(x + 16 * k, mid - (n.sm ~= '' and 17 or 9) * k), PAPER)
-      if n.wet then
-        local ix, iy = x + 16 * k + textWidth(n.b, F.sayB, 15 * k) + 8 * k, mid - (n.sm ~= '' and 16 or 8) * k
-        ui.drawIcon(ui.Icons.WeatherRain, TMP.a:set(ix, iy), TMP.b:set(ix + 18 * k, iy + 16 * k), PAPER)
+      local t1, t2
+      if n.kind ~= 'sec' then t1, t2 = mid - (n.sm ~= '' and 17 or 9) * k, mid + k
+      elseif n.sm == '' then t1 = CR.midTop(mid, fb * k, CR.MID_B)
+      else
+        local d = (fb + 3) * k
+        t1 = mid - (0.3 * fb * k + d + fs * k) / 2
+        t2 = t1 + d
       end
-      if n.sm ~= '' then drawText(n.sm, F.saySm, 13 * k, TMP.a:set(x + 16 * k, mid + k), DIMW) end
+      if n.parts then
+        local px = x + 16 * k
+        for _, pp in ipairs(n.parts) do
+          drawText(pp[1], F.sayB, fb * k, TMP.a:set(px, t1), pp[2])
+          px = px + textWidth(pp[1], F.sayB, fb * k)
+        end
+      else
+        drawText(n.b, F.sayB, fb * k, TMP.a:set(x + 16 * k, t1), PAPER)
+      end
+      if n.wet then
+        local ix, iy = x + 16 * k + textWidth(n.b, F.sayB, fb * k) + 8 * k, t1 + k
+        ui.drawIcon(ui.Icons.WeatherRain, TMP.a:set(ix, iy), TMP.b:set(ix + (fb + 3) * k, iy + (fb + 1) * k), PAPER)
+      end
+      if n.sm ~= '' then drawText(n.sm, F.saySm, fs * k, TMP.a:set(x + 16 * k, t2), DIMW) end
       ui.popClipRect()
     end
-    function CR.towerSeal(x, y, idx, p, r, small)
+    function CR.towerSeal(x, y, idx, p, r, small, fin)
       local o = BC.opt
-      if not (o.pb or o.pt or o.pm or o.ptw or o.st or sim.raceSessionType == ac.SessionType.Qualify or CR.secOn() or CR.ftOn()) then return end
+      if not fin and not (o.pb or o.pt or o.pm or o.ptw or o.st or sim.raceSessionType == ac.SessionType.Qualify or CR.secOn() or CR.ftOn()) then return end
       CR.nSeals = CR.nSeals + 1
       local e = CR.seals[CR.nSeals] or {}
       CR.seals[CR.nSeals] = e
-      e.x, e.y, e.idx, e.p, e.r, e.small = x, y, idx, p, r, small
+      e.x, e.y, e.idx, e.p, e.r, e.small, e.fin = x, y, idx, p, r, small, fin
       e.f, e.lo, e.hi = CR.fadeNow, CR.fadeLo, CR.fadeHi
     end
     function CR.towerSealsDraw(x2, ly1, ly2, k)
@@ -17296,6 +17599,7 @@ float4 main(PS_IN pin) {
         ui.pushClipRect(CR.va:set(x2, s.lo or ly1), CR.vb:set(x2 + 900 * k, s.hi or ly2), true)
         ui.pushStyleVar(ui.StyleVar.Alpha, s.f)
         if n and n.idx == s.idx then CR.say(s.x, s.y, (s.small and 26 or 42) * k, k, n, CR.roll(n, secs))
+        elseif s.fin then CR.chkSeal(s.x, s.y + (s.small and 13 or 21) * k, k, s.small)
         else
           local mx, gap = s.x, (s.small and 3 or 6) * k
           local cy = s.y + (s.small and 13 or 21) * k
@@ -17382,6 +17686,7 @@ float4 main(PS_IN pin) {
       local hh = 40 * k
       local y2 = by1 - k
       local y1 = y2 - hh
+      if n.kind == 'flag' then CR.say(0, y1, hh, k, n, out) return end
       local p = r and tostring(r.pos or '') or ''
       local num = '#' .. tostring(r and r.number or CarRead.number(n.idx) or '')
       local nm = r and nameOf(r) or ''
@@ -18241,6 +18546,13 @@ float4 main(PS_IN pin) {
     function CR.turn()
       local sid = Session.id
       if not sid then return end
+      local fk = flagNow()
+      if fk == 'yellow' then fk = 'green' end
+      if CR.fg.sid ~= sid then CR.fg.sid, CR.fg.k = sid, fk
+      elseif CR.fg.k ~= fk then
+        if fk == 'green' then CR.flagPush() end
+        CR.fg.k = fk
+      end
       if sid == CR.sn.sid and CR.sn.cool ~= sid and sim.raceSessionType == ac.SessionType.Race and sessionOver() then
         CR.sn.cool = sid
         if BC.opt.cl then BC.snameShow(BC.opt.cls, 'cool') end
@@ -18248,6 +18560,20 @@ float4 main(PS_IN pin) {
       if sid == CR.sn.sid and CR.sn.form ~= sid and Session.ready and Formation.on() and not Session.beforeStart() and Clock.greenMs == nil then
         CR.sn.form = sid
         if BC.opt.fl then BC.snameShow(BC.opt.fls, 'form') end
+      end
+      local ab = Formation.abortMs
+      if ab and CR.sn.ab ~= ab then
+        CR.sn.ab, CR.sn.abN = ab, nil
+        if BC.opt.fl then BC.snameShow(BC.opt.fls, 'abort') end
+      end
+      if CR.sn.ab and CR.sn.abN ~= true then
+        local L = RaceTable.rows and RaceTable.rows[1]
+        local ln = L and (Lap.of(L.index)) or 0
+        if CR.sn.abN == nil then CR.sn.abN = ln
+        elseif CR.sn.abN ~= ln then
+          CR.sn.abN = true
+          if BC.opt.fl then BC.snameShow(BC.opt.fls, 'form') end
+        end
       end
       if sid == CR.sn.sid then return end
       local first = CR.sn.sid == nil
@@ -18262,7 +18588,7 @@ float4 main(PS_IN pin) {
       if S.want then
         local D = RecordSync.base.dirPen
         if D.pit ~= S.pitRef then S.pitRef, S.pitLeft = D.pit, S.pitLeft - 1 end
-        if S.kind == 'cool' or (S.pitLeft <= 0 and RecordSync.base.forecast.done) then
+        if S.kind == 'cool' or (Session.ready and S.pitLeft <= 0 and RecordSync.base.forecast.done) then
           S.want, S.at = nil, state.ui.clock
           local T = TEXTS.bc
           local _, _, _, sname, total = sessionLine()
@@ -18271,8 +18597,8 @@ float4 main(PS_IN pin) {
           local st, gr = Flags.formation.raceText((tonumber(config.eventRaces) or 1) > 1 and (config.raceNo or 1) or 1)
           local proc = isRace and (st .. ' · ' .. gr) or nil
           local cool = S.kind == 'cool'
-          S.line = Lang.letters.upper(cool and sname or ((S.kind == 'form' and (sname .. ' · ') or '') .. total .. (proc and (' · ' .. proc) or '')))
-          S.big = Lang.letters.upper(S.kind == 'form' and TEXTS.fmTitle or cool and T.coolDown or sname)
+          S.line = Lang.letters.upper(cool and sname or ((S.kind == 'form' and (sname .. ' · ') or S.kind == 'abort' and (T.newForm .. ' · ' .. sname .. ' · ') or '') .. total .. (proc and (' · ' .. proc) or '')))
+          S.big = Lang.letters.upper(S.kind == 'form' and TEXTS.fmTitle or S.kind == 'abort' and T.startAborted or cool and T.coolDown or sname)
           S.kk = Lang.letters.upper(tostring((BroadcastEvent.ev or {}).name or T.snK))
           local fc = Weather.forecast or RecordSync.base.forecast.list or {}
           local segs = #fc > 0 and Radar.textSegments(fc) or {}
@@ -18391,14 +18717,16 @@ float4 main(PS_IN pin) {
       local G = 9 * k + textWidth('0', F.name, 19 * k) / 5
       local ltw = math.max(84 * k, textWidth('0:00.000', F.rb, 17 * k) + 18 * k)
       local cls = multi and r.class
-      local pen = BC.opt.pb and CR.penOf(r.index) or nil
+      local fin = ended and CR.chkOf(r)
+      local pen = not fin and BC.opt.pb and CR.penOf(r.index) or nil
       local penW = (pen and not tw) and (CR.sealW(pen, k) + 9 * k) or 0
-      local rep = BC.opt.pb and CR.repOf(r.index)
+      local rep = not fin and BC.opt.pb and CR.repOf(r.index)
       local repW = (rep and not tw) and (CR.mbW(k) + 9 * k) or 0
-      local qbW = (not tw and CR.qualiShown(r.index)) and (CR.qualiW(k) + 9 * k) or 0
-      local ftW = (not tw and CR.ftOn()) and (CR.ftW(k) + 9 * k) or 0
+      local qbW = (not tw and not fin and CR.qualiShown(r.index)) and (CR.qualiW(k) + 9 * k) or 0
+      local ftW = (not tw and not fin and CR.ftOn()) and (CR.ftW(k) + 9 * k) or 0
+      local finW = (fin and not tw) and (CR.mbW(k) + 9 * k) or 0
       local markW = (BC.opt.pm and not tw) and (CR.marksW(k) + G) or 0
-      local W = tw or (14 * k + pw + G + nw + G + namew + (teamw > 0 and (G + teamw) or 0) + markW + G + 20 * k + G + ltw + (multi and 4.4 * k or 0) + 16 * k + qbW + ftW + penW + repW)
+      local W = tw or (14 * k + pw + G + nw + G + namew + (teamw > 0 and (G + teamw) or 0) + markW + G + 20 * k + G + ltw + (multi and 4.4 * k or 0) + 16 * k + qbW + ftW + penW + repW + finW)
       if measure then return x + W end
       local y2 = y1 + (tw and 42 or 44) * k
       if sel then
@@ -18436,7 +18764,7 @@ float4 main(PS_IN pin) {
           cx = cx + teamw + G
         end
         if markW > 0 then
-          CR.marks(cx, y1 + 22 * k, k, r, false)
+          if not fin then CR.marks(cx, y1 + 22 * k, k, r, false) end
           cx = cx + markW
         end
       end
@@ -18481,7 +18809,8 @@ float4 main(PS_IN pin) {
         sx = sx + penW
       end
       if rep and not tw then CR.mbSeal(sx, y1 + 22 * k, k) end
-      if tw then CR.towerSeal(x + W + 6 * k, y1, r.index, pen, r) end
+      if fin and not tw then CR.chkSeal(sx, y1 + 22 * k, k) end
+      if tw then CR.towerSeal(x + W + 6 * k, y1, r.index, pen, r, nil, fin) end
       if tw then rect(x, y1, x + W, y1 + k, HAIR) else vline(x + W, y1, y2, HAIR, k) end
       return x + W
     end
@@ -18614,7 +18943,7 @@ float4 main(PS_IN pin) {
     end
     local function towerDraw(h, k, id)
       local x1, x2, ty1, ty2 = 44 * k, 416 * k, 104 * k, h - 60 * k
-      local fk, ft = flagNow()
+      local fk, ft, fsig = flagNow()
       local onlyBox = BC.opt.flag == 'AUTO'
       local hide, pre = CR.hideList(), CR.preOpen()
       if hide then ty2 = ty1 + 56 * k + (pre and 32 * k or 0) + (onlyBox and 0 or 42 * k) + 20 * k end
@@ -18660,7 +18989,8 @@ float4 main(PS_IN pin) {
       end
       ui.popClipRect()
       local y = ty1 + 56 * k
-      if onlyBox then flagBox(x2 - 54 * k, ty1 + 15 * k, k, fk) end
+      CR.fgX, CR.fgY, CR.fgH = x2, ty1, 56 * k
+      if onlyBox then flagBox(x2 - 54 * k, ty1 + 15 * k, k, fk, nil, fsig) end
       if pre then
         rect(x1, y, x2, y + k, HAIR)
         CR.pitClosed(x1 + 22 * k, y + 16 * k, k)
@@ -18668,8 +18998,9 @@ float4 main(PS_IN pin) {
       end
       if not onlyBox then
         rect(x1, y, x2, y + k, HAIR)
-        flagBox(x1 + 22 * k, y + 8 * k, k, fk)
+        flagBox(x1 + 22 * k, y + 8 * k, k, fk, nil, fsig)
         drawText(Lang.letters.upper(ft), F.flag, 15 * k, TMP.a:set(x1 + 64 * k, y + 11 * k), PAPER)
+        CR.fgY, CR.fgH = y, 42 * k
         y = y + 42 * k
       end
       if hide then
@@ -18744,11 +19075,11 @@ float4 main(PS_IN pin) {
     local function dots(x, cy, n, on, k)
       for i = 1, n do ui.drawCircleFilled(TMP.a:set(x + 3 * k + (i - 1) * 10 * k, cy), 3 * k, i == on and PAPER or DOT_OFF, 12) end
     end
-    local function cardRow()
+    local function cardRow(q)
       local fc = sim.focusedCar
       if BC.cardCar ~= fc then BC.cardCar, BC.cardAt = fc, state.ui.clock end
       local m = BC.opt.card or 'AUTO'
-      if m == 'OFF' or fc == nil or fc < 0 or CarRead.isStaff(fc) then return nil end
+      if m == 'OFF' or fc == nil or fc < 0 or CarRead.isStaff(fc) or CR.hideList() or CR.flagUp(q) then return nil end
       if m == 'AUTO' and state.ui.clock - (BC.cardAt or 0) >= (BC.opt.cards or 10) then return nil end
       for _, r in ipairs(RaceTable.rows or {}) do if r.index == fc and not r.absent then return r end end
       return nil
@@ -18765,8 +19096,9 @@ float4 main(PS_IN pin) {
     local function cardData(r, multi)
       local T = TEXTS.bc
       local n = 0
-      local _, _, last, lastOk = Lap.of(r.index)
+      local _, _, last, lastOk, _, _, out = Lap.of(r.index)
       last = last or 0
+      if out == 2 or (out == 1 and sim.raceSessionType ~= ac.SessionType.Race) then last = 0 end
       if last > 0 or (r.best or 0) > 0 then
         n = n + 1
         local p = cardPages[n]
@@ -18843,7 +19175,7 @@ float4 main(PS_IN pin) {
       CW.pages = math.max(CW.pages, pT, pF, pC)
     end
     local function cardH(h, k, multi)
-      local r = cardRow()
+      local r = cardRow('b')
       if not r then return end
       cardMeasure(k, multi)
       local n = cardData(r, multi)
@@ -18893,7 +19225,7 @@ float4 main(PS_IN pin) {
       dots(x + 18 * k + CW.pages + 18 * k + 14 * k, y1 + 22.5 * k, n, on, k)
     end
     local function cardV(k, multi)
-      local r = cardRow()
+      local r = cardRow('t')
       if not r then return end
       local n = cardData(r, multi)
       local on = pageNow(n)
@@ -19185,7 +19517,8 @@ float4 main(PS_IN pin) {
         end
         if r.index == BC.fastIdx then fastBadge(x2 - 1.5 * k, y1 + 0.7 * k, 0.7 * k) end
       end
-      local function sealsR(x, cy, k, r, pen, rep, measure)
+      local function sealsR(x, cy, k, r, pen, rep, measure, fin)
+        if fin then return measure and CR.mbW(k, true) or CR.chkSeal(x, cy, k, true) end
         local w = 0
         if pen then w = w + (measure and CR.seal2W(pen, k) or CR.seal2(x + w, cy, k, pen)) + 3 * k end
         if rep then w = w + (measure and CR.mbW(k, true) or CR.mbSeal(x + w, cy, k, true)) + 3 * k end
@@ -19196,10 +19529,12 @@ float4 main(PS_IN pin) {
         return w > 0 and w - 3 * k or 0
       end
       local function itemR(x, y1, k, r, list, i, multi, sel, phaseGap, ended, measure, tw, byClass)
+        y1 = math.floor(y1 + 0.5)
         local pos = r.absent and '' or ((byClass == nil and placeNow() ~= 'ALL' or byClass) and (r.classPos or i) or (r.pos or i))
         local G = 6 * k
-        local pen = BC.opt.pb and CR.penOf(r.index) or nil
-        local rep = BC.opt.pb and CR.repOf(r.index)
+        local fin = ended and CR.chkOf(r)
+        local pen = not fin and BC.opt.pb and CR.penOf(r.index) or nil
+        local rep = not fin and BC.opt.pb and CR.repOf(r.index)
         local p = tostring(pos)
         if tw then
           if measure then return x + tw end
@@ -19218,13 +19553,13 @@ float4 main(PS_IN pin) {
           drawText(t3Of(r), F.team, 10 * k, TMP.a:set(tx, CR.midTop(cy, 10 * k, CR.MID_B)), DIMW)
           ringR(bx - G - 7 * k, cy, k, BroadcastAlerts.tyreOf[r.index])
           boxR(bx, cy, k, r, list, i, multi, sel, phaseGap, ended, byClass)
-          CR.towerSeal(x + tw + 6 * k, y1, r.index, pen, r, true)
+          CR.towerSeal(x + tw + 6 * k, y1, r.index, pen, r, true, fin)
           rect(x, y1, x + tw, y1 + k, HAIR)
           return x + tw
         end
-        local qb = CR.qualiShown(r.index)
-        local ft = CR.ftOn()
-        local sealW = sealsR(0, 0, k, r, pen, rep, true)
+        local qb = not fin and CR.qualiShown(r.index)
+        local ft = not fin and CR.ftOn()
+        local sealW = sealsR(0, 0, k, r, pen, rep, true, fin)
         local W = 8 * k + 16 * k + G + slotW(k) + G + RS.n3w + G + RS.t3w + G + 14 * k + G + 68 * k + (qb and (G + CR.qualiW(k, true)) or 0) + (ft and (G + CR.ftW(k, true)) or 0) + (sealW > 0 and (G + sealW) or 0) + 10 * k
         if measure then return x + W end
         local y2, cy = y1 + 30 * k, y1 + 15 * k
@@ -19252,7 +19587,7 @@ float4 main(PS_IN pin) {
           CR.ftBox(cx + G, cy, k, r.index, true)
           cx = cx + G + CR.ftW(k, true)
         end
-        if sealW > 0 then sealsR(cx + G, cy, k, r, pen, rep, false) end
+        if sealW > 0 then sealsR(cx + G, cy, k, r, pen, rep, false, fin) end
         vline(x + W, y1, y2, HAIR, k)
         return x + W
       end
@@ -19296,7 +19631,7 @@ float4 main(PS_IN pin) {
         return Lang.letters.upper((classStyle(pg.cls))), nil, T.classPos, pg.v2
       end
       local function cardHR(h, k, multi)
-        local r = cardRow()
+        local r = cardRow('b')
         if not r then return end
         local T = TEXTS.bc
         local n = cardData(r, multi)
@@ -19347,7 +19682,7 @@ float4 main(PS_IN pin) {
         dotsR(xv + 14 * k + pw + 12 * k + colW + 12 * k + colW + 14 * k, cy, n, on, k)
       end
       local function cardVR(k, multi, x1, y1, hh)
-        local r = cardRow()
+        local r = cardRow('t')
         if not r then return end
         local n = cardData(r, multi)
         local on = pageNow(n)
@@ -19392,11 +19727,11 @@ float4 main(PS_IN pin) {
         local y2 = h - 14 * k
         local y1, cy = y2 - 30 * k, y2 - 15 * k
         local hide, pre = CR.hideList(), CR.preOpen()
-        local fk, ft = flagNow()
+        local fk, ft, fsig = flagNow()
         ft = Lang.letters.upper(ft)
         local onlyBox = BC.opt.flag == 'AUTO'
         local fw = 0
-        for _, s in ipairs({ T.green, T.red, T.finished, string.format(T.yellowS, 0), 'CODE-80', 'VSC', 'SC' }) do fw = math.max(fw, textWidth(Lang.letters.upper(s), F.flag, 12 * k)) end
+        for _, s in ipairs({ T.green, T.red, T.finished, T.yellow, T.closed, T.formation, T.lastLap }) do fw = math.max(fw, textWidth(Lang.letters.upper(s), F.flag, 12 * k)) end
         local sw = 190 * k
         local fx = sw + (pre and CR.pitClosedW(k, true) or 0)
         local bx = fx + 12 * k
@@ -19416,7 +19751,7 @@ float4 main(PS_IN pin) {
           x = fx
         end
         vline(x, y1, y2, HAIR, k)
-        flagBox(bx, y1 + 5 * k, k, fk, true)
+        flagBox(bx, y1 + 5 * k, k, fk, true, fsig)
         if not onlyBox then drawText(ft, F.flag, 12 * k, TMP.a:set(bx + 31 * k, cy - 7.5 * k), PAPER) end
         x = fEnd
         local multi0 = #RaceTable.classKeys() > 1
@@ -19456,7 +19791,7 @@ float4 main(PS_IN pin) {
       end
       function CR.towerR(h, k, id)
         local x1, x2, ty1 = 44 * k, 294 * k, 104 * k
-        local fk, ft = flagNow()
+        local fk, ft, fsig = flagNow()
         local onlyBox = BC.opt.flag == 'AUTO'
         local hide, pre = CR.hideList(), CR.preOpen()
         local segW = BC.opt.tower == 'SEG' and BC.opt.place == 'ALL'
@@ -19498,7 +19833,8 @@ float4 main(PS_IN pin) {
         sessR(x1 + 14 * k, ty1 + 8 * k, k, 15 * k, kText, el, tot, note, pre)
         ui.popClipRect()
         local y = ty1 + sessH
-        if onlyBox then flagBox(x2 - 38 * k, ty1 + 11 * k, k, fk, true) end
+        CR.fgX, CR.fgY, CR.fgH = x2, ty1, sessH
+        if onlyBox then flagBox(x2 - 38 * k, ty1 + 11 * k, k, fk, true, fsig) end
         if pre then
           rect(x1, y, x2, y + k, HAIR)
           CR.pitClosed(x1 + 14 * k, y + 14 * k, k, true)
@@ -19506,8 +19842,9 @@ float4 main(PS_IN pin) {
         end
         if not onlyBox then
           rect(x1, y, x2, y + k, HAIR)
-          flagBox(x1 + 14 * k, y + 5 * k, k, fk, true)
+          flagBox(x1 + 14 * k, y + 5 * k, k, fk, true, fsig)
           drawText(Lang.letters.upper(ft), F.flag, 12 * k, TMP.a:set(x1 + 45 * k, y + 7.5 * k), PAPER)
+          CR.fgY, CR.fgH = y, 30 * k
           y = y + 30 * k
         end
         if hide then
@@ -19607,6 +19944,7 @@ float4 main(PS_IN pin) {
           towerDraw(h, k, id)
           cardV(k, #RaceTable.classKeys() > 1)
         end
+        CR.flagTower(k)
         voices(w, h, k, true)
         return
       end
@@ -19622,11 +19960,11 @@ float4 main(PS_IN pin) {
       local y2 = h - 20 * k
       local y1 = y2 - 44 * k
       local hide, pre = CR.hideList(), CR.preOpen()
-      local fk, ft = flagNow()
+      local fk, ft, fsig = flagNow()
       ft = Lang.letters.upper(ft)
       local onlyBox = BC.opt.flag == 'AUTO'
       local fw = 0
-      for _, s in ipairs({ T.green, T.red, T.finished, string.format(T.yellowS, 0), 'CODE-80', 'VSC', 'SC' }) do fw = math.max(fw, textWidth(Lang.letters.upper(s), F.flag, 15 * k)) end
+      for _, s in ipairs({ T.green, T.red, T.finished, T.yellow, T.closed, T.formation, T.lastLap }) do fw = math.max(fw, textWidth(Lang.letters.upper(s), F.flag, 15 * k)) end
       local sw = 250 * k - textWidth('00', F.sessV, 20 * k)
       local fx = sw + (pre and CR.pitClosedW(k) or 0)
       local bw = 32 * k
@@ -19657,7 +19995,7 @@ float4 main(PS_IN pin) {
         x = fx
       end
       vline(x, y1, y2, HAIR, k)
-      flagBox(bx, y1 + 9 * k, k, fk)
+      flagBox(bx, y1 + 9 * k, k, fk, nil, fsig)
       if not onlyBox then drawText(ft, F.flag, 15 * k, TMP.a:set(bx + bw + 10 * k, y1 + 12 * k), PAPER) end
       x = fEnd
       if hide then
