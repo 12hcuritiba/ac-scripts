@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V298 - 2026.11.11'
+local RC_VERSION = 'V299 - 2026.11.11'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -17460,14 +17460,8 @@ float4 main(PS_IN pin) {
       return string.format('%02d:%02d', math.floor(s / 60), s % 60)
     end
     function CR.anyOnTrack()
-      if RaceTable.leftBox then return true end
-      for _, r in ipairs(RaceTable.rows or {}) do
-        if not r.absent and (r.laps or 0) > 0 then
-          RaceTable.leftBox = true
-          return true
-        end
-      end
-      return false
+      if RaceTable.rows and RaceTable.rows.anyLap then RaceTable.leftBox = true end
+      return RaceTable.leftBox == true
     end
     function BC.formCrossed()
       local sid = Session.id
