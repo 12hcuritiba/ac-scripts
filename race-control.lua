@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V297 - 2026.11.11'
+local RC_VERSION = 'V298 - 2026.11.11'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -10137,7 +10137,7 @@ do
 end
 local RaceTable = {}
 sessionPart('raceTable', RaceTable, function()
-  return { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, stops = {}, passes = {}, seen = {}, present = SESSION_NONE, lastLap = SESSION_NONE,
+  return { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, stops = {}, passes = {}, seen = {}, leftBox = false, present = SESSION_NONE, lastLap = SESSION_NONE,
     stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0, totals = {} }, stintDone = false, maxDsq = false, minDone = false, prevParked = SESSION_NONE }
 end, { 'losses' })
 do
@@ -10197,6 +10197,7 @@ do
   local function stopsWatch(c)
     local ps = RaceTable.passes[c.index] or {}
     RaceTable.passes[c.index] = ps
+    if c.isInPit then ps.box = true elseif ps.box and c.isConnected then ps.box, RaceTable.leftBox = false, true end
     if c.isInPitlane then
       ps.lane = true
       if CarRead.parked(c) then ps.parked = true end
@@ -17459,10 +17460,10 @@ float4 main(PS_IN pin) {
       return string.format('%02d:%02d', math.floor(s / 60), s % 60)
     end
     function CR.anyOnTrack()
-      if CR.leftSid == Session.id then return true end
+      if RaceTable.leftBox then return true end
       for _, r in ipairs(RaceTable.rows or {}) do
-        if not r.absent and r.connected and (not r.inPit or (r.laps or 0) > 0) then
-          CR.leftSid = Session.id
+        if not r.absent and (r.laps or 0) > 0 then
+          RaceTable.leftBox = true
           return true
         end
       end
