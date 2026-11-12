@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V299 - 2026.11.11'
+local RC_VERSION = 'V300 - 2026.11.12'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -12772,25 +12772,27 @@ do
       seg(0, math.max(-EDGE, c0 - h0), 0, math.min(EDGE, c0 + h0))
     end
   end
-  function H.car(r, cx, cy, m, s, mp1, mp2)
+  function H.car(r, cx, cy, m, s, mp1, mp2, own)
     local i = r.ri
     local row = RaceTable.byIndex and RaceTable.byIndex[i]
     local me = RaceTable.byIndex and RaceTable.byIndex[0]
     local _, flag = Flags.incidentOf(i)
-    local fc = K.FLAG[flag] or (row and me and RaceTable.progress(row) - RaceTable.progress(me) >= 1 and K.FLAG.blue) or nil
+    local fc = not own and (K.FLAG[flag] or (row and me and RaceTable.progress(row) - RaceTable.progress(me) >= 1 and K.FLAG.blue)) or nil
     local cc = row and row.class and Broadcast.classColor(row.class) or nil
-    local z = H.zoneOf(r)
+    local z = own and 1 or H.zoneOf(r)
     local hw, hl = r.rw / 2, r.rl * K.LEN / 2
     ui.beginTextureShade(img.mask)
-    H.body(r, hw, hl, cx, cy, m)
-    ui.pathFillConvex(fc or setCol(K.FILL, 0.04, 0.04, 0.05, 0.9 * Desktop.opacity))
+    if not own then
+      H.body(r, hw, hl, cx, cy, m)
+      ui.pathFillConvex(fc or setCol(K.FILL, 0.04, 0.04, 0.05, 0.9 * Desktop.opacity))
+    end
     if cc then H.quad(r, -hw + 0.06, -hl * 0.327, hw - 0.06, hl * 0.327, cc, cx, cy, m) end
     for _, q in ipairs(K.TYRES) do
-      for _, sd in ipairs({ -1, 1 }) do H.quad(r, sd * hw - 0.12 * hw, q[1] * hl, sd * hw + 0.12 * hw, q[2] * hl, K.TYRE, cx, cy, m) end
+      for _, sd in ipairs({ -1, 1 }) do H.quad(r, sd * hw, q[1] * hl, sd * 1.24 * hw, q[2] * hl, K.TYRE, cx, cy, m) end
     end
     H.body(r, hw, hl, cx, cy, m)
     if z > 1 then ui.pathStroke(setCol(GLOW, ZONE[z].r, ZONE[z].g, ZONE[z].b, 0.3), true, 4 * s); H.body(r, hw, hl, cx, cy, m) end
-    ui.pathStroke(ZONE[z], true, 1.6 * s)
+    ui.pathStroke(own and PANEL_COLORS.yellow or ZONE[z], true, 1.6 * s)
     ui.endTextureShade(mp1, mp2)
     if not row then return end
     local d = math.sqrt(r.rx * r.rx + r.rz * r.rz)
@@ -12824,13 +12826,8 @@ do
     for k = 1, nearN do H.lit(near[k], ZONE[H.zoneOf(near[k])], cx, cy, m, s) end
     for k = 1, nearN do H.car(near[k], cx, cy, m, s, mp1, mp2) end
     local me = K.ME
-    me.rw, me.rl = my.w, my.l
-    local hw, hl = me.rw / 2, me.rl * K.LEN / 2
-    H.body(me, hw, hl, cx, cy, m)
-    ui.pathStroke(PANEL_COLORS.yellow, true, 1.6 * s)
-    for _, q in ipairs(K.TYRES) do
-      for _, sd in ipairs({ -1, 1 }) do H.quad(me, sd * hw - 0.12 * hw, q[1] * hl, sd * hw + 0.12 * hw, q[2] * hl, K.TYRE, cx, cy, m) end
-    end
+    me.rw, me.rl, me.ri = my.w, my.l, 0
+    H.car(me, cx, cy, m, s, mp1, mp2, true)
     Drag.icons('carradar', p1, p2, s)
   end
 end
@@ -17133,6 +17130,7 @@ float4 main(PS_IN pin) {
       end
     end
     CR.q = { cars = {}, best = {}, pb = {} }
+    CR.LAST_SEC_S = 3
     CR.qOff, CR.qOrange = rgbm(1, 1, 1, 0.16), rgbm(1, 0x8a / 255, 0x1f / 255, 1)
     local EQ_MS = 60
     local function secQ()
@@ -17169,7 +17167,9 @@ float4 main(PS_IN pin) {
       end
       if r.c.isInPitlane then
         if st.q then st.q, st.t0, st.done, st.prev = nil, nil, {}, nil end
+        if not st.pl then st.box = nil end
         st.pl, st.out, st.lap0 = true, nil, nil
+        if r.c.isInPit then st.box = true end
       else
         if st.pl then st.pl, st.out = nil, true end
         if st.q ~= q then
@@ -17178,7 +17178,7 @@ float4 main(PS_IN pin) {
               st.done[st.q] = secMark(Q, key, st.q, now - st.t0)
               st.at = state.ui.clock
             end
-            if q == 1 then st.prev, st.done = nil, {} end
+            if q == 1 then st.prev, st.done, st.lapAt = st.done, {}, state.ui.clock end
             if q == 1 then st.out, st.lap0 = nil, now end
             st.t0 = now
           else
@@ -17222,13 +17222,14 @@ float4 main(PS_IN pin) {
       local bw = CR.qualiW(k, small)
       local hh, sw, sh, pad = (small and 7 or 10) * k, (small and 8 or 13) * k, (small and 2 or 3) * k, (small and 4 or 5) * k
       rect(x, cy - hh, x + bw, cy + hh, BOXBG)
+      local held = st.prev ~= nil and state.ui.clock - (st.lapAt or -1e9) < CR.LAST_SEC_S
       for q = 1, nS do
         local bx = x + pad + (q - 1) * (sw + 2 * k)
         rect(bx, cy - sh, bx + sw, cy + sh, CR.qOff)
-        local c = st.done[q] or (st.prev and q ~= st.q and st.prev[q])
+        local c = held and st.prev[q] or not held and st.done[q]
         if c then
           rect(bx, cy - sh, bx + sw, cy + sh, c == 'p' and PURPLE or c == 'g' and FLAGC.green or c == 'e' and YELLOW or CR.qOrange)
-        elseif st.q == q and st.t0 and st.sp then
+        elseif not held and st.q == q and st.t0 and st.sp then
           local a, b = sp[q - 1] or 0, sp[q] or 1
           local f = math.min(math.max((st.sp - a) / math.max(b - a, 1e-6), 0), 1)
           rect(bx, cy - sh, bx + sw * f, cy + sh, PAPER)
@@ -17283,10 +17284,10 @@ float4 main(PS_IN pin) {
     function CR.pitCall(r)
       if not BC.opt.io or r.absent or not r.connected then return nil end
       if r.inPit then
-        local ps = RaceTable.passes and RaceTable.passes[r.index]
-        if not ps or not ps.parked then return 'in' end
         local c = ac.getCar(r.index)
-        return c and not CarRead.parked(c) and 'out' or nil
+        if c and c.isInPit then return nil end
+        local st = CR.q.cars[r.index]
+        return st and st.box and CR.q.sid == Session.id and 'out' or 'in'
       end
       local st = CR.q.cars[r.index]
       return st and st.out and CR.q.sid == Session.id and 'out' or nil
@@ -17465,7 +17466,7 @@ float4 main(PS_IN pin) {
     end
     function BC.formCrossed()
       local sid = Session.id
-      if BC.fx == sid then return true end
+      if sid and BC.fx == sid then return true end
       local open = RecordSync.base.dirPen.open or {}
       local any = false
       for _, r in ipairs(RaceTable.rows or {}) do
@@ -17474,7 +17475,7 @@ float4 main(PS_IN pin) {
           any = true
         end
       end
-      if any then BC.fx = sid end
+      if any and sid then BC.fx = sid end
       return any
     end
     function BC.abortUp() return Formation.abortMs ~= nil and CR.sn.ab == Formation.abortMs and CR.sn.abN ~= true end
@@ -17490,10 +17491,6 @@ float4 main(PS_IN pin) {
       local mw, mh, fs = (small and 13 or 16) * k, (small and 8 or 10) * k, (small and 12 or 15) * k
       slanted(x, cy - mh / 2, x + mw, cy + mh / 2, 3 * k, FLAGC.red)
       drawText(t, F.flag, fs, TMP.a:set(x + mw + (small and 6 or 8) * k, cy - fs * 0.62), PAPER)
-    end
-    function CR.noTime(r)
-      local _, _, ms = Lap.of(r.index)
-      return (ms or 0) == 0 and (r.best or 0) == 0
     end
     CR.MID_B, CR.MID_R = 0.65, 0.6085
     function CR.midTop(cy, size, r) return cy - math.max(size, Desktop.text.minPx) * r end
@@ -17536,7 +17533,6 @@ float4 main(PS_IN pin) {
       return math.min(math.max(math.min(d / ROLL, (secs + 2 * ROLL - d) / ROLL), 0), 1)
     end
     function CR.saySizes(n, hh, k)
-      if n.kind ~= 'sec' then return 15, 13 end
       if hh < 30 * k then return 11, 9 end
       return 14, 12
     end
@@ -17554,8 +17550,7 @@ float4 main(PS_IN pin) {
       rect(x, y, x + 4 * k, y + hh, n.col)
       local mid = y + hh / 2
       local t1, t2
-      if n.kind ~= 'sec' then t1, t2 = mid - (n.sm ~= '' and 17 or 9) * k, mid + k
-      elseif n.sm == '' then t1 = CR.midTop(mid, fb * k, CR.MID_B)
+      if n.sm == '' then t1 = CR.midTop(mid, fb * k, CR.MID_B)
       else
         local d = (fb + 3) * k
         t1 = mid - (0.3 * fb * k + d + fs * k) / 2
@@ -18780,7 +18775,7 @@ float4 main(PS_IN pin) {
       local d = gain and gained(r, list, i) or nil
       slanted(bx1, by1, bx2, by2, 6 * k, gain and (d and d > 0 and GREEN or d and d < 0 and RED or POS_EQ) or sel and WHITE
         or ((phaseGap and not ended) and MIST_GAP or MIST))
-      local call = not gain and not ended and tt == '-' and CR.noTime(r) and CR.pitCall(r)
+      local call = not gain and not ended and CR.pitCall(r)
       if gain then
         posMark(bx1, bx2, by1, by2, k, d, by1 + (tw and 2 or 3) * k)
       elseif call then
@@ -19506,7 +19501,7 @@ float4 main(PS_IN pin) {
           drawText(t, F.rb, 13 * k, TMP.a:set((x1 + x2) / 2 - textWidth(t, F.rb, 13 * k) / 2, CR.midTop(cy, 13 * k, CR.MID_R)), LT_INK)
         else
           local tt, bad = timeText(r, list, i, phaseGap, ended, byClass)
-          local call = not ended and tt == '-' and CR.noTime(r) and CR.pitCall(r)
+          local call = not ended and CR.pitCall(r)
           if call then CR.callText(call, (x1 + x2) / 2, cy, k, true)
           else drawText(tt, F.rb, 13 * k, TMP.a:set((x1 + x2) / 2 - textWidth(tt, F.rb, 13 * k) / 2, CR.midTop(cy, 13 * k, CR.MID_R)), bad and RED or LT_INK) end
         end
