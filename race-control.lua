@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V300 - 2026.11.12'
+local RC_VERSION = 'V301 - 2026.11.12'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16098,7 +16098,7 @@ float4 main(PS_IN pin) {
     local BC = Broadcast
     local KEEP = 'rc.tv'
     local KEY_ESC, KEY_F2, KEY_ADD, KEY_SUB = 27, 113, 107, 109
-    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', time = 'ALT', op = 75, bar = true, logos = 'BOTH', defSet = nil, cycle = 0, speed = 60, flag = 'FIX',
+    BC.opt = { place = 'ALL', legend = 'CLASS', fix = 'SEL', op = 75, bar = true, logos = 'BOTH', defSet = nil, cycle = 0, speed = 60, flag = 'FIX',
       form = 'H', tower = 'ALL', pins = 3, card = 'AUTO', cards = 10, theme = 6, vn = -1, vnm = 'T', vns = 8, vc = -1, vcm = 'T', vcs = 8,
       pb = true, pt = true, pts = 5, px = true, pxs = 5, rs = true, rsg = 40, rc = true, rcs = 20, re = 'TURN', oe = true, oes = 12, ot = true, ots = 10, oi = true, ois = 30,
       sv = true, svs = 6, so = true, sos = 6, sns = 6, org = false,
@@ -16110,7 +16110,9 @@ float4 main(PS_IN pin) {
       'grm', 'grps', 'grop', 'sg', 'scl', 'st', 'sts', 'sx', 'sxs', 'pm', 'ptw', 'ptws', 'pbx', 'pbxs', 'allop', 'secop', 'pitop', 'grw', 'im', 'ips', 'qb', 'qbs', 'rh',
       'pss', 'psc', 'psk', 'psd', 'pis', 'pic', 'pik', 'pid', 'pds', 'pdc', 'pps', 'ppc', 'pf', 'pq', 'pop', 'aa', 'atd', 'ati', 'atp', 'ad', 'of', 'ofs', 'dm',
       'md', 'io', 'nl', 'dd', 'qbp', 'qbq', 'qbr', 'vsp', 'ft', 'ftp', 'ftq', 'ftr',
-      'fxs', 'cpm', 'cps', 'cpc', 'fgt', 'fgts', 'fgx', 'fgxs', 'fgop' }
+      'fxs', 'cpm', 'cps', 'cpc', 'fgt', 'fgts', 'fgx', 'fgxs', 'fgop',
+      'tpl', 'tpi', 'tpg', 'tpv', 'tpp', 'tql', 'tqi', 'tqg', 'tqv', 'tqp', 'trl', 'tri', 'trg', 'trv', 'trp',
+      'tpc', 'tqc', 'trc', 'tpf', 'tqf', 'trf' }
     local CR_KEYS = { hm = 'move', hps = 'page', hw = 'wait', vm = 'move', vps = 'page', vw = 'wait', rpn = 'pins', rw = 'wait', ipn = 'pins', iw = 'wait', fl = 'bool',
       fls = 'page', cl = 'bool', cls = 'page', fcop = 'op', tk = 'bool', tks = 'page', tkop = 'op', lc = 'bool', lcs = 'page', lcop = 'op', gr = 'bool', grs = 'page',
       grm = 'move', grps = 'page', grop = 'op', sg = 'bool', scl = 'bool', st = 'bool', sts = 'page', sx = 'bool', sxs = 'page', pm = 'bool', ptw = 'bool', ptws = 'page',
@@ -16118,18 +16120,31 @@ float4 main(PS_IN pin) {
       pss = 'set', psc = 'cam', psk = 'slot', psd = 'dur', pis = 'set', pic = 'cam', pik = 'slot', pid = 'dur', pds = 'set', pdc = 'cam', pps = 'set', ppc = 'cam',
       pf = 'fps', pq = 'qual', pop = 'op', aa = 'dest', atd = 'bool', ati = 'bool', atp = 'bool', ad = 'page', of = 'bool', ofs = 'wait', dm = 'qual',
       md = 'one', io = 'bool', nl = 'bool', dd = 'one', qbp = 'bool', qbq = 'bool', qbr = 'bool', vsp = 'speed', ft = 'tri', ftp = 'bool', ftq = 'bool', ftr = 'bool',
-      fxs = 'wait', cpm = 'dest', cps = 'set', cpc = 'cam', fgt = 'bool', fgts = 'page', fgx = 'bool', fgxs = 'page', fgop = 'op' }
+      fxs = 'wait', cpm = 'dest', cps = 'set', cpc = 'cam', fgt = 'bool', fgts = 'page', fgx = 'bool', fgxs = 'page', fgop = 'op',
+      tpl = 'bool', tpi = 'bool', tpg = 'bool', tpv = 'bool', tpp = 'bool', tql = 'bool', tqi = 'bool', tqg = 'bool', tqv = 'bool', tqp = 'bool', trl = 'bool', tri = 'bool', trg = 'bool', trv = 'bool', trp = 'bool',
+      tpc = 'bool', tqc = 'bool', trc = 'bool', tpf = 'ph', tqf = 'ph', trf = 'ph' }
     local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 75,
       tk = true, tks = 10, tkop = 75, lc = true, lcs = 12, lcop = 75, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 75, sg = true, scl = true, st = true, sts = 5,
       sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 90, secop = 75, pitop = 75, grw = 5, im = 'ROLL', ips = 8, qb = 1, qbs = 0, rh = 5,
       md = 0, io = true, nl = true, dd = 0, qbp = false, qbq = true, qbr = false, vsp = 60, ft = 0, ftp = false, ftq = false, ftr = false,
       fxs = 0, cpm = 0, cps = -1, cpc = -1, fgt = true, fgts = 5, fgx = true, fgxs = 5, fgop = 75,
       pss = 0, psc = -1, psk = -1, psd = 0, pis = -2, pic = 0, pik = -1, pid = 0, pds = -1, pdc = 3, pps = 0, ppc = -1, pf = 15, pq = 1, pop = 75, aa = 2,
-      atd = true, ati = true, atp = true, ad = 8, of = false, ofs = 30, dm = 0 }
+      atd = true, ati = true, atp = true, ad = 8, of = false, ofs = 30, dm = 0,
+      tpl = false, tpi = true, tpg = false, tpv = true, tpp = false, tql = false, tqi = true, tqg = false, tqv = true, tqp = false, trl = true, tri = false, trg = true, trv = false, trp = true,
+      tpc = true, tqc = true, trc = true, tpf = 1, tqf = 1, trf = 0 }
     for k, v in pairs(CR_START) do
       BC.opt[k] = v
       if CR_KEYS[k] == 'bool' then BOOLS[k] = true elseif CR_KEYS[k] ~= 'move' then NUMS[k] = true end
     end
+    BC.TPH, BC.TPK, BC.tSet, BC.tFix = { 'LAST', 'INST', 'GAP', 'LAPS', 'POS' }, { 'l', 'i', 'g', 'v', 'p' }, { p = {}, q = {}, r = {} }, {}
+    function BC.tSetsMake()
+      for s, L in pairs(BC.tSet) do
+        for q = #L, 1, -1 do L[q] = nil end
+        for q, ph in ipairs(BC.TPH) do if BC.opt['t' .. s .. BC.TPK[q]] then L[#L + 1] = ph end end
+        BC.tFix[s] = not BC.opt['t' .. s .. 'c'] and BC.TPH[(tonumber(BC.opt['t' .. s .. 'f']) or 0) + 1] or nil
+      end
+    end
+    BC.tSetsMake()
     local function speedOf(v)
       local sp = math.floor(tonumber(v) or 60)
       return sp <= 0 and 0 or math.min(math.max(sp, 10), 180)
@@ -16150,6 +16165,7 @@ float4 main(PS_IN pin) {
       if kind == 'qual' then return math.min(math.max(n, 0), 2) end
       if kind == 'dest' then return math.min(math.max(n, 0), 3) end
       if kind == 'one' then return math.min(math.max(n, 0), 1) end
+      if kind == 'ph' then return math.min(math.max(n, 0), 4) end
       if kind == 'speed' then return speedOf(v) end
       if kind == 'tri' then return v == true and 1 or v == false and 0 or math.min(math.max(n, 0), 2) end
       return math.min(math.max(n, 2), 600)
@@ -16183,11 +16199,12 @@ float4 main(PS_IN pin) {
           else BC.opt[k] = v end
         end
       end
+      BC.tSetsMake()
     end
     local function keep()
       local o = BC.opt
-      ac.storage[KEEP] = string.format('place=%s;legend=%s;fix=%s;time=%s;op=%d;bar=%d;logos=%s;defSet=%s;cycle=%d;speed=%d;flag=%s;form=%s;tower=%s;pins=%d', o.place,
-        o.legend, o.fix, o.time, o.op, o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '', math.floor(o.cycle or 0), math.floor(o.speed or 60), o.flag or 'FIX',
+      ac.storage[KEEP] = string.format('place=%s;legend=%s;fix=%s;op=%d;bar=%d;logos=%s;defSet=%s;cycle=%d;speed=%d;flag=%s;form=%s;tower=%s;pins=%d', o.place,
+        o.legend, o.fix, o.op, o.bar and 1 or 0, o.logos, o.defSet and tostring(o.defSet) or '', math.floor(o.cycle or 0), math.floor(o.speed or 60), o.flag or 'FIX',
         o.form or 'H', o.tower or 'ALL', math.floor(o.pins or 3))
         .. string.format(';card=%s;cards=%d;theme=%d;vn=%d;vnm=%s;vns=%d;vc=%d;vcm=%s;vcs=%d', o.card or 'AUTO', math.floor(o.cards or 10), math.floor(o.theme or 6),
           math.floor(o.vn or -1), o.vnm or 'T', math.floor(o.vns or 8), math.floor(o.vc or -1), o.vcm or 'T', math.floor(o.vcs or 8))
@@ -16455,7 +16472,6 @@ float4 main(PS_IN pin) {
         if k == 'PLACE' then BC.opt.place = v ~= '' and v or 'ALL'
         elseif k == 'LEGEND' then BC.opt.legend = v:upper()
         elseif k == 'FIX' then BC.opt.fix = v:upper()
-        elseif k == 'TIME' then BC.opt.time = v:upper()
         elseif k == 'OP' then BC.opt.op = math.min(math.max(tonumber(v) or 75, 40), 100)
         elseif k == 'SHOW' then BC.opt.bar = v ~= '0'
         elseif k == 'LOGOS' then BC.opt.logos = v:upper()
@@ -16505,6 +16521,7 @@ float4 main(PS_IN pin) {
         local key = (w[2] or ''):lower()
         if not CR_KEYS[key] then return false end
         BC.opt[key] = crValue(key, w[3] or '')
+        if key:match('^t[pqr][ligvpcf]$') then BC.tSetsMake() end
       elseif a == 'ORG' then
         BC.opt.org = w[2] == '1'
       elseif a == 'IDENT' then
@@ -16883,6 +16900,9 @@ float4 main(PS_IN pin) {
         if sim.raceSessionType == ac.SessionType.Race then return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-') end
         return (r.best > 0 and ahead.best > 0) and string.format('+%.3f', (r.best - ahead.best) / 1000) or '-'
       end
+      local ph = BC.timePhase()
+      if ph == 'INST' then return BC.instText(r) end
+      if ph == 'LAPS' then return string.format(T.laps, r.laps or 0) end
       local _, _, ms, ok, _, _, out = Lap.of(r.index)
       if (ms or 0) > 0 and not (out == 2 or (out == 1 and sim.raceSessionType ~= ac.SessionType.Race)) then return lapTime(ms), not ok end
       return r.best > 0 and lapTime(r.best) or '-'
@@ -16951,11 +16971,16 @@ float4 main(PS_IN pin) {
       if r and (BC.opt.fxs or 0) > 0 and state.ui.clock - (BC.fixAt or 0) >= BC.opt.fxs then return nil end
       return r, L, n, cls
     end
-    local ALT_PHASES = { 'LAST', 'GAP', 'POS' }
     local function timePhase()
-      if BC.opt.time == 'ALT' then return ALT_PHASES[math.floor(math.max(state.ui.clock - (BC.altFrom or 0), 0) / 10) % 3 + 1] end
-      return BC.opt.time
+      local t = sim.raceSessionType
+      local s = t == ac.SessionType.Race and 'r' or t == ac.SessionType.Qualify and 'q' or 'p'
+      if BC.tFix[s] then return BC.tFix[s] end
+      local L = BC.tSet[s]
+      local n = #L
+      if n == 0 then return 'LAST' end
+      return L[math.floor(math.max(state.ui.clock - (BC.altFrom or 0), 0) / 10) % n + 1]
     end
+    BC.timePhase = timePhase
     local function gapNow() return timePhase() == 'GAP' end
     local function strip(sx1, xr, sy1, k, ls, op, hh)
       local H = hh or 20 * k
@@ -17236,6 +17261,19 @@ float4 main(PS_IN pin) {
         end
       end
       return bw
+    end
+    BC.INST_HOLD_MS = 5000
+    function BC.clock1(ms)
+      ms = math.max(ms or 0, 0)
+      return string.format('%d:%04.1f', math.floor(ms / 60000), (ms % 60000) / 1000)
+    end
+    function BC.instText(r)
+      if r.inPit then return '-' end
+      local _, _, last, _, ct = Lap.of(r.index)
+      if not ct or ct <= 0 then return '-' end
+      local d = serverTimeMs() - ct
+      if d < BC.INST_HOLD_MS and (last or 0) > 0 then return lapTime(last) end
+      return BC.clock1(d)
     end
     CR.ftMemo = { src = nil, by = {} }
     function CR.ftOf(idx)
@@ -19478,10 +19516,6 @@ float4 main(PS_IN pin) {
         local rs = ringSize(sig, 7.7 * k, 8.4 * k)
         drawText(sig, F.rb, rs, TMP.a:set(rx - textWidth(sig, F.rb, rs) / 2, CR.midTop(ry, rs, CR.MID_R)), PAPER)
       end
-      local function clock1(ms)
-        ms = math.max(ms or 0, 0)
-        return string.format('%d:%04.1f', math.floor(ms / 60000), (ms % 60000) / 1000)
-      end
       local function boxR(bx, cy, k, r, list, i, multi, sel, phaseGap, ended, byClass)
         local x1, x2, y1, y2 = bx + 4 * k, bx + 64 * k, cy - 9 * k, cy + 9 * k
         if multi and r.class then
@@ -19490,15 +19524,10 @@ float4 main(PS_IN pin) {
         end
         local gain = timePhase() == 'POS' and not ended
         local d = gain and gained(r, list, i) or nil
-        local st = CR.q.cars[r.index]
-        local run = not gain and not ended and sim.raceSessionType == ac.SessionType.Qualify and st ~= nil and st.lap0 ~= nil and not r.inPit and CR.q.sid == Session.id
-        slanted(x1, y1, x2, y2, 4 * k, gain and (d and d > 0 and GREEN or d and d < 0 and RED or POS_EQ) or (sel or run) and WHITE
+        slanted(x1, y1, x2, y2, 4 * k, gain and (d and d > 0 and GREEN or d and d < 0 and RED or POS_EQ) or sel and WHITE
           or ((phaseGap and not ended) and MIST_GAP or MIST))
         if gain then
           posMark(x1, x2, y1, y2, k, d, CR.midTop(cy, 13 * k, CR.MID_R), true)
-        elseif run then
-          local t = clock1(serverTimeMs() - st.lap0)
-          drawText(t, F.rb, 13 * k, TMP.a:set((x1 + x2) / 2 - textWidth(t, F.rb, 13 * k) / 2, CR.midTop(cy, 13 * k, CR.MID_R)), LT_INK)
         else
           local tt, bad = timeText(r, list, i, phaseGap, ended, byClass)
           local call = not ended and CR.pitCall(r)
