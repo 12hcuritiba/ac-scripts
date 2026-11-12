@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V296 - 2026.11.11'
+local RC_VERSION = 'V297 - 2026.11.11'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1017,7 +1017,7 @@ local config = (function()
     raceProcedure = structKey('raceProcedure', { procedure1 = 'KMR', grid1 = 'NORMAL', reverse1 = 0, procedure2 = 'KMR', grid2 = 'NORMAL', reverse2 = 0,
       maxKmh = 150, overSeconds = 10, speedLaps = 1, minKmh = 30, slowSeconds = 15, slowLaps = 3, giveBackSeconds = 20, passLaps = 3, passFarM = 100,
       leaderSlowKmh = 30, slowFarKmh = 40, slowFarM = 75, alignMeters = 0.7, alignKmh = 1, alignSeconds = 60, approachM = 400, limitSpline = 0.788,
-      pitExitSpline = 0.024, abortSpline = 0.85, abortEndSpline = 0.15 }),
+      pitExitSpline = 0.024, abortSpline = 0.85, abortEndSpline = 0.15, abortTailSeconds = 5 }),
     driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
     kmrPoints = kmrPoints,
     kmrRating = kmrRating,
@@ -2710,6 +2710,7 @@ do
       R.reverse2 = tonumber(body:match('|reverse2=(%-?%d+)')) or R.reverse2
       R.abortSpline = tonumber(body:match('|abortSpline=([%d%.]+)')) or R.abortSpline
       R.abortEndSpline = tonumber(body:match('|abortEndSpline=([%d%.]+)')) or R.abortEndSpline
+      R.abortTailSeconds = tonumber(body:match('|abortTailSeconds=([%d%.]+)')) or R.abortTailSeconds
       R.procedure = R[config.raceNo == 2 and 'procedure2' or 'procedure1']
       local cc = body:match('carClasses=([^|]*)')
       if cc and cc ~= '' and cc ~= config.carClassesText then
@@ -9374,7 +9375,6 @@ do
   local FALLBACK_SECONDS = 20
   local PASS_SPLINE = 0.02
   local TRACK_EVENT = 'race-control.start'
-  local ABORT_TAIL_S = 5
   local sendT0 = ac.OnlineEvent({
     ac.StructItem.key('amxracing.race-control.start'),
     startMs = ac.StructItem.uint32(),
@@ -9859,7 +9859,7 @@ do
         local c = alive(j)
         if not c or not Formation.locked[j] or c.isInPitlane or Flags.offField(j) or Formation.out[j] or CarRead.num(c.splinePosition) < 0.5 then Formation.abortBehind[j] = nil end
       end
-      if next(Formation.abortBehind) == nil then Formation.abortBehind, Formation.abortTail = nil, state.ui.clock + ABORT_TAIL_S end
+      if next(Formation.abortBehind) == nil then Formation.abortBehind, Formation.abortTail = nil, state.ui.clock + rule().abortTailSeconds end
     elseif Formation.abortTail and state.ui.clock >= Formation.abortTail then
       Formation.abortLine, Formation.abortTail = false, nil
     end
