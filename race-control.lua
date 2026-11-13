@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V301 - 2026.11.12'
+local RC_VERSION = 'V302 - 2026.11.13'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -17861,6 +17861,8 @@ float4 main(PS_IN pin) {
           local v = cells[i]
           if i == 1 then
             if row and multi and row.class then local _, cc = classStyle(row.class) rect(xx, yy, xx + wd, yy + rh, cc) end
+          elseif row and i == 6 then
+            if row.tyre then ring(xx + wd / 2, yy + rh / 2, k, row.tyre) end
           elseif v and v ~= '' then
             local font, size, col = cells.font or F.rb, cells.size or 18 * k, cells.col or PAPER
             if not row then font, size, col = F.lab, 12 * k, DIMW
@@ -17868,8 +17870,7 @@ float4 main(PS_IN pin) {
             elseif i == 5 then font, size, col = F.team, 16 * k, DIMW
             elseif i == 2 then size = 22 * k
             elseif i == 8 and row.fast then col = PURPLE end
-            if row and i == 6 then ring(xx + wd / 2, yy + rh / 2, k, row.tyre)
-            elseif row and i == 3 then
+            if row and i == 3 then
               local nw = textWidth(v, F.rb, 13 * k) + 10 * k
               frame(xx, yy + 11 * k, xx + nw, yy + 29 * k, NUMB, k)
               drawText(v, F.rb, 13 * k, TMP.a:set(xx + 5 * k, yy + 12 * k), PAPER)
