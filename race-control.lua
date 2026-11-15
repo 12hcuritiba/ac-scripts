@@ -129,7 +129,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V304 - 2026.11.14'
+local RC_VERSION = 'V305 - 2026.11.14'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -568,14 +568,14 @@ local TEXTS = {
     setF1 = 'Car (F1)', setF6 = 'Car onboard (F6)', f1Cams = { 'Cockpit', 'Chase', 'Far chase', 'Bonnet', 'Bumper', 'Dash' },
     pipAl = { duel = 'Battle', pit = 'Pit entry', slow = 'Slow', stop = 'Stopped', broken = 'Broken', oil = 'Oil', spin = 'Loss of control' },
     penDt = 'Drive-through', penSg = 'Stop & go %d s', penLaps = '%d laps to serve', penLap0 = 'serve in this lap', penDsq = 'Disqualified',
-    resK = 'Results', resAll = 'Overall', resHead = { 'Pos.', 'No.', 'Driver', 'Team', 'Tyre', 'Laps', 'Best lap', 'Gap' }, chq = 'Chequered flag',
+    resK = 'Results', resAll = 'Overall', resHead = { 'Pos.', 'No.', 'Driver', 'Team', 'Tyre', 'Laps', 'Stops', 'Swaps', 'Best lap', 'Gap' }, chq = 'Chequered flag',
     opSessions = 'Sessions', opRules = 'Rules', opDrivers = 'Drivers per team', opStops = 'Pit stops required', opSwaps = 'Driver swaps required',
     opStint = 'Minimum stint', opStintMax = 'Maximum stint', opClasses = 'Classes', opDate = 'Date', opTrack = 'Track', opLayout = 'Layout', opTime = 'Time',
     opFrom = '%s - %s', opAnd = ' / ', opMonths = { 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec' }, opTrackK = 'Track and weather', opGrip = 'Grip', opAir = 'Air', opRoad = 'Track', opHum = 'Humidity', opNow = 'Now', opRain = 'Rain',
     opList = 'Entrants', opHead = { 'No.', 'Drivers', 'Team', 'Car', 'Class' }, snK = 'Session', snStart = { 'Rolling start', 'Standing start' }, snStartKmr = 'KMR rolling start',
     gridClass = 'Grid by class', gridClassRev = 'Grid by class reversed (%s per class)', gridAll = 'all', minutes = '%d min',
     coolDown = 'Cool-down lap', winner = 'Winner', winners = 'Winners',
-    pitStop = 'Stop · parked %.1f s', pitLane = 'Pit lane %.1f s',
+    pitStop = 'Stop · parked %.1f s', pitLane = 'Pit lane %.1f s', sgStop = 'Stop for the stop & go',
     secK = 'Sector %s', secFast = 'Fastest', lcK = 'Fastest laps', lcHead = { 'Class', 'Lap', 'Driver', 'Car', 'When' },
     opWind = 'Wind',
     tkK = 'The track', tkCells = { 'Length', 'Width', 'Elevation change', 'Turns', 'Altitude', 'Sectors', 'Pit boxes', 'Location' }, tkLine = 'Finish', tkPart = 2,
@@ -2290,6 +2290,11 @@ do
     local sig = (parked and '1' or '0') .. (menu and '1' or '0') .. (e.left and '1' or '0') .. (e.win and '1' or '0')
     if sig ~= e.sig then e.sig, e.parked, e.menu, e.t, e.due = sig, parked, menu, math.floor(serverTimeMs()), true end
   end
+  B.stat = { x = nil, due = false }
+  function B.statSet(stops, dsq)
+    local x = string.format('%d|%d', math.floor(tonumber(stops) or 0), (tonumber(dsq) or 0) > 0 and 1 or 0)
+    if x ~= B.stat.x then B.stat.x, B.stat.due = x, true end
+  end
   B.plan = { done = tostring(ac.storage['rc.pitplan'] or ''), due = nil }
   local planApply
   local PLAN_PIT_GAP, PLAN_GAP = 2, 10
@@ -2319,7 +2324,7 @@ do
     if not src then return end
     local exitDue = src.now and B.exit.due
     local askRr, askName, askPush = src.now and B.rrDue(false), src.now and B.nameDue(false), src.now and B.pushDue(false)
-    local quiet = next(src.parts) == nil and not src.track and #src.rc == 0 and #src.laps == 0 and #src.traces == 0 and not exitDue and not B.plan.due
+    local quiet = next(src.parts) == nil and not src.track and #src.rc == 0 and #src.laps == 0 and #src.traces == 0 and not exitDue and not (src.now and B.stat.due) and not B.plan.due
       and not askRr and not askName and not askPush
     if quiet then
       if not src.now then table.remove(B.old, 1) return end
@@ -2352,6 +2357,9 @@ do
     local exitJson = exitDue and string.format(',"exit":{"t":%d,"parked":%d,"menu":%d,"left":%d,"win":%d}', e.t or 0, e.parked and 1 or 0, e.menu and 1 or 0,
       e.left and 1 or 0, e.win and 1 or 0) or ''
     if exitDue then e.due = false end
+    local statDue = src.now and B.stat.due
+    local statJson = statDue and (',"stat":' .. jsonStr(B.stat.x)) or ''
+    if statDue then B.stat.due = false end
     local planDone = src.now and B.plan.due or nil
     local asks = {}
     if askRr then B.rrDue(true); asks[#asks + 1] = '"rr":' .. jsonStr(askRr) end
@@ -2361,7 +2369,7 @@ do
     B.busy = true
     B.flight = { key = src.key, rc = lines, laps = lapLines, traces = traces }
     local body = '{"key":' .. jsonStr(src.key) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"car":' .. jsonStr(B.carKey()) .. ',"parts":{' .. table.concat(partTexts, ',') .. '}'
-      .. (track and (',"track":{"t":' .. track.t .. ',"x":' .. jsonStr(track.x) .. '}') or '') .. exitJson
+      .. (track and (',"track":{"t":' .. track.t .. ',"x":' .. jsonStr(track.x) .. '}') or '') .. exitJson .. statJson
       .. ',"lines":[' .. table.concat(lineParts, ',') .. '],"laps":[' .. table.concat(lapParts, ',') .. '],"traces":[' .. table.concat(traceParts, ',') .. ']'
       .. (planDone and (',"planDone":' .. jsonStr(planDone)) or '') .. (#asks > 0 and (',"ask":{' .. table.concat(asks, ',') .. '}') or '')
       .. (src.now and B.clockOut and B.clockOut() or '') .. '}'
@@ -2378,6 +2386,7 @@ do
           for i = #lapLines, 1, -1 do table.insert(src.laps, 1, lapLines[i]) end
           for i = #traces, 1, -1 do table.insert(src.traces, 1, traces[i]) end
           if exitDue then e.due = true end
+          if statDue then B.stat.due = true end
           if askRr then B.rrRead(false) end
           if askName then B.nameRead(false, nil, err or status) end
           if not B.failLogged then
@@ -2486,14 +2495,20 @@ do
     end
   end
   local DIR_GAP = 5
-  B.dirPen = { bySlot = {}, nextT = 0, busy = false, pit = {}, sec = {} }
-  function B.dirPenAsk()
+  B.dirPen = { bySlot = {}, nextT = 0, busy = false, pit = {}, sec = {}, stat = {}, fullUntil = 0 }
+  function B.dirPenAsk(only)
     local D = B.dirPen
     if not on() or not Session.id or D.busy or state.ui.clock < D.nextT then return end
+    if only and state.ui.clock < D.fullUntil then return end
+    if not only then D.fullUntil = state.ui.clock + 2 * DIR_GAP end
     D.busy, D.nextT = true, state.ui.clock + DIR_GAP
-    WebQueue.request('GET', config.baseUrl .. '/v1/report/penalties?sid=' .. Session.id, nil, nil, function(err, res)
+    WebQueue.request('GET', config.baseUrl .. '/v1/report/penalties?sid=' .. Session.id .. (only and '&only=stat' or ''), nil, nil, function(err, res)
       D.busy = false
       if err or not res or tonumber(res.status) ~= 200 then return end
+      local stat = {}
+      for slot, n, d in (tostring(res.body or ''):match('STAT|([^\r\n]*)') or ''):gmatch('(%d+):(%d+):(%d)') do stat[tonumber(slot)] = { stops = tonumber(n), dsq = d == '1' } end
+      D.stat = stat
+      if only then return end
       local by = {}
       for slot, x in tostring(res.body or ''):gmatch('(%d+)|([^\r\n]+)') do by[tonumber(slot)] = x end
       D.bySlot = by
@@ -3233,7 +3248,7 @@ do
   end)
 end
 local PitRecord = { HOLD_MAX = 86400, HOLD_GRACE = 2000 }
-sessionPart('pitRecord', PitRecord, function() return { stops = 0, last = '-', seq = 0, holdEnded = SESSION_NONE, lastPass = SESSION_NONE, pass = SESSION_NONE,
+sessionPart('pitRecord', PitRecord, function() return { stops = 0, valid = 0, last = '-', seq = 0, holdEnded = SESSION_NONE, lastPass = SESSION_NONE, pass = SESSION_NONE,
   resume = SESSION_NONE } end, { 'HOLD_MAX', 'HOLD_GRACE' })
 PitRecord.onService = nil
 local startHold
@@ -3245,7 +3260,7 @@ function PitRecord.save()
   local rt = state.redTow
   local inv = state.swapInvalid
   local lp, cp = PitRecord.lastPass, PitRecord.pass
-  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s|%s|%d|%s|%d/%d/%d/%d/%d/%d', PitRecord.stops, PitRecord.last,
+  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s|%s|%d|%s|%d/%d/%d/%d/%d/%d|%d', PitRecord.stops, PitRecord.last,
     h and math.floor(h.untilMs) or 0, text,
     sv and string.format('%d/%d/%s', math.floor(sv.startMs), math.floor(sv.untilMs), sv.plan) or '-',
     state.pitPassServiced and 1 or 0, rt and string.format('%d/%.4f/%.4f/%.2f', rt.tow, rt.damage.powertrain,
@@ -3253,7 +3268,8 @@ function PitRecord.save()
     inv and string.format('%d/%d%s', inv.driver, math.floor(inv.since), inv.reverse and '/1' or '') or '',
     h and tostring(h.cause or ''):gsub('[|]', '/') or '', state.pitPassReverse or 0,
     state.pitExitDriven == nil and '' or state.pitExitDriven and '1' or '0',
-    lp and lp.entry or 0, lp and lp.lane or 0, lp and lp.park or 0, cp and cp.entry or 0, cp and cp.park or 0, cp and cp.since or 0))
+    lp and lp.entry or 0, lp and lp.lane or 0, lp and lp.park or 0, cp and cp.entry or 0, cp and cp.park or 0, cp and cp.since or 0, PitRecord.valid or 0))
+  RecordSync.base.statSet(PitRecord.stops, state.list.dsq)
 end
 function PitRecord.apply(body, seq, newConnection)
   local f = {}
@@ -3280,6 +3296,7 @@ function PitRecord.apply(body, seq, newConnection)
   end
   PitRecord.seq = math.max(PitRecord.seq or 0, seq or 0)
   PitRecord.stops = math.max(PitRecord.stops, tonumber(stops))
+  PitRecord.valid = math.max(PitRecord.valid or 0, tonumber(f[14]) or 0)
   PitRecord.last = last
   local n = {}
   for v in tostring(f[13] or ''):gmatch('%d+') do n[#n + 1] = tonumber(v) end
@@ -4961,6 +4978,7 @@ local function listSave()
   Record.save('penalties', l.seq, string.format('%d|0|%d|%d|%d|%d|%d|%d|%d|%s', l.seq, l.curLap,
     l.owner or 0, l.dsq, l.dsqStage, math.floor(l.dsqUntil), w and w.driver or 0, w and math.floor(w.since) or 0,
     table.concat(parts, ';')))
+  RecordSync.base.statSet(PitRecord.stops, l.dsq)
 end
 local function listApply(data, source)
   local l = state.list
@@ -6898,7 +6916,7 @@ do
   end
   function PitStops.countStop()
     local p = PitStops.pass
-    if not config.pitStopsEnabled or not p or p.stop or Rules.dsqOn() then return end
+    if not config.pitStopsEnabled or not p or p.stop or Rules.dsqOn() or Lap.over then return end
     if state.pitPassReverse then
       if not p.reverseLogged then
         p.reverseLogged = true
@@ -6906,20 +6924,16 @@ do
       end
       return
     end
-    if PitStops.stopWindow() and not PitStops.passInStopWindow then
-      if not p.outside then
-        p.outside = true
-        ac.log('race-control: pit stop outside the window of the mandatory pit stop: not counted')
-      end
-      return
-    end
-    if PitStops.stopWindow() and not state.pit.stopDone then
-      state.pit.stopDone = true
-      Record.save('stopwindow', math.floor(serverTimeMs() / 1000), 'done')
-      ac.log('race-control: mandatory pit stop window: stop counted')
-    end
     PitRecord.stops = PitRecord.stops + 1
     p.stop = PitRecord.stops
+    if PitStops.stopWindow() and PitStops.passInStopWindow then
+      PitRecord.valid = PitRecord.valid + 1
+      if not state.pit.stopDone then
+        state.pit.stopDone = true
+        Record.save('stopwindow', math.floor(serverTimeMs() / 1000), 'done')
+        ac.log('race-control: mandatory pit stop window: stop counted')
+      end
+    end
     PitRecord.save()
     ac.log(string.format('race-control: pit stop %d counted', p.stop))
   end
@@ -7010,8 +7024,9 @@ do
       why = string.format(TEXTS.swapsMissingDsq, SwapRecord.validNow(), req)
     end
     local stopsReq = config.stopsRequired()
-    if config.pitStopsEnabled and stopsReq > 0 and PitRecord.stops < stopsReq then
-      local s = string.format(TEXTS.stopsMissingDsq, PitRecord.stops, stopsReq)
+    local stopsDone = PitStops.stopWindow() and PitRecord.valid or PitRecord.stops
+    if config.pitStopsEnabled and stopsReq > 0 and stopsDone < stopsReq then
+      local s = string.format(TEXTS.stopsMissingDsq, stopsDone, stopsReq)
       why = why and (why .. ' - ' .. s) or s
     end
     if not why then return end
@@ -7087,6 +7102,7 @@ do
     end
     if PitStops.pass and PitStops.pass.entryMs and CarRead.parked(car) and not PitControl.settling() then
       PitStops.pass.stopped = true
+      if not sgItem() and not state.redFlag then PitStops.countStop() end
     end
     local p = PitStops.pass
     if p and p.sgServiced then
@@ -7146,6 +7162,7 @@ do
       DriverTable.swapDone = true
       swapNo = sw.count
       if sw.swapInfo.inWindow then PitStops.validSwap() end
+      PitStops.countStop()
       sw.passSwap, sw.passSwapValid, sw.passVoided = true, sw.swapInfo.inWindow, false
       if state.pitPassServiced then PitStops.voidSwap() end
       if state.pitPassSgPaid or state.pitPassReverse then PitStops.voidSwap(true) end
@@ -7159,6 +7176,7 @@ do
       sw.count = sw.count + 1
       swapNo = sw.count
       if PitStops.window() == nil then sw.valid = sw.valid + 1 end
+      PitStops.countStop()
       sw.passSwap, sw.passSwapValid, sw.passVoided = true, PitStops.window() == nil, false
       if state.pitPassSgPaid or state.pitPassReverse then PitStops.voidSwap(true) end
     end
@@ -7756,7 +7774,6 @@ do
         PitRecord.save()
         ac.log(string.format('race-control: stop & go served (%d s)', sgSeconds(sg)))
         PitStops.notePaid(string.format('stop & go %d s', sgSeconds(sg)))
-        PitStops.countStop()
         rcLog(TEXTS.rc.sgServed, string.format('%d s', sgSeconds(sg)))
         for n in sgKmrSuffix(sg):gmatch('x(%d+)') do
           rcLog(TEXTS.rc.dtServedSg, reasonLog('K' .. n))
@@ -10142,7 +10159,7 @@ do
 end
 local RaceTable = {}
 sessionPart('raceTable', RaceTable, function()
-  return { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, stops = {}, passes = {}, seen = {}, leftBox = false, present = SESSION_NONE, lastLap = SESSION_NONE,
+  return { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, passes = {}, seen = {}, leftBox = false, present = SESSION_NONE, lastLap = SESSION_NONE,
     stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0, totals = {} }, stintDone = false, maxDsq = false, minDone = false, prevParked = SESSION_NONE }
 end, { 'losses' })
 do
@@ -10175,18 +10192,6 @@ do
     eventKeys = keys
     return keys
   end
-  local STOPS_KEY = 'rc.stops'
-  local function stopsSave()
-    local parts = {}
-    for i, n in pairs(RaceTable.stops) do parts[#parts + 1] = i .. ':' .. n end
-    ac.storage[STOPS_KEY] = Record.key() .. '\n' .. table.concat(parts, ';')
-  end
-  local function stopsLoad()
-    RaceTable.stops, RaceTable.passes = {}, {}
-    local key, body = tostring(ac.storage[STOPS_KEY] or ''):match('^([^\n]*)\n(.*)$')
-    if not key or not Record.sameSession(key, Record.key()) then return end
-    for i, n in body:gmatch('(%d+):(%d+)') do RaceTable.stops[tonumber(i)] = tonumber(n) end
-  end
   local SEEN_KEY = 'rc.seen'
   local function seenSave()
     local parts = {}
@@ -10199,20 +10204,10 @@ do
     if not key or not Record.sameSession(key, Record.key()) then return end
     for i in body:gmatch('%d+') do RaceTable.seen[tonumber(i)] = true end
   end
-  local function stopsWatch(c)
+  local function boxWatch(c)
     local ps = RaceTable.passes[c.index] or {}
     RaceTable.passes[c.index] = ps
     if c.isInPit then ps.box = true elseif ps.box and c.isConnected then ps.box, RaceTable.leftBox = false, true end
-    if c.isInPitlane then
-      ps.lane = true
-      if CarRead.parked(c) then ps.parked = true end
-    elseif ps.lane then
-      if ps.parked then
-        RaceTable.stops[c.index] = (RaceTable.stops[c.index] or 0) + 1
-        stopsSave()
-      end
-      ps.lane, ps.parked = false, false
-    end
   end
   local pool = {}
   local function bestOrder(a, b)
@@ -10242,6 +10237,8 @@ do
     return r ~= nil and r.stopped == true
   end
   function RaceTable.refresh()
+    RecordSync.base.dirPenAsk(true)
+    local stat = RecordSync.base.dirPen.stat or {}
     local session = ac.getSession(Session.index)
     local board = session and session.leaderboard
     local rows, byIndex, absent, added = {}, {}, {}, false
@@ -10252,7 +10249,7 @@ do
         local c = e and e.car
         local t = c and CarsTick.byIndex[c.index]
         if t and not t.staff then
-          stopsWatch(c)
+          boxWatch(c)
           local n, b, _, _, ct, bt = Lap.of(c.index)
           local laps, best = n or 0, b or 0
           local inBoard = (e.laps or 0) > 0 or (e.bestLapTimeMs or 0) > 0
@@ -10265,7 +10262,9 @@ do
             pool[c.index] = r
           end
           r.number, r.name, r.team, r.laps, r.best = t.number, t.name, t.team, laps, best
-          r.spline, r.inPit, r.connected, r.stops, r.absent = CarRead.num(c.splinePosition), c.isInPitlane, c.isConnected, RaceTable.stops[c.index] or 0, nil
+          r.spline, r.inPit, r.connected, r.absent = CarRead.num(c.splinePosition), c.isInPitlane, c.isConnected, nil
+          local st = stat[c.sessionID]
+          r.stops, r.dsq = st and st.stops or 0, st ~= nil and st.dsq
           r.ct, r.bt, r.slot = ct or 0, bt or 0, c.sessionID or c.index
           r.pos, r.classPos = nil, nil
           if race then Relative.track(r, c, n, state.ui.clock) end
@@ -10273,7 +10272,7 @@ do
             rows[#rows + 1] = r
             if (c.index == 0 or c.isConnected) and (race or CarRead.num(c.speedKmh) > 8) then rows.oldest = math.min(rows.oldest or math.huge, r.ct) end
           else
-            r.absent, r.laps, r.best, r.stops = true, 0, 0, 0
+            r.absent, r.laps, r.best, r.stops, r.dsq = true, 0, 0, 0, false
             absent[r.slot] = r
           end
           byIndex[c.index] = r
@@ -10388,7 +10387,6 @@ do
     loaded = true
     lapsApply(Record.load('laps'))
     RaceTable.lastLap = RaceTable.laps[#RaceTable.laps] and RaceTable.laps[#RaceTable.laps].lap or nil
-    stopsLoad()
     seenLoad()
     local body, seq = Record.load('stint')
     if body then stintApply(body, seq) end
@@ -10505,15 +10503,16 @@ do
     local inPL = car.isInPitlane == true
     if PL.was == false and inPL then
       PL.on, PL.ms, PL.park, PL.out, PL.tow = true, {}, 0, false, false
-      PL.entry, PL.since, PL.resumed = Clock.ms('raw'), nil, false
+      PL.entry, PL.since, PL.resumed, PL.counted = Clock.ms('raw'), nil, false, false
     end
     local rs = PitRecord.resume
     if rs and inPL and not PL.on then
       PL.on, PL.ms, PL.park, PL.out, PL.tow = true, {}, rs.park / 1000, false, false
-      PL.entry, PL.since, PL.resumed = rs.entry, rs.since > 0 and rs.since or nil, true
+      PL.entry, PL.since, PL.resumed, PL.counted = rs.entry, rs.since > 0 and rs.since or nil, true, false
     end
     PitRecord.resume = nil
     if PL.on and inPL then
+      if PitStops.pass and PitStops.pass.stop then PL.counted = true end
       local parked = CarRead.parked(car)
       if parked and not PL.since then PL.since = Clock.ms('raw') end
       if not parked and PL.since then PL.park, PL.since = PL.park + (Clock.ms('raw') - PL.since) / 1000, nil end
@@ -10528,7 +10527,7 @@ do
     if PL.on and PL.was and not inPL then
       PL.out = true
       if PL.since then PL.park, PL.since = PL.park + (Clock.ms('raw') - PL.since) / 1000, nil end
-      if not PL.tow and PL.park > 0 then
+      if not PL.tow and PL.park > 0 and PL.counted then
         PitRecord.lastPass = { entry = math.floor(PL.entry), lane = math.floor(Clock.ms('raw') - PL.entry), park = math.floor(PL.park * 1000) }
       end
       PitRecord.pass = nil
@@ -13576,7 +13575,7 @@ local drawRaceScreens = (function()
   local ROW = 13
   local FS = 10
   local PLACE = { relative = { 1572, 380, 330 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 210 },
-    race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 510 }, event = { 770, 200, 380 },
+    race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 516 }, event = { 770, 200, 380 },
     weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 616 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 },
     calc = { 380, 110, 380 } }
   local filter = Desktop.filter
@@ -13700,7 +13699,7 @@ local drawRaceScreens = (function()
       local r = e.r
       local mine = r.index == 0
       local lapDiff = RaceTable.progress(r) - RaceTable.progress(me)
-      local col = mine and YELLOW or r.inPit and COLOR_OFF or (lapDiff >= 1 and BLUE) or (lapDiff <= -1 and LAPDOWN) or COLOR_TITLE
+      local col = mine and YELLOW or (r.dsq and COLOR_OFF) or r.inPit and COLOR_OFF or (lapDiff >= 1 and BLUE) or (lapDiff <= -1 and LAPDOWN) or COLOR_TITLE
       local pos = filter.relative == 'ALL' and ('P' .. r.pos) or ('C' .. tostring(r.classPos or '-'))
       local gap, laps = '+0.0', ''
       if not mine then
@@ -13740,8 +13739,8 @@ local drawRaceScreens = (function()
     local H = TEXTS.hdr
     row(p1, y, s, { { H.pos, 32, COLOR_AXIS, true }, { H.classPos, 52, COLOR_AXIS, true }, { '#', 58, COLOR_AXIS },
       { H.driver, 88, COLOR_AXIS }, { H.class, 214, COLOR_AXIS }, { H.laps, 270, COLOR_AXIS, true },
-      { H.gap, 306, COLOR_AXIS, true }, { H.int, 346, COLOR_AXIS, true }, { H.best, 398, COLOR_AXIS, true },
-      { H.pit, 424, COLOR_AXIS, true }, { H.sr, 456, COLOR_AXIS, true }, { H.pts, 492, COLOR_AXIS, true } })
+      { H.gap, 306, COLOR_AXIS, true }, { H.int, 346, COLOR_AXIS, true }, { H.best, 404, COLOR_AXIS, true },
+      { H.pit, 430, COLOR_AXIS, true }, { H.sr, 462, COLOR_AXIS, true }, { H.pts, 498, COLOR_AXIS, true } })
     y = y + ROW * s
     local leader = list[1]
     local sessionBest = Lap.sessionBest()
@@ -13757,22 +13756,34 @@ local drawRaceScreens = (function()
     for i = first, last do
       local r = list[i]
       local me = r.index == 0
-      local col = me and YELLOW or COLOR_TITLE
+      local col = me and YELLOW or (r.dsq and COLOR_OFF) or COLOR_TITLE
       if r.absent then
         row(p1, y, s, { { '#' .. r.number, 58, COLOR_OFF }, { fitText(r.name, FONT_TEXT, FS * s, 120 * s), 88, COLOR_OFF, false, FONT_TEXT },
           { r.class or '', 214, COLOR_OFF } })
       else
+      local seal
+      if r.dsq then
+        ui.pushDWriteFont(FONT_MONO)
+        local m = ui.measureDWriteText('DSQ', math.max(9 * s, Desktop.text.minPx))
+        ui.popDWriteFont()
+        seal = { tw = m.x, th = m.y, w = m.x + 6 * s, h = m.y + 2 * s }
+      end
       carClick(r.index, vec2(p1.x + 56 * s, y), vec2(p1.x + 212 * s, y + ROW * s))
       row(p1, y, s, {
         { tostring(r.pos), 32, col, true }, { tostring(r.classPos or '-'), 52, COLOR_DIM, true },
-        { '#' .. r.number, 58, col }, { fitText(r.name, me and FONT_TITLE or FONT_TEXT, FS * s, 120 * s), 88, col, false, me and FONT_TITLE or FONT_TEXT },
+        { '#' .. r.number, 58, col }, { fitText(r.name, me and FONT_TITLE or FONT_TEXT, FS * s, seal and (120 * s - seal.w - 4 * s) or 120 * s), 88, col, false, me and FONT_TITLE or FONT_TEXT },
         { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 270, col, true }, { gapTo(r, leader, true), 306, col, true },
         { gapTo(r, list[i - 1]), 346, col, true },
-        { lapTime(r.best), 398, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
-        { tostring(r.stops or 0), 424, col, true },
-        { (function() local _, sr = kmrOf(r); return sr and Audit.num(sr) or '-' end)(), 456, col, true },
-        { (function() local pts = kmrOf(r); return pts and tostring(pts) or '-' end)(), 492, col, true },
+        { lapTime(r.best), 404, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
+        { tostring(r.stops or 0), 430, col, true },
+        { (function() local _, sr = kmrOf(r); return sr and Audit.num(sr) or '-' end)(), 462, col, true },
+        { (function() local pts = kmrOf(r); return pts and tostring(pts) or '-' end)(), 498, col, true },
       })
+      if seal then
+        local x2, y1 = p1.x + 208 * s, y + (ROW * s - seal.h) / 2
+        ui.drawRect(TMP.a:set(x2 - seal.w, y1), TMP.b:set(x2, y1 + seal.h), COLOR_DIM, 0, nil, 1 * s)
+        drawText('DSQ', FONT_MONO, 9 * s, TMP.a:set(x2 - seal.w + (seal.w - seal.tw) / 2, y1 + (seal.h - seal.th) / 2), COLOR_DIM)
+      end
       end
       y = y + ROW * s
     end
@@ -15057,8 +15068,9 @@ float4 main(PS_IN pin) {
     local cw = (p2.x - p1.x - 28 * s - CHIP_GAP * s) / 2
     local req = config.stopsRequired()
     local stopsOn = config.pitStopsEnabled and req > 0
-    local stops = stopsOn and string.format('%d / %d', PitRecord.stops, req) or ''
-    local stopsLight = not stopsOn and COLOR_OFF or (PitRecord.stops >= req and GREEN or YELLOW)
+    local stopsNow = PitStops.stopWindow() and PitRecord.valid or PitRecord.stops
+    local stops = stopsOn and string.format('%d / %d', stopsNow, req) or ''
+    local stopsLight = not stopsOn and COLOR_OFF or (stopsNow >= req and GREEN or YELLOW)
     local swapNow = config.swapRequiredNow()
     local swapReq = swapNow and swapNow > 0 and swapNow or nil
     local swaps = swapReq and string.format('%d / %d', SwapRecord.validNow(), swapReq) or ''
@@ -16925,6 +16937,21 @@ float4 main(PS_IN pin) {
     local COLS = { name = 0, team = 0 }
     local function nameOf(r) return Lang.letters.upper(cut(short(r.name), 14)) end
     local function teamOf(r) return cut(r.team or '', 16) end
+    local crew = { ev = nil, by = {} }
+    local function crewOf(r, one)
+      local ev = BroadcastEvent.ev
+      if crew.ev ~= ev then
+        crew.ev, crew.by = ev, {}
+        for _, c in ipairs(ev and ev.roster or {}) do
+          if type(c.drivers) == 'table' and #c.drivers > 1 then
+            local t = {}
+            for _, d in ipairs(c.drivers) do t[#t + 1] = Lang.letters.upper(cut(short(d), 14)) end
+            crew.by[tostring(c.number)] = table.concat(t, ' / ')
+          end
+        end
+      end
+      return crew.by[tostring(r.number)] or one
+    end
     local function columns(list, extra, k)
       local nw, tw = 0, 0
       for _, r in ipairs(list) do
@@ -17107,6 +17134,20 @@ float4 main(PS_IN pin) {
             if #q < 10 then q[#q + 1] = { kind = 'pit', idx = idx, b = b, sm = sm, col = PAPER, t = nil } end
           end
         end
+      end
+      if first or not CR.sgKept then CR.sgKept = {} end
+      for slot, text in pairs(RecordSync.base.dirPen.bySlot or {}) do
+        local on = false
+        for _, it in ipairs(Rules.listOf(slot, text) or {}) do
+          if it.cat:match('^SG%d+$') and (tonumber(it.kind:match('^SGs(%d+)') or 0) or 0) > 0 then on = true end
+        end
+        local idx = not first and on and not CR.sgKept[slot] and slotCar(slot)
+        if idx then
+          for _, q in pairs(CR.notes) do
+            if #q < 10 then q[#q + 1] = { kind = 'pit', idx = idx, b = Lang.letters.upper(T.sgStop), sm = '', col = PAPER, t = nil } end
+          end
+        end
+        CR.sgKept[slot] = on
       end
     end
     function CR.secScan()
@@ -17774,7 +17815,8 @@ float4 main(PS_IN pin) {
         end
         rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = nameOf(r), team = teamOf(r), class = r.class, laps = r.laps or 0,
           best = r.best or 0, tyre = BroadcastAlerts.tyreOf[r.index], fast = r.index == BC.fastIdx, gapAll = gapTo(leadAll, n == 1, false),
-          gapCls = gapTo(leadCls[cl], first, true) }
+          gapCls = gapTo(leadCls[cl], first, true),
+          slot = r.slot, stops = r.stops or 0, swaps = (RecordSync.base.dirPen.pit[r.slot] or {}).swaps or 0 }
       end
       return rows
     end
@@ -17797,6 +17839,20 @@ float4 main(PS_IN pin) {
         if man or endAt and serverTimeMs() - endAt >= BC.opt.rh * 1000 and ((rows.oldest or math.huge) > endAt or (lim and serverTimeMs() - endAt >= lim)) then
           local _, _, _, name, total = sessionLine()
           R.at, R.rows, R.name, R.total, R.man = state.ui.clock, CR.resTake(), name, total, man
+          R.drv = nil
+          if Session.id then
+            local sid = Session.id
+            RecordSync.base.reportGet('session', { key = 's' .. sid }, function(d)
+              if not d or type(d.drivers) ~= 'table' or Session.id ~= sid then return end
+              local by = {}
+              for _, x in ipairs(d.drivers) do
+                local slot = tonumber(x.slot)
+                if slot and (tonumber(x.laps) or 0) > 0 then by[slot] = by[slot] or {} by[slot][#by[slot] + 1] = { name = tostring(x.driver or ''), laps = tonumber(x.laps) } end
+              end
+              for _, list in pairs(by) do table.sort(list, function(a, b) return a.laps > b.laps end) end
+              R.drv = by
+            end)
+          end
           if not man then R.sid = Session.id end
           R.movePage = nil
           R.pages = { 'ALL' }
@@ -17819,7 +17875,7 @@ float4 main(PS_IN pin) {
       local i = math.min(2 + math.floor((d - BC.opt.rsg) / BC.opt.rcs), #R.pages)
       return R.pages[i], (d - BC.opt.rsg) % BC.opt.rcs
     end
-    local RES_COLS = { 6, 40, 60, 0, 0, 30, 76, 132, 150 }
+    local RES_COLS = { 6, 40, 60, 0, 0, 30, 76, 56, 56, 132, 150 }
     function CR.resDraw(w, h, k, id, page)
       local T = TEXTS.bc
       local R = CR.res
@@ -17863,8 +17919,8 @@ float4 main(PS_IN pin) {
       end
       local fixedW, gap = 0, 12 * k
       for _, c in ipairs(RES_COLS) do fixedW = fixedW + c * k end
-      local fr = (rw - 26 * k - fixedW - 8 * gap) / 2.25
-      local cw = { 6 * k, 40 * k, 60 * k, fr * 1.25, fr, 30 * k, 76 * k, 132 * k, 150 * k }
+      local fr = (rw - 26 * k - fixedW - 10 * gap) / 2.25
+      local cw = { 6 * k, 40 * k, 60 * k, fr * 1.25, fr, 30 * k, 76 * k, 56 * k, 56 * k, 132 * k, 150 * k }
       local function cols(yy, cells, row)
         local xx = x1
         local hh = row and rh or th
@@ -17880,7 +17936,7 @@ float4 main(PS_IN pin) {
             elseif i == 4 then font, size = F.name, 20 * k
             elseif i == 5 then font, size, col = F.team, 16 * k, DIMW
             elseif i == 2 then size = 22 * k
-            elseif i == 8 and row.fast then col = PURPLE end
+            elseif i == 10 and row.fast then col = PURPLE end
             if row and i == 3 then
               local nw = textWidth('#000', F.rb, 13 * k) + 10 * k
               frame(xx, yy + 11 * k, xx + nw, yy + 29 * k, NUMB, k)
@@ -17897,11 +17953,19 @@ float4 main(PS_IN pin) {
       end
       rect(x1, y, x2, y + k, HAIR)
       local H = T.resHead
-      cols(y, { nil, H[1], H[2], H[3], H[4], H[5], H[6], H[7], H[8] }, nil)
+      cols(y, { nil, H[1], H[2], H[3], H[4], H[5], H[6], H[7], H[8], H[9], H[10] }, nil)
       y = y + th
       local function line(r, yy)
         rect(x1, yy, x2, yy + k, HAIR)
-        cols(yy, { nil, tostring(byCls and (r.classPos or '') or r.pos), '#' .. tostring(r.number or ''), r.name, r.team, '', tostring(r.laps),
+        local drv = R.drv and R.drv[r.slot]
+        local names = r.name
+        if drv and #drv > 1 then
+          local t = {}
+          for _, x in ipairs(drv) do t[#t + 1] = x.name end
+          names = table.concat(t, ' / ')
+        end
+        cols(yy, { nil, tostring(byCls and (r.classPos or '') or r.pos), '#' .. tostring(r.number or ''), names, r.team, '', tostring(r.laps),
+          (r.stops or 0) > 0 and tostring(r.stops) or '-', (config.swapOn() and (r.swaps or 0) > 0) and tostring(r.swaps) or '-',
           r.best > 0 and lapTime(r.best) or '-', byCls and r.gapCls or r.gapAll }, r)
       end
       for n = 1, pins do line(list[n], y) y = y + rh end
@@ -18162,7 +18226,7 @@ float4 main(PS_IN pin) {
           frame(cx, ry + 11 * k, cx + nw, ry + 29 * k, NUMB, k)
           drawText(num, F.rb, 13 * k, TMP.a:set(cx + nw / 2 - textWidth(num, F.rb, 13 * k) / 2, ry + 12 * k), PAPER)
           cx = x + cwid[1]
-          drawText(fitText(Lang.letters.upper(short(e.name or '')), F.name, 18 * k, cwid[2] - 12 * k, '.'), F.name, 18 * k, TMP.a:set(cx, ry + 9 * k), PAPER)
+          drawText(fitText(crewOf(e, Lang.letters.upper(short(e.name or ''))), F.name, 18 * k, cwid[2] - 12 * k, '.'), F.name, 18 * k, TMP.a:set(cx, ry + 9 * k), PAPER)
           cx = cx + cwid[2]
           drawText(fitText(tostring(e.team or ''), F.team, 15 * k, cwid[3] - 12 * k, '.'), F.team, 15 * k, TMP.a:set(cx, ry + 11 * k), DIMW)
           cx = cx + cwid[3]
@@ -22525,7 +22589,7 @@ local drawDesktopUI = (function()
     local wxNow = Desktop.wxNow and Desktop.wxNow()
     local rows = {
       { TEXTS.scrPosition, me and ('P' .. me.pos .. (me.class and string.format(TEXTS.posClassFmt, me.classPos, me.class) or '')) or '-' },
-      { TEXTS.lobbyStops, string.format('%d / %d', PitRecord.stops, config.stopsRequired()) },
+      { TEXTS.lobbyStops, string.format('%d / %d', PitStops.stopWindow() and PitRecord.valid or PitRecord.stops, config.stopsRequired()) },
       { TEXTS.scrPending, pen and pen.value or '-' },
       { TEXTS.lobbyKmr, string.format('%s / %d - %s', Audit.points and tostring(Audit.points) or '-', config.kmrPoints.limit,
         Audit.rating and Audit.num(Audit.rating) or '-') },
