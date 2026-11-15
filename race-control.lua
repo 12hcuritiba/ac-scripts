@@ -71,18 +71,25 @@ local cfg = ac.configValues({
   pitStopMode = 'AUTO',
   swapWindowStartMinutes = 0,
   swapWindowEndMinutes = 0,
+  swapFuel = 'NONE',
+  swapEarly = 'SG10',
+  swapEarlyFactor = 2,
+  swapMissing = 'DSQ',
   pitWindowStartMinutes = 0,
   pitWindowEndMinutes = 0,
+  pitWindowOutside = 'DT1',
+  pitWindowInvalid = 'SG80',
   pitStopsEnabled = 0,
   practicePitStopsRequired = 0,
   qualifyPitStopsRequired = 0,
   racePitStopsRequired = 0,
+  pitStopsMissing = 'DSQ',
   practiceClosedSeconds = 60,
   qualifyClosedSeconds = 120,
   raceClosedSeconds = 60,
   practicePenalty = 'REPRIMAND',
   qualifyPenalty = 'DSQ',
-  racePenalty = 'SG:10',
+  racePenalty = 'SG10',
   practicePenaltyParam = -1,
   qualifyPenaltyParam = -1,
   racePenaltyParam = -1,
@@ -129,7 +136,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V305 - 2026.11.14'
+local RC_VERSION = 'V306 - 2026.11.15'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -186,6 +193,7 @@ local TEXTS = {
   pitOpenMsg = 'Pit window open - pit stop before it closes',
   pitNeutral = 'NEUTRAL',
   pitNeutralMsg = 'Neutral zone - the stop counts with the service done in this pass',
+  stopNotValid = 'Pit stop not valid for the mandatory pit stop: the tyre or fuel service was not completed',
   swapCount = '%d | %d',
   trackYellow = 'YELLOW',
   trackBlue = 'BLUE',
@@ -354,6 +362,12 @@ local TEXTS = {
     FL = 'Under the minimum speed on the formation lap',
     FP = 'Overtaking on the formation lap not given back',
     PX = 'Left the pits before the car ahead at the race restart',
+    PWO = 'Valid pit stop outside the window of the mandatory pit stop',
+    PWI = 'Pit stop not valid for the mandatory pit stop',
+    SWF = 'Driver swap during refuelling (team penalty)',
+    SWE = 'Left the pits before the minimum driver swap time',
+    SWM = 'Driver swaps below the required',
+    PSM = 'Pit stops below the required',
   },
   kmrReasons = {
     K0 = 'KMR penalty', K1 = 'Pit exit line crossing', K2 = 'Pit lane speeding', K3 = 'Infraction limit',
@@ -366,8 +380,8 @@ local TEXTS = {
   dsqDtReason = 'Drive-through not served',
   dsqSgReason = 'Stop & go not served',
   wrongWayDsq = 'Driving the wrong way',
-  swapVoidService = 'Driver swap not valid - service in the same pit stop',
   swapVoidSg = 'Driver swap not valid - stop & go served in the same pit stop',
+  swapVoidEarly = 'Driver swap not valid - left the pits before the minimum swap time',
   swapInvalidTitle = 'INVALID DRIVER SWAP',
   swapInvalidLeave = 'Stop & go served in this stop - leave the car, do not leave the pits',
   swapReverseLeave = 'Pit lane driven the wrong way in this pass - leave the car, do not leave the pits',
@@ -383,15 +397,15 @@ local TEXTS = {
   dtNextLap = 'Serve it this lap or the next',
   dtWithinLaps = 'Serve it within %d laps',
   dtOverdue = 'OVERDUE - serve it at the next pit pass',
-  pitWindowDsq = 'Driver swap window missed', stopWindowDsq = 'Mandatory pit stop missed',
-  swapEarlyDsq = 'Left the pits before the driver swap time',
+  pitWindowDsq = 'Driver swap window missed',
   swapsMissingDsq = 'Driver swaps missing (%d of %d)',
   stopsMissingDsq = 'Pit stops missing (%d of %d)',
   driverRow = 'Driver',
   driverRowText = 'swap %d%s - team %s - GUID %s',
   driverRowRejoin = ' (rejoin)',
   pitStopRow = 'Pit',
-  pitStopRowText = 'line %d - stop %s - in %s - out %s - %s - %s - %s - flags %s/%s - team %s - GUID %s',
+  pitStopRowText = 'line %d - stop %s - in %s - out %s - %s - %s - %s - flags %s/%s - team %s - GUID %s - %s',
+  pitStopValid = { ['in'] = 'valid in the window', out = 'valid outside the window', no = 'not valid' },
   pitStopRowInPits = 'in the pits',
   pitStopRowNoService = 'no service',
   pitStopRowNoPenalty = 'no penalty',
@@ -711,7 +725,7 @@ local TEXTS = {
   dirNoData = 'no data', kmrEvNoAnswer = 'no answer',
   dirChip = { dt = 'DT', kick = 'KICK', ban60 = 'BAN 60', dsq = 'DSQ' },
   dirAct = { money = 'reset money', stats = 'reset stats', ban = 'ban', unban = 'unban', ballast = 'ballast kg', restrictor = 'restrictor',
-    dt = 'DT %s', cancelDt = 'cancel DT %s', relaxSg = 'relax S&G %s', kick = 'kick %s', ban60 = 'ban 60 min %s', toPit = 'to the pits %s',
+    dt = 'DT %s', cancelDt = 'cancel DT %s', relaxSg = 'relax S&G %s', kick = 'kick %s', ban60 = 'ban 60 min %s', toPit = 'to the pits %s - counts as a pit stop',
     dsq = 'DSQ %s', relaxDsq = 'relax DSQ %s', fuel = 'fuel unlocked %s', menu = 'menu free %s' },
   wheelCode = { FL = 'FL', FR = 'FR', RL = 'RL', RR = 'RR', F = 'F', R = 'R' },
   wheelNames = { [0] = 'front left', 'front right', 'rear left', 'rear right' }, bodySides = { [0] = 'front', 'rear', 'left', 'right' },
@@ -825,15 +839,19 @@ local config = (function()
     raceDriverSwapRequired = { 'driverSwap', 'raceRequired', nil, '' },
     wrongDriverSeconds = { 'driverSwap', 'wrongDriverSeconds', nil, '120' },
     swapWindowStartMinutes = { 'driverSwap', 'swapStartMinutes', nil, 0 }, swapWindowEndMinutes = { 'driverSwap', 'swapEndMinutes', nil, 0 },
+    swapFuel = { 'driverSwap', 'fuelSwapPenalty', nil, 'NONE' }, swapEarly = { 'driverSwap', 'earlyExitPenalty', nil, 'SG10' },
+    swapEarlyFactor = { 'driverSwap', 'earlyExitFactor', nil, 2 }, swapMissing = { 'driverSwap', 'missingPenalty', nil, 'DSQ' },
     pitStopsEnabled = { 'pitStops', 'enabled', nil, 0 },
     practicePitStopsRequired = { 'pitStops', 'practiceRequired', nil, 0 }, qualifyPitStopsRequired = { 'pitStops', 'qualifyRequired', nil, 0 },
     racePitStopsRequired = { 'pitStops', 'raceRequired', nil, 0 },
+    pitStopsMissing = { 'pitStops', 'missingPenalty', nil, 'DSQ' },
     pitStopOrder = { 'pitStops', 'order', nil, 'F<TR>' }, pitStopMode = { 'pitStops', 'mode', nil, 'AUTO' },
     pitWindowStartMinutes = { 'pitWindow', 'pitStartMinutes', nil, 0 }, pitWindowEndMinutes = { 'pitWindow', 'pitEndMinutes', nil, 0 },
+    pitWindowOutside = { 'pitWindow', 'outsidePenalty', nil, 'DT1' }, pitWindowInvalid = { 'pitWindow', 'invalidPenalty', nil, 'SG80' },
     practiceClosedSeconds = { 'pitExit', 'practiceSeconds', nil, 60 }, qualifyClosedSeconds = { 'pitExit', 'qualifySeconds', nil, 120 },
     raceClosedSeconds = { 'pitExit', 'raceSeconds', nil, 60 },
     practicePenalty = { 'pitExit', 'practice', nil, 'REPRIMAND' }, qualifyPenalty = { 'pitExit', 'qualify', nil, 'DSQ' },
-    racePenalty = { 'pitExit', 'race', nil, 'SG:10' },
+    racePenalty = { 'pitExit', 'race', nil, 'SG10' },
     pitSpeedLimit = { 'pitSpeed', 'limit', nil, 60 }, pitSpeedTolerance = { 'pitSpeed', 'tolerance', nil, 2 },
     pitSpeedDeadlineLaps = { 'pitSpeed', 'deadlineLaps', nil, 1 },
     holdShortSeconds = { 'stopAndGo', 'holdShort', nil, 45 }, holdLongSeconds = { 'stopAndGo', 'holdLong', nil, 90 },
@@ -902,6 +920,7 @@ local config = (function()
     local p = string.upper(tostring(penalty))
     local n = tonumber(param)
     local base, arg = p:match('^(.-):(%d+)$')
+    if not base then base, arg = p:match('^(%a+)(%d+)$') end
     if base then
       p = base
       if not n or n < 0 then n = tonumber(arg) end
@@ -985,6 +1004,10 @@ local config = (function()
     swap = bySession(tonumber(K('practiceDriverSwap')) == 1, tonumber(K('qualifyDriverSwap')) == 1,
       tonumber(K('raceDriverSwap')) == 1),
     swapMinSeconds = tonumber(K('driverSwapMinSeconds')) or 120,
+    swapFuel = rule(K('swapFuel'), -1),
+    swapEarly = rule(K('swapEarly'), -1),
+    swapEarlyFactor = tonumber(K('swapEarlyFactor')) or 2,
+    swapMissing = rule(K('swapMissing'), -1),
     swapRequiredBy = bySession(tonumber(K('practiceDriverSwapRequired')) and math.floor(tonumber(K('practiceDriverSwapRequired'))) or nil,
       tonumber(K('qualifyDriverSwapRequired')) and math.floor(tonumber(K('qualifyDriverSwapRequired'))) or nil,
       tonumber(K('raceDriverSwapRequired')) and math.floor(tonumber(K('raceDriverSwapRequired'))) or nil),
@@ -1000,6 +1023,9 @@ local config = (function()
       math.floor(tonumber(K('qualifyPitStopsRequired')) or 0),
       math.floor(tonumber(K('racePitStopsRequired')) or 0)),
     pitWindowEnd = tonumber(K('pitWindowEndMinutes')) or 0,
+    pitWindowOutside = rule(K('pitWindowOutside'), -1),
+    pitWindowInvalid = rule(K('pitWindowInvalid'), -1),
+    pitStopsMissing = rule(K('pitStopsMissing'), -1),
     pitSpeedDeadlineLaps = math.floor(tonumber(K('pitSpeedDeadlineLaps')) or 1),
     code80Freeze = tonumber(K('code80FreezeDeadlines')) == 1,
     dataCheck = tonumber(K('dataCheck')) ~= 0,
@@ -2288,7 +2314,10 @@ do
     local parked = car ~= nil and car.isInPit == true and (tonumber(car.speedKmh) or 0) < 1
     local menu = (Connection.ownOpen or 0) > 0
     local sig = (parked and '1' or '0') .. (menu and '1' or '0') .. (e.left and '1' or '0') .. (e.win and '1' or '0')
-    if sig ~= e.sig then e.sig, e.parked, e.menu, e.t, e.due = sig, parked, menu, math.floor(serverTimeMs()), true end
+    if sig ~= e.sig then
+      e.sig, e.parked, e.menu, e.t, e.due = sig, parked, menu, math.floor(serverTimeMs()), true
+      e.el = state.swap.allowT and math.floor(state.ui.clock - state.swap.allowT) or 0
+    end
   end
   B.stat = { x = nil, due = false }
   function B.statSet(stops, dsq)
@@ -2354,8 +2383,8 @@ do
     for _, t in ipairs(keep) do src.traces[#src.traces + 1] = t end
     for _, t in ipairs(traces) do traceParts[#traceParts + 1] = string.format('{"lap":%d,"n":%d,"dt":%d,"data":%s}', t.lap, t.n or 0, t.dt or 0, jsonStr(t.data)) end
     local e = B.exit
-    local exitJson = exitDue and string.format(',"exit":{"t":%d,"parked":%d,"menu":%d,"left":%d,"win":%d}', e.t or 0, e.parked and 1 or 0, e.menu and 1 or 0,
-      e.left and 1 or 0, e.win and 1 or 0) or ''
+    local exitJson = exitDue and string.format(',"exit":{"t":%d,"parked":%d,"menu":%d,"left":%d,"win":%d,"el":%d}', e.t or 0, e.parked and 1 or 0, e.menu and 1 or 0,
+      e.left and 1 or 0, e.win and 1 or 0, e.el or 0) or ''
     if exitDue then e.due = false end
     local statDue = src.now and B.stat.due
     local statJson = statDue and (',"stat":' .. jsonStr(B.stat.x)) or ''
@@ -2434,8 +2463,10 @@ do
       if not on() or not Session.id then return end
       local e = B.exit
       e.left, e.t = true, math.floor(serverTimeMs())
+      e.el = state.swap.allowT and math.floor(state.ui.clock - state.swap.allowT) or 0
       local body = '{"key":' .. jsonStr(Record.key()) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"parts":{}'
-        .. string.format(',"exit":{"t":%d,"parked":%d,"menu":%d,"left":1,"win":%d}', e.t, e.parked and 1 or 0, e.menu and 1 or 0, e.win and 1 or 0) .. '}'
+        .. string.format(',"exit":{"t":%d,"parked":%d,"menu":%d,"left":1,"win":%d,"el":%d}', e.t, e.parked and 1 or 0, e.menu and 1 or 0, e.win and 1 or 0,
+          e.el) .. '}'
       WebQueue.request('POST', config.baseUrl .. '/v1/persist', { ['Content-Type'] = 'application/json' }, body, function() end, true)
     end)
   end
@@ -3248,7 +3279,7 @@ do
   end)
 end
 local PitRecord = { HOLD_MAX = 86400, HOLD_GRACE = 2000 }
-sessionPart('pitRecord', PitRecord, function() return { stops = 0, valid = 0, last = '-', seq = 0, holdEnded = SESSION_NONE, lastPass = SESSION_NONE, pass = SESSION_NONE,
+sessionPart('pitRecord', PitRecord, function() return { stops = 0, valid = 0, validOut = 0, last = '-', seq = 0, holdEnded = SESSION_NONE, lastPass = SESSION_NONE, pass = SESSION_NONE,
   resume = SESSION_NONE } end, { 'HOLD_MAX', 'HOLD_GRACE' })
 PitRecord.onService = nil
 local startHold
@@ -3260,7 +3291,7 @@ function PitRecord.save()
   local rt = state.redTow
   local inv = state.swapInvalid
   local lp, cp = PitRecord.lastPass, PitRecord.pass
-  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s|%s|%d|%s|%d/%d/%d/%d/%d/%d|%d', PitRecord.stops, PitRecord.last,
+  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s|%s|%d|%s|%d/%d/%d/%d/%d/%d|%d|%d', PitRecord.stops, PitRecord.last,
     h and math.floor(h.untilMs) or 0, text,
     sv and string.format('%d/%d/%s', math.floor(sv.startMs), math.floor(sv.untilMs), sv.plan) or '-',
     state.pitPassServiced and 1 or 0, rt and string.format('%d/%.4f/%.4f/%.2f', rt.tow, rt.damage.powertrain,
@@ -3268,7 +3299,8 @@ function PitRecord.save()
     inv and string.format('%d/%d%s', inv.driver, math.floor(inv.since), inv.reverse and '/1' or '') or '',
     h and tostring(h.cause or ''):gsub('[|]', '/') or '', state.pitPassReverse or 0,
     state.pitExitDriven == nil and '' or state.pitExitDriven and '1' or '0',
-    lp and lp.entry or 0, lp and lp.lane or 0, lp and lp.park or 0, cp and cp.entry or 0, cp and cp.park or 0, cp and cp.since or 0, PitRecord.valid or 0))
+    lp and lp.entry or 0, lp and lp.lane or 0, lp and lp.park or 0, cp and cp.entry or 0, cp and cp.park or 0, cp and cp.since or 0, PitRecord.valid or 0,
+    PitRecord.validOut or 0))
   RecordSync.base.statSet(PitRecord.stops, state.list.dsq)
 end
 function PitRecord.apply(body, seq, newConnection)
@@ -3297,6 +3329,7 @@ function PitRecord.apply(body, seq, newConnection)
   PitRecord.seq = math.max(PitRecord.seq or 0, seq or 0)
   PitRecord.stops = math.max(PitRecord.stops, tonumber(stops))
   PitRecord.valid = math.max(PitRecord.valid or 0, tonumber(f[14]) or 0)
+  PitRecord.validOut = math.max(PitRecord.validOut or 0, tonumber(f[15]) or 0)
   PitRecord.last = last
   local n = {}
   for v in tostring(f[13] or ''):gmatch('%d+') do n[#n + 1] = tonumber(v) end
@@ -3892,6 +3925,7 @@ do
       return
     end
     local back = P.recDriver ~= nil and P.recDriver == nameCode(ac.getDriverName(0))
+    Lap.rejoin = back
     P.prog = back and 0 or 1
     if back then P.broken, P.trace = true, {} end
     ac.log('race-control: lap: connection with the car in its box ' .. (back and '(the same driver back: the line at the pit exit does not close the lap)'
@@ -5432,6 +5466,7 @@ do
   for cat in pairs(TEXTS.reason) do
     if not TEXTS.kmrReasons[cat] then Rules.catalog[cat] = { kind = 'DT', rc = 'dt' } end
   end
+  Rules.catalog.SWF.team = true
   function Rules.penalty(cat, laps, detail)
     local entry = Rules.catalog[cat]
     if not entry then
@@ -5445,6 +5480,24 @@ do
     rcLog(TEXTS.rc[entry.rc], detail and (reason .. ' - ' .. detail) or reason)
     showNotice(TEXTS.rcTitle, reason)
     return item
+  end
+  function Rules.keyPenalty(r, cat, why, opts)
+    opts = opts or {}
+    local p, text = r and r.penalty, why or TEXTS.reason[cat]
+    if p == 'DT' then return Rules.penalty(cat, math.max(r.param, 0)) end
+    if p == 'SG' and r.param > 0 then return Rules.sgAddSeconds(r.param + (opts.extra or 0), text, cat) end
+    if p == 'DSQ' then
+      if not Rules.dsqOn() then carDsq(opts.dsqKind or 1, text) end
+      return
+    end
+    if p == 'REPRIMAND' then
+      rcLog(TEXTS.rc.reprimand, text)
+      showNotice(TEXTS.rcTitle, opts.notice or text)
+      return
+    end
+    if p ~= 'NONE' then
+      ac.log(string.format('race-control: punishment of the key not applied: %s (parameter %d)', tostring(p), r and r.param or -1))
+    end
   end
 end
 local COLLISION_DAMAGE_WINDOW = 1.5
@@ -6549,6 +6602,10 @@ do
       repair = { suspension = groups:find('s') ~= nil, powertrain = groups:find('p') ~= nil,
         body = groups:find('b') ~= nil } }
   end
+  function PitControl.planFuel(plan)
+    local p = planParse(plan)
+    return p and p.fuel or 0
+  end
   local function beginService(p, req)
     local plan = planText(p)
     if req then plan = planSetMark(plan, 'g', gameMark(req)) end
@@ -6902,21 +6959,21 @@ do
   local function openPass(jumped, entryMs)
     PitStops.line = PitStops.line + 1
     PitStops.pass = { id = PitStops.line, entryMs = entryMs, jumped = jumped, service = nil, paid = {}, stop = nil,
-      raceFlag = raceFlag(), driverFlag = driverFlag(), snap = nil }
+      raceFlag = raceFlag(), driverFlag = driverFlag(), snap = nil, held = state.hold ~= nil }
   end
   local function closePass()
     local p = PitStops.pass
     PitStops.pass = nil
-    if not p or not config.pitStopsEnabled then return end
+    if not p then return end
     rcLog(TEXTS.rc.pit, string.format(TEXTS.pitStopRowText, p.id, p.stop and tostring(p.stop) or '-',
       p.entryMs and raceTime(p.entryMs) or TEXTS.pitStopRowInPits, raceTime(Clock.ms('raw')),
       p.service or TEXTS.pitStopRowNoService, #p.paid > 0 and table.concat(p.paid, ', ') or TEXTS.pitStopRowNoPenalty,
       p.jumped and 'tow' or 'driven', p.raceFlag, p.driverFlag, tostring(ac.getDriverTeam(0) or '-'),
-      tostring(ac.getUserSteamID() or '-')))
+      tostring(ac.getUserSteamID() or '-'), p.valid and TEXTS.pitStopValid[p.valid] or '-'))
   end
   function PitStops.countStop()
     local p = PitStops.pass
-    if not config.pitStopsEnabled or not p or p.stop or Rules.dsqOn() or Lap.over then return end
+    if not p or p.stop or p.held or Rules.dsqOn() or Lap.over then return end
     if state.pitPassReverse then
       if not p.reverseLogged then
         p.reverseLogged = true
@@ -6926,14 +6983,6 @@ do
     end
     PitRecord.stops = PitRecord.stops + 1
     p.stop = PitRecord.stops
-    if PitStops.stopWindow() and PitStops.passInStopWindow then
-      PitRecord.valid = PitRecord.valid + 1
-      if not state.pit.stopDone then
-        state.pit.stopDone = true
-        Record.save('stopwindow', math.floor(serverTimeMs() / 1000), 'done')
-        ac.log('race-control: mandatory pit stop window: stop counted')
-      end
-    end
     PitRecord.save()
     ac.log(string.format('race-control: pit stop %d counted', p.stop))
   end
@@ -6946,12 +6995,17 @@ do
     local p = PitStops.pass
     if p then p.paid[#p.paid + 1] = text end
   end
+  function PitStops.markValidService()
+    local p = PitStops.pass
+    if p then p.validService = true end
+  end
   function PitStops.record(lap, fuel, wheels, compoundChanged, repair)
     PitRecord.last = string.format('%d/%.1f/%d/%s', lap, fuel, wheels, repair and 'repair' or '-')
     local text = string.format('fuel +%.1f L%s%s%s', fuel, wheels > 0 and string.format(', tyres %d', wheels) or '',
       compoundChanged and ', compound' or '', repair and ', repair' or '')
     ac.log('race-control: pit stop with service: ' .. text)
     PitStops.noteService(text)
+    if fuel > 0 or wheels > 0 or compoundChanged then PitStops.markValidService() end
     PitStops.countStop()
     PitRecord.save()
   end
@@ -6963,7 +7017,7 @@ do
       ac.log('race-control: mandatory pit window: valid driver swap')
     end
   end
-  function PitStops.voidSwap(sgPaid)
+  function PitStops.voidSwap(why)
     local sw = state.swap
     if not sw.passSwap or not sw.passSwapValid or sw.passVoided then return end
     sw.passVoided = true
@@ -6973,16 +7027,14 @@ do
       Record.save('window', math.floor(serverTimeMs() / 1000), 'open')
     end
     SwapRecord.save()
-    ac.log('race-control: driver swap not valid: ' .. (sgPaid and 'stop & go served in the same pit stop'
-      or 'service in the same pit stop'))
-    rcLog(TEXTS.rc.swapBox, sgPaid and TEXTS.swapVoidSg or TEXTS.swapVoidService)
+    ac.log('race-control: driver swap not valid: ' .. (why == 'early' and 'left the pits before the minimum swap time' or 'stop & go served in the same pit stop'))
+    rcLog(TEXTS.rc.swapBox, why == 'early' and TEXTS.swapVoidEarly or TEXTS.swapVoidSg)
   end
   function PitStops.markService()
     if not state.pitPassServiced then
       state.pitPassServiced = true
       PitRecord.save()
     end
-    PitStops.voidSwap()
     local p = PitStops.pass
     if p and p.sgPaid and not p.sgServiced then
       p.sgServiced = true
@@ -7018,20 +7070,24 @@ do
   local function raceEnd(car)
     if PitStops.endChecked or sim.raceSessionType ~= ac.SessionType.Race or not car.isRaceFinished or CarRead.isStaff(0) then return end
     PitStops.endChecked = true
-    local why
     local req = config.swapRequiredNow() or 0
     if config.swapOn() and req > 0 and SwapRecord.validNow() < req then
-      why = string.format(TEXTS.swapsMissingDsq, SwapRecord.validNow(), req)
+      local why = string.format(TEXTS.swapsMissingDsq, SwapRecord.validNow(), req)
+      ac.log('race-control: driver swaps missing at the end of the race: ' .. why)
+      Rules.keyPenalty(config.swapMissing, 'SWM', why)
     end
     local stopsReq = config.stopsRequired()
-    local stopsDone = PitStops.stopWindow() and PitRecord.valid or PitRecord.stops
-    if config.pitStopsEnabled and stopsReq > 0 and stopsDone < stopsReq then
-      local s = string.format(TEXTS.stopsMissingDsq, stopsDone, stopsReq)
-      why = why and (why .. ' - ' .. s) or s
+    if config.pitStopsEnabled and stopsReq > 0 then
+      if not PitStops.stopWindow() then
+        local invalid = math.min(math.max(stopsReq - PitRecord.valid, 0), math.max(PitRecord.stops - PitRecord.valid, 0))
+        for _ = 1, invalid do Rules.keyPenalty(config.pitWindowInvalid, 'PWI') end
+      end
+      if PitRecord.stops < stopsReq then
+        local why = string.format(TEXTS.stopsMissingDsq, PitRecord.stops, stopsReq)
+        ac.log('race-control: pit stops missing at the end of the race: ' .. why)
+        Rules.keyPenalty(config.pitStopsMissing, 'PSM', why)
+      end
     end
-    if not why then return end
-    ac.log('race-control: DSQ at the end of the race: ' .. why)
-    if not Rules.dsqOn() then carDsq(1, why) end
   end
   function PitStops.update(car)
     local inPit = car.isInPitlane
@@ -7073,6 +7129,30 @@ do
       end
     end
     if not inPit and PitStops.wasInPitlane then
+      local cp = PitStops.pass
+      if cp and cp.stop and not Rules.dsqOn() then
+        local req = config.stopsRequired()
+        local owed = req - (PitRecord.stops - 1)
+        local inWindow = not PitStops.stopWindow() or PitStops.passInStopWindow
+        cp.valid = not cp.validService and 'no' or inWindow and 'in' or 'out'
+        if cp.valid == 'in' and not state.pit.stopDone then
+          PitRecord.valid = PitRecord.valid + 1
+          if PitRecord.valid >= math.max(req, 1) then
+            state.pit.stopDone = true
+            Record.save('stopwindow', math.floor(serverTimeMs() / 1000), 'done')
+            ac.log('race-control: mandatory pit stop: stops required done')
+          end
+          PitRecord.save()
+        elseif cp.valid == 'out' then
+          PitRecord.validOut = PitRecord.validOut + 1
+          PitRecord.save()
+        elseif cp.valid == 'no' and config.pitStopsEnabled and req > 0 and not state.pit.stopDone then
+          showNotice(TEXTS.rcTitle, TEXTS.stopNotValid)
+        end
+        if state.pit.stopMissed and owed > 0 then
+          Rules.keyPenalty(cp.validService and config.pitWindowOutside or config.pitWindowInvalid, cp.validService and 'PWO' or 'PWI')
+        end
+      end
       sgBack('left the pit lane')
       closePass()
       PitStops.passInWindow = false
@@ -7102,7 +7182,7 @@ do
     end
     if PitStops.pass and PitStops.pass.entryMs and CarRead.parked(car) and not PitControl.settling() then
       PitStops.pass.stopped = true
-      if not sgItem() and not state.redFlag then PitStops.countStop() end
+      if not sgItem() and not state.redFlag and not (PitStops.pass.restored and Lap.rejoin) then PitStops.countStop() end
     end
     local p = PitStops.pass
     if p and p.sgServiced then
@@ -7114,14 +7194,20 @@ do
     end
     raceEnd(car)
     local ss, se = PitStops.stopWindow()
-    if ss and config.pitStopsEnabled and config.stopsRequired() > 0 and not Session.beforeStart() and not CarRead.isStaff(0)
+    local req = config.stopsRequired()
+    if ss and config.pitStopsEnabled and req > 0 and not Session.beforeStart() and not CarRead.isStaff(0)
         and not state.pit.stopDone and not state.pit.stopMissed
         and PitStops.windowTime() > se and not PitStops.stopNeutral(car) then
       state.pit.stopMissed = true
       Record.save('stopwindow', 2, 'missed')
-      ac.log('race-control: mandatory pit stop window missed (no stop counted in it): DSQ')
+      local missing = math.max(req - PitRecord.valid, 0)
+      local outside = math.min(missing, PitRecord.validOut)
+      local invalid = math.min(missing - outside, math.max(PitRecord.stops - PitRecord.valid - PitRecord.validOut, 0))
+      ac.log(string.format('race-control: mandatory pit stop window missed (%d of %d valid): %d outside, %d not valid, %d not made', PitRecord.valid, req, outside,
+        invalid, missing - outside - invalid))
       rcLog(TEXTS.rc.stopWindow, TEXTS.stopWindowMissedLog)
-      if not Rules.dsqOn() then carDsq(1, TEXTS.stopWindowDsq) end
+      for _ = 1, outside do Rules.keyPenalty(config.pitWindowOutside, 'PWO') end
+      for _ = 1, invalid do Rules.keyPenalty(config.pitWindowInvalid, 'PWI') end
     end
     local s, e = PitStops.window()
     if not s or not config.swapOn() or Session.beforeStart() or state.pit.done or state.pit.missed or CarRead.isStaff(0)
@@ -7164,8 +7250,8 @@ do
       if sw.swapInfo.inWindow then PitStops.validSwap() end
       PitStops.countStop()
       sw.passSwap, sw.passSwapValid, sw.passVoided = true, sw.swapInfo.inWindow, false
-      if state.pitPassServiced then PitStops.voidSwap() end
-      if state.pitPassSgPaid or state.pitPassReverse then PitStops.voidSwap(true) end
+      if state.pitPassSgPaid or state.pitPassReverse then PitStops.voidSwap('sg') end
+      if state.pitService and PitControl.planFuel(state.pitService.plan) > 0 then Rules.keyPenalty(config.swapFuel, 'SWF') end
     elseif state.ui.clock - DriverTable.startT < DECIDE_SECONDS then
       return
     elseif sw.driver == me then
@@ -7178,7 +7264,7 @@ do
       if PitStops.window() == nil then sw.valid = sw.valid + 1 end
       PitStops.countStop()
       sw.passSwap, sw.passSwapValid, sw.passVoided = true, PitStops.window() == nil, false
-      if state.pitPassSgPaid or state.pitPassReverse then PitStops.voidSwap(true) end
+      if state.pitPassSgPaid or state.pitPassReverse then PitStops.voidSwap('sg') end
     end
     DriverTable.done = true
     if not rejoin and swapNo and swapNo > 0 then DriverTable.swapMs = serverTimeMs() end
@@ -7821,6 +7907,24 @@ do
       end
       return
     end
+    local team = true
+    for _, it in ipairs(l.items) do
+      if it.kind:sub(1, 2) == 'SG' then
+        if (it.why or '') == '' then team = false end
+        for code in tostring(it.why or ''):gmatch('[^/]+') do
+          if not (Rules.catalog[code] and Rules.catalog[code].team) then team = false end
+        end
+      elseif not (Rules.catalog[it.cat] and Rules.catalog[it.cat].team) then
+        team = false
+      end
+    end
+    if team then
+      l.owner, l.wrong = me, nil
+      listSave()
+      ac.log('race-control: team penalty taken over by the new driver')
+      rcLog(TEXTS.rc.swap, 'Team penalty taken over by the new driver')
+      return
+    end
     if not config.wrongDriver then
       l.owner = me
       l.wrong = nil
@@ -7857,7 +7961,7 @@ do
       PitRecord.save()
       ac.log('race-control: invalid driver swap over: another driver in the car')
     end
-    if payer and state.swap.passSwap then PitStops.voidSwap(true) end
+    if payer and state.swap.passSwap then PitStops.voidSwap('sg') end
     if not payer or payer == me then return end
     if not inv then
       inv = { driver = me, since = serverTimeMs(), reverse = reverse or nil }
@@ -10087,9 +10191,10 @@ do
       flag(p and p.sgServiced), flag(p and p.sgParked), flag(sw.passSwap) .. flag(sw.passSwapValid) .. flag(sw.passVoided),
       state.pitPaid and Rules.itemEncode(state.pitPaid) or '', flag(PitSpeed.over) .. flag(PitSpeed.annul), math.floor(PitSpeed.maxKmh),
       PitSpeed.entryLap and math.max(lapNow - PitSpeed.entryLap, 0) or -1, flag(state.list.jumped),
-      flag(Flags.redReceived), flag(state.redCommitted), math.floor(TrackList.frozenSince or 0), lapNow, flag(PitStops.passInStopWindow) }
+      flag(Flags.redReceived), flag(state.redCommitted), math.floor(TrackList.frozenSince or 0), lapNow, flag(PitStops.passInStopWindow),
+      flag(p and p.validService) }
   end
-  local seen, cur, PROBE = {}, {}, 27
+  local seen, cur, PROBE = {}, {}, 28
   local function moved()
     local p, sw = PitStops.pass, state.swap
     cur[1], cur[2], cur[3], cur[4], cur[5], cur[6], cur[7] = p, p and p.id, PitStops.line, p and p.entryMs, p and p.jumped, p and p.stopped, p and p.stop
@@ -10097,6 +10202,7 @@ do
     cur[13], cur[14], cur[15], cur[16], cur[17] = p and p.sgServiced, p and p.sgParked, sw.passSwap, sw.passSwapValid, sw.passVoided
     cur[18], cur[19], cur[20], cur[21], cur[22] = state.pitPaid, PitSpeed.over, PitSpeed.annul, PitSpeed.entryLap, Lap.count
     cur[23], cur[24], cur[25], cur[26], cur[27] = state.list.jumped, Flags.redReceived, state.redCommitted, TrackList.frozenSince, PitStops.passInStopWindow
+    cur[28] = p and p.validService
     local any = false
     for k = 1, PROBE do
       if cur[k] ~= seen[k] then seen[k], any = cur[k], true end
@@ -10140,7 +10246,8 @@ do
     PitStops.pass = { id = tonumber(f[1]), entryMs = entry >= 0 and entry or nil, jumped = f[4] == '1',
       stopped = f[5] == '1', stop = stop ~= 0 and stop or nil, raceFlag = f[7], driverFlag = f[8],
       service = f[9] ~= '' and f[9] or nil, paid = paid, sgPaid = Rules.itemDecode(f[11], shift),
-      sgServiced = f[12] == '1' or nil, sgParked = f[13] == '1' or nil, snap = nil }
+      sgServiced = f[12] == '1' or nil, sgParked = f[13] == '1' or nil, snap = nil,
+      validService = f[25] == '1' or nil, restored = true }
     local sw = state.swap
     sw.passSwap, sw.passSwapValid, sw.passVoided = f[14]:sub(1, 1) == '1', f[14]:sub(2, 2) == '1', f[14]:sub(3, 3) == '1'
     state.pitPaid = Rules.itemDecode(f[15], shift)
@@ -10789,19 +10896,8 @@ end
 local function onPitViolation(car, r)
   if r.penalty == 'NONE' then return end
   if config.mode == 'CSP' then
-    if r.penalty == 'DSQ' then
-      carDsq(2, TEXTS.dsqWhy.pitClosed)
-      queueChat(TEXTS.pit.DSQ)
-    elseif r.penalty == 'REPRIMAND' then
-      rcLog(TEXTS.rc.reprimand, TEXTS.dsqWhy.pitClosed)
-      showNotice(TEXTS.rcTitle, TEXTS.pit.REPRIMAND)
-    elseif r.penalty == 'SG' and r.param > 0 then
-      Rules.sgAddSeconds(r.param, TEXTS.dsqWhy.pitClosed, 'PC')
-    else
-      ac.log(string.format('race-control: pit: punishment of the key pitExit not applied: %s (parameter %d)',
-        tostring(r.penalty), r.param))
-      return
-    end
+    Rules.keyPenalty(r, 'PC', TEXTS.dsqWhy.pitClosed, { dsqKind = 2, notice = TEXTS.pit.REPRIMAND })
+    if r.penalty == 'DSQ' then queueChat(TEXTS.pit.DSQ) end
   elseif config.isRaceControl then
     applyKMR(car, r)
   else
@@ -23607,15 +23703,15 @@ function script.update(dt)
   local parked = car.isInPit
   if sw.prevInPit and not parked and sw.remaining and sw.remaining - (state.ui.clock - sw.remainingT) > 0
       and not Rules.dsqOn() and not CarRead.isStaff(0) then
-    ac.log(string.format('race-control: DSQ, left the pits %.1f s before the driver swap time',
-      sw.remaining - (state.ui.clock - sw.remainingT)))
+    local missing = sw.remaining - (state.ui.clock - sw.remainingT)
+    ac.log(string.format('race-control: left the pits %.1f s before the driver swap time', missing))
     sw.remaining = nil
-    carDsq(1, TEXTS.swapEarlyDsq)
+    PitStops.voidSwap('early')
+    Rules.keyPenalty(config.swapEarly, 'SWE', nil, { extra = math.ceil(missing) * config.swapEarlyFactor })
   end
   if sw.prevInPit == false and parked then sw.stopT = state.ui.clock end
   if not parked then sw.stopT = nil end
-  local swapAllowed = sw.stopT and #state.list.items == 0 and not state.pitPassServiced
-    and not Rules.dsqOn()
+  local swapAllowed = sw.stopT and #state.list.items == 0 and not Rules.dsqOn()
   if not swapAllowed then sw.allowT = nil elseif not sw.allowT then sw.allowT = state.ui.clock end
   if not inPit then sw.remaining = nil end
   sw.prevInPit = parked
