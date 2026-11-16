@@ -136,7 +136,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V311 - 2026.11.16'
+local RC_VERSION = 'V312 - 2026.11.16'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -5469,7 +5469,7 @@ function Rules.overdue()
   return false
 end
 function Rules.invalidLaps(car)
-  if Rules.overdue() then Lap.mark('overdue', 'penalty overdue') end
+  if Rules.overdue() or Rules.dsqOn() then Lap.mark('overdue', 'penalty overdue') end
 end
 function Rules.sessionSync(g)
   local l = state.list
@@ -16914,7 +16914,7 @@ float4 main(PS_IN pin) {
       if sessionOver() then return 'end', T.finished end
       if state.redFlag then return 'red', T.red end
       if Lap.trackClosed() then return 'red', T.closed end
-      if sim.raceSessionType == ac.SessionType.Race and Formation.on() and Clock.validMs == nil then
+      if BC.formGreen() then
         if BC.abortUp() then return 'code', T.yellow, 'FCY' end
         if Clock.greenMs ~= nil or BC.formCrossed() then return 'none', T.formation end
         return 'green', T.green
@@ -17198,7 +17198,7 @@ float4 main(PS_IN pin) {
       drawText(sig, F.rb, rs, TMP.a:set(rx - textWidth(sig, F.rb, rs) / 2, ry - 7 * k * rs / (11 * k)), PAPER)
     end
     local CR = { pen = {}, notes = { t = {}, b = {} }, seals = {}, nSeals = 0, res = { at = nil, rows = nil, pages = nil }, sn = { at = nil, secs = 6, sid = nil, pending = false },
-      fg = { sid = nil, k = nil } }
+      fg = { sid = nil, k = nil, r = false } }
     local SEAL_Y, SEAL_R, SEAL_K = rgbm(1, 212 / 255, 0, 1), rgbm(224 / 255, 23 / 255, 23 / 255, 1), rgbm(0, 0, 0, 1)
     local SAY_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.96)
     local ROLL = 0.45
@@ -17725,6 +17725,7 @@ float4 main(PS_IN pin) {
       return any
     end
     function BC.abortUp() return Formation.abortMs ~= nil and CR.sn.ab == Formation.abortMs and CR.sn.abN ~= true end
+    function BC.formGreen() return sim.raceSessionType == ac.SessionType.Race and Formation.on() and Clock.validMs == nil end
     function CR.hideList()
       return BC.opt.dd == 1 or CR.preOpen() or (BC.opt.nl == false and not CR.anyOnTrack())
     end
@@ -17992,7 +17993,9 @@ float4 main(PS_IN pin) {
           local best, qw = rows[1] and rows[1].best or 0, tonumber(config.qualifyWait)
           if best > 0 and qw then lim = best * qw / 100 end
         end
-        if man or endAt and serverTimeMs() - endAt >= BC.opt.rh * 1000 and ((rows.oldest or math.huge) > endAt or (lim and serverTimeMs() - endAt >= lim)) then
+        if R.doneSid ~= Session.id then R.doneSid, R.doneAt = Session.id, nil end
+        if not R.doneAt and endAt and ((rows.oldest or math.huge) > endAt or (lim and serverTimeMs() - endAt >= lim)) then R.doneAt = serverTimeMs() end
+        if man or R.doneAt and serverTimeMs() - R.doneAt >= BC.opt.rh * 1000 then
           local _, _, _, name, total = sessionLine()
           R.at, R.rows, R.name, R.total, R.man = state.ui.clock, CR.resTake(), name, total, man
           R.drv = nil
@@ -18017,6 +18020,7 @@ float4 main(PS_IN pin) {
       end
       if not R.at then return nil end
       local d = state.ui.clock - R.at
+      local raw = d
       local total = BC.opt.rsg + (#R.pages - 1) * BC.opt.rcs
       if BC.opt.re == 'TURN' and not R.man then
         if R.sid ~= Session.id then R.at = nil return nil end
@@ -18027,12 +18031,17 @@ float4 main(PS_IN pin) {
         CR.sn.pending = false
         return nil
       end
-      if d < BC.opt.rsg then return 'ALL', d end
+      local turn, n = BC.opt.re == 'TURN' and not R.man, #R.pages
+      local function roll(s, len)
+        return math.min(math.max(math.min((n > 1 or raw < len) and s / ROLL or 1, (n > 1 or not turn) and (len - s) / ROLL or 1), 0), 1)
+      end
+      if d < BC.opt.rsg then return 'ALL', d, roll(d, BC.opt.rsg) end
       local i = math.min(2 + math.floor((d - BC.opt.rsg) / BC.opt.rcs), #R.pages)
-      return R.pages[i], (d - BC.opt.rsg) % BC.opt.rcs
+      local s = (d - BC.opt.rsg) % BC.opt.rcs
+      return R.pages[i], s, roll(s, BC.opt.rcs)
     end
     local RES_COLS = { 6, 40, 60, 0, 0, 30, 76, 56, 56, 132, 150 }
-    function CR.resDraw(w, h, k, id, page)
+    function CR.resDraw(w, h, k, id, page, out)
       local T = TEXTS.bc
       local R = CR.res
       local list = {}
@@ -18050,6 +18059,7 @@ float4 main(PS_IN pin) {
       local th = 28 * k
       local total = headH + legH + th + pins * rh + (pins > 0 and 2 * k or 0) + runH + 20 * k
       local y1 = (h - total) / 2
+      ui.pushClipRect(CR.va:set(x1 + rw * (1 - out) / 2, y1 - 2 * k), CR.vb:set(x2 - rw * (1 - out) / 2, y1 + total), true)
       RES_BG.mult = opOf(BC.opt.rop, 75)
       rect(x1, y1, x2, y1 + total, RES_BG)
       rect(x1, y1, x2, y1 + k, HAIR)
@@ -18151,6 +18161,7 @@ float4 main(PS_IN pin) {
       end
       rect(x1, y, x2, y + k, HAIR)
       strip(x1, x2, y, k, id.logoStrip, RES_BG.mult)
+      ui.popClipRect()
     end
     function CR.wrap(text, font, size, width, n)
       local out, cur = {}, ''
@@ -18923,11 +18934,12 @@ float4 main(PS_IN pin) {
       if not sid then return end
       local fk = flagNow()
       if fk == 'yellow' then fk = 'green' end
-      if CR.fg.sid ~= sid then CR.fg.sid, CR.fg.k = sid, fk; CR.flagDrop()
-      elseif CR.fg.k ~= fk then
-        if fk == 'green' then CR.flagPush()
-        elseif fk == 'red' and state.redFlag then CR.flagPush(Lang.letters.upper(TEXTS.bc.flagRed), FLAGC.red) end
-        CR.fg.k = fk
+      local rf = state.redFlag ~= nil
+      if CR.fg.sid ~= sid then CR.fg.sid, CR.fg.k, CR.fg.r = sid, fk, rf; CR.flagDrop()
+      else
+        if CR.fg.k ~= fk and fk == 'green' and not BC.formGreen() then CR.flagPush() end
+        if rf and not CR.fg.r and fk == 'red' then CR.flagPush(Lang.letters.upper(TEXTS.bc.flagRed), FLAGC.red) end
+        CR.fg.k, CR.fg.r = fk, rf
       end
       if sid == CR.sn.sid and CR.sn.cool ~= sid and sim.raceSessionType == ac.SessionType.Race and sessionOver() then
         CR.sn.cool = sid
@@ -19721,12 +19733,12 @@ float4 main(PS_IN pin) {
       CR.pitScan()
       CR.secScan()
       CR.turn()
-      local page = CR.resPage()
+      local page, _, out = CR.resPage()
       BC.resOn = page ~= nil or sessionOver()
       drawCredits(w, h, page ~= nil or (BC.opt.rs and CR.res.sid ~= nil and CR.res.sid == Session.id) or (BC.opt.sv and Session.id == nil and Session.leaving ~= nil)
         or BC.openAt ~= nil or BC.openWant or BC.firstWait() or ((CR.sn.at ~= nil or CR.sn.want) and CR.sn.kind == nil) or CR.gr.at ~= nil)
       local id = identity()
-      if page then CR.resDraw(w, h, k, id, page) end
+      if page then CR.resDraw(w, h, k, id, page, out) end
       CR.opening(w, h, k, id)
       CR.sname(w, h, k, id)
       CR.gridDraw(w, h, k, id)
