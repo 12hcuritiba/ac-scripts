@@ -136,7 +136,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V307 - 2026.11.16'
+local RC_VERSION = 'V308 - 2026.11.16'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -3662,7 +3662,6 @@ do
       TrackList.frozenSince and math.floor(TrackList.frozenSince) or '', state.postRed and 1 or 0, state.lights or '')
   end
   local function trackSave()
-    if CarRead.isTv(0) then return end
     Record.save('track', math.floor(TrackList.since / 1000), trackBody())
   end
   local function windowStill()
@@ -8296,7 +8295,7 @@ do
     end
     state.rcCommands = keep
   end
-  function RcCommand.flags(line, body, reason, only)
+  function RcCommand.flags(line, body, reason)
     local red = body:upper():match('^%s*RC%s+REDFLAG%s+(%a+)')
     if red == 'ALL' or red == 'OFF' then
       local on = red == 'ALL'
@@ -8304,7 +8303,7 @@ do
         state.redFlag = on and { reason = reason ~= '' and reason or nil } or nil
         state.postRed = (not on) or nil
         TrackList.changed()
-        if not only then rcLog(on and 'Red flag' or 'Red flag off', reason ~= '' and reason or '-') end
+        rcLog(on and 'Red flag' or 'Red flag off', reason ~= '' and reason or '-')
         ac.log('race-control: red flag ' .. (on and 'on' or 'off') .. (reason ~= '' and (' - ' .. reason) or ''))
       end
     end
@@ -8313,14 +8312,14 @@ do
       if state.code80 then state.code80Ended = true end
       state.redFlag, state.code80, state.postRed = nil, nil, nil
       TrackList.changed()
-      if not only then rcLog(TEXTS.rc.green, reason ~= '' and reason or '-') end
+      rcLog(TEXTS.rc.green, reason ~= '' and reason or '-')
       ac.log('race-control: green flag by Racing Control command (red flag down, CODE-80 over)')
     end
     local lights = body:upper():match('^%s*RC%s+LIGHTS%s+(%a+)%s+ALL')
     if (lights == 'RED' or lights == 'GREEN' or lights == 'AUTO') and (state.lights or 'AUTO') ~= lights then
       state.lights = lights ~= 'AUTO' and lights or nil
       TrackList.changed()
-      if not only then rcLog(TEXTS.rc.lights, lights) end
+      rcLog(TEXTS.rc.lights, lights)
       ac.log('race-control: track lights ' .. lights .. ' by Racing Control command')
     end
     local rs, rsT = body:upper():match('^%s*RC%s+RESTART%s+(%a+)%s*@?(%d*)')
@@ -8329,13 +8328,13 @@ do
       state.redFlag = nil
       state.postRed = nil
       TrackList.changed()
-      if not only then rcLog(TEXTS.rc.standingRestart, reason ~= '' and reason or '-') end
+      rcLog(TEXTS.rc.standingRestart, reason ~= '' and reason or '-')
       ac.log('race-control: standing restart command, time ' .. math.floor(state.restart.t0))
     elseif rs == 'OFF' and state.restart then
       state.restart = nil
       state.redFlag = { reason = reason ~= '' and reason or nil }
       TrackList.changed()
-      if not only then rcLog(TEXTS.rc.standingRestartOff, reason ~= '' and reason or '-') end
+      rcLog(TEXTS.rc.standingRestartOff, reason ~= '' and reason or '-')
     end
     if body:upper():match('^%s*RC%s+START%s+ABORT%s+ALL%s*$') and state.formationAbort
       and state.formationAbort(reason) then
@@ -8386,7 +8385,7 @@ do
     if tv then tvLine(tv) end
   end
   local TV = { tv = RcCommand.tv }
-  local STAFF = { flags = function(line, body, reason) RcCommand.flags(line, body, reason, CarRead.isTv(0)) end }
+  local STAFF = { flags = RcCommand.flags }
   function RcCommand.staff() RcCommand.run(STAFF) end
   table.insert(RecordSync.base.beat, 1, function()
     if not Broadcast then return end
@@ -9153,7 +9152,7 @@ do
     if CarRead.isStaff(0) then
       sessionEnd(car, lineFrame)
       if Flags.standingEnd then Flags.standingEnd() end
-      if CarRead.isOrg(0) then lightsTell() end
+      lightsTell()
       if CarsTick.frame then Flags.current = pick(car) end
       return
     end
