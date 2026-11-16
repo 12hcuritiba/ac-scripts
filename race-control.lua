@@ -136,7 +136,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V308 - 2026.11.16'
+local RC_VERSION = 'V311 - 2026.11.16'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -572,7 +572,7 @@ local TEXTS = {
   scrWeatherAnim = 'forecast in segments of 10 min', scrWeatherStatic = 'no forecast', scrWxPage = '< %d/%d >',
   scrWxTime = 'Local Time', scrWxSky = 'Sky', scrWxAir = 'Air / track / humidity', scrWxWind = 'Wind', scrWxRain = 'Rain', scrWxNext = 'Next',
   scrEvent = 'EVENT', scrEventInfo = 'event info', evStarts = ' - starts %s', evRaceN = 'RACE %d',
-  bc = { green = 'Green', lastLap = 'Last lap', extraLap = ' extra lap', red = 'Red', finished = 'Finished', yellow = 'Yellow', closed = 'Closed', formation = 'Formation', flagGreen = 'Green flag', startAborted = 'Start aborted',
+  bc = { green = 'Green', lastLap = 'Last lap', extraLap = ' extra lap', red = 'Red', finished = 'Finished', yellow = 'Yellow', closed = 'Closed', formation = 'Formation', flagGreen = 'Green flag', flagRed = 'Red flag', startAborted = 'Start aborted',
     newForm = 'New formation lap', secLapS = 'Lap %d · sectors', secLapT = 'Lap %d · time', sess = { [1] = 'Practice', [2] = 'Qualifying', [3] = 'Race' },
     raceN = 'Race %d', lap = 'lap %d', sessEnd = 'End of %s', next = 'Next: %s', laps = '%d L',
     callIn = 'inlap', callOut = 'outlap', pitClosed = 'Pit closed', opensIn = 'Opens in ', lastI = 'LL', bestI = 'BL', ftF = 'F', ftT = 'T',
@@ -1666,6 +1666,22 @@ function Lang.letters.upper(text)
   return (tostring(text or ''):upper():gsub('\195([\160-\190])', function(b)
     if b ~= '\183' then return '\195' .. string.char(b:byte() - 32) end
   end))
+end
+Lang.letters.cp1252 = { [128] = 0x20AC, [130] = 0x201A, [131] = 0x0192, [132] = 0x201E, [133] = 0x2026, [134] = 0x2020, [135] = 0x2021, [136] = 0x02C6, [137] = 0x2030,
+  [138] = 0x0160, [139] = 0x2039, [140] = 0x0152, [142] = 0x017D, [145] = 0x2018, [146] = 0x2019, [147] = 0x201C, [148] = 0x201D, [149] = 0x2022, [150] = 0x2013,
+  [151] = 0x2014, [152] = 0x02DC, [153] = 0x2122, [154] = 0x0161, [155] = 0x203A, [156] = 0x0153, [158] = 0x017E, [159] = 0x0178 }
+function Lang.letters.fromSystem(text)
+  text = tostring(text or '')
+  if not text:find('[\128-\255]') then return text end
+  local valid = pcall(function()
+    local i = 1
+    while i <= #text do
+      local _, n = text:codePointAt(i)
+      i = i + math.max(tonumber(n) or 1, 1)
+    end
+  end)
+  if valid then return text end
+  return (text:gsub('[\128-\255]', function(c) local b = c:byte() return string.codePointToUTF8(Lang.letters.cp1252[b] or b) end))
 end
 local function mmss(seconds, fixed)
   local s = math.max(math.floor(seconds + 0.5), 0)
@@ -17237,8 +17253,14 @@ float4 main(PS_IN pin) {
         if #q < 10 then q[#q + 1] = { kind = 'pen', idx = idx, b = Lang.letters.upper(b), sm = sm, col = col, t = nil } end
       end
     end
+    function CR.flagDrop()
+      for _, q in pairs(CR.notes) do
+        for i = #q, 1, -1 do if q[i].kind == 'flag' and q[i].t == nil then table.remove(q, i) end end
+      end
+    end
     function CR.flagPush(b, col)
       local sm = select(4, sessionLine()) or ''
+      CR.flagDrop()
       for _, q in pairs(CR.notes) do
         if #q < 10 then q[#q + 1] = { kind = 'flag', b = b or Lang.letters.upper(TEXTS.bc.flagGreen), sm = sm, col = col or FLAGC.green, t = nil } end
       end
@@ -17777,8 +17799,8 @@ float4 main(PS_IN pin) {
       if n.sm == '' then t1 = CR.midTop(mid, fb * k, CR.MID_B)
       else
         local d = (fb + 3) * k
-        t1 = mid - (0.3 * fb * k + d + fs * k) / 2
-        t2 = t1 + d
+        t1 = mid - (0.3 * fb * k + d + fs * k) / 2 + k
+        t2 = t1 + d - 2 * k
       end
       if n.parts then
         local px = x + 16 * k
@@ -18901,9 +18923,10 @@ float4 main(PS_IN pin) {
       if not sid then return end
       local fk = flagNow()
       if fk == 'yellow' then fk = 'green' end
-      if CR.fg.sid ~= sid then CR.fg.sid, CR.fg.k = sid, fk
+      if CR.fg.sid ~= sid then CR.fg.sid, CR.fg.k = sid, fk; CR.flagDrop()
       elseif CR.fg.k ~= fk then
-        if fk == 'green' then CR.flagPush() end
+        if fk == 'green' then CR.flagPush()
+        elseif fk == 'red' and state.redFlag then CR.flagPush(Lang.letters.upper(TEXTS.bc.flagRed), FLAGC.red) end
         CR.fg.k = fk
       end
       if sid == CR.sn.sid and CR.sn.cool ~= sid and sim.raceSessionType == ac.SessionType.Race and sessionOver() then
@@ -20845,7 +20868,7 @@ local KmrEvents = (function()
     end
   end
   local function fail(err)
-    io.busy, io.sid, io.err, io.retryT = false, nil, tostring(err or TEXTS.kmrEvNoAnswer), state.ui.clock + RETRY_AFTER
+    io.busy, io.sid, io.err, io.retryT = false, nil, Lang.letters.fromSystem(tostring(err or TEXTS.kmrEvNoAnswer)), state.ui.clock + RETRY_AFTER
     ac.log('race-control: KMR race control not read: ' .. io.err)
   end
   local function pump()
@@ -22103,7 +22126,7 @@ local drawDesktopUI = (function()
     WebQueue.request('GET', url, nil, nil, function(err, res)
       local data = not err and res and res.body and JSON.parse(res.body)
       if type(data) ~= 'table' or type(data.rank) ~= 'table' then
-        Direction.web.busy, Direction.web.err = false, tostring(err or TEXTS.dirNoData)
+        Direction.web.busy, Direction.web.err = false, Lang.letters.fromSystem(tostring(err or TEXTS.dirNoData))
         ac.log('race-control: KMR web stats not read: ' .. Direction.web.err)
         return
       end
