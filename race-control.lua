@@ -136,7 +136,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V312 - 2026.11.16'
+local RC_VERSION = 'V313 - 2026.11.17'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -580,7 +580,7 @@ local TEXTS = {
     thTimes = 'Times', thFight = 'Battle', thClass = 'Class', lastLap = 'Last lap', bestLap = 'Best lap', ahead = 'Ahead', behind = 'Behind', classK = 'Class',
     classPos = 'Class position', narrator = 'Narrator', commentator = 'Commentator',
     setF1 = 'Car (F1)', setF6 = 'Car onboard (F6)', f1Cams = { 'Cockpit', 'Chase', 'Far chase', 'Bonnet', 'Bumper', 'Dash' },
-    pipAl = { duel = 'Battle', pit = 'Pit entry', slow = 'Slow', stop = 'Stopped', broken = 'Broken', oil = 'Oil', spin = 'Loss of control' },
+    pipAl = { duel = 'Battle', pit = 'Pit entry', slow = 'Slow', stop = 'Stopped', broken = 'Broken', oil = 'Oil', spin = 'Loss of control', crash = 'Crash' },
     penDt = 'Drive-through', penSg = 'Stop & go %d s', penLaps = '%d laps to serve', penLap0 = 'serve in this lap', penDsq = 'Disqualified',
     resK = 'Results', resAll = 'Overall', resHead = { 'Pos.', 'No.', 'Driver', 'Team', 'Tyre', 'Laps', 'Stops', 'Swaps', 'Best lap', 'Gap' }, chq = 'Chequered flag',
     opSessions = 'Sessions', opRules = 'Rules', opDrivers = 'Drivers per team', opStops = 'Pit stops required', opSwaps = 'Driver swaps required',
@@ -16278,7 +16278,8 @@ float4 main(PS_IN pin) {
       'md', 'io', 'nl', 'dd', 'qbp', 'qbq', 'qbr', 'vsp', 'ft', 'ftp', 'ftq', 'ftr',
       'fxs', 'cpm', 'cps', 'cpc', 'fgt', 'fgts', 'fgx', 'fgxs', 'fgop',
       'tpl', 'tpi', 'tpg', 'tpv', 'tpp', 'tql', 'tqi', 'tqg', 'tqv', 'tqp', 'trl', 'tri', 'trg', 'trv', 'trp',
-      'tpc', 'tqc', 'trc', 'tpf', 'tqf', 'trf' }
+      'tpc', 'tqc', 'trc', 'tpf', 'tqf', 'trf',
+      'aad', 'aap', 'aai', 'aac', 'add', 'adp', 'adi', 'adc', 'apw', 'amp', 'ams', 'amc', 'amd' }
     local CR_KEYS = { hm = 'move', hps = 'page', hw = 'wait', vm = 'move', vps = 'page', vw = 'wait', rpn = 'pins', rw = 'wait', ipn = 'pins', iw = 'wait', fl = 'bool',
       fls = 'page', cl = 'bool', cls = 'page', fcop = 'op', tk = 'bool', tks = 'page', tkop = 'op', lc = 'bool', lcs = 'page', lcop = 'op', gr = 'bool', grs = 'page',
       grm = 'move', grps = 'page', grop = 'op', sg = 'bool', scl = 'bool', st = 'bool', sts = 'page', sx = 'bool', sxs = 'page', pm = 'bool', ptw = 'bool', ptws = 'page',
@@ -16288,7 +16289,9 @@ float4 main(PS_IN pin) {
       md = 'one', io = 'bool', nl = 'bool', dd = 'one', qbp = 'bool', qbq = 'bool', qbr = 'bool', vsp = 'speed', ft = 'tri', ftp = 'bool', ftq = 'bool', ftr = 'bool',
       fxs = 'wait', cpm = 'dest', cps = 'set', cpc = 'cam', fgt = 'bool', fgts = 'page', fgx = 'bool', fgxs = 'page', fgop = 'op',
       tpl = 'bool', tpi = 'bool', tpg = 'bool', tpv = 'bool', tpp = 'bool', tql = 'bool', tqi = 'bool', tqg = 'bool', tqv = 'bool', tqp = 'bool', trl = 'bool', tri = 'bool', trg = 'bool', trv = 'bool', trp = 'bool',
-      tpc = 'bool', tqc = 'bool', trc = 'bool', tpf = 'ph', tqf = 'ph', trf = 'ph' }
+      tpc = 'bool', tqc = 'bool', trc = 'bool', tpf = 'ph', tqf = 'ph', trf = 'ph',
+      aad = 'dest', aap = 'dest', aai = 'dest', aac = 'dest', add = 'page', adp = 'page', adi = 'page', adc = 'page', apw = 'bool', amp = 'dest', ams = 'set', amc = 'cam',
+      amd = 'page' }
     local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 75,
       tk = true, tks = 10, tkop = 75, lc = true, lcs = 12, lcop = 75, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 75, sg = true, scl = true, st = true, sts = 5,
       sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 90, secop = 75, pitop = 75, grw = 5, im = 'ROLL', ips = 8, qb = 1, qbs = 0, rh = 5,
@@ -16297,7 +16300,8 @@ float4 main(PS_IN pin) {
       pss = 0, psc = -1, psk = -1, psd = 0, pis = -2, pic = 0, pik = -1, pid = 0, pds = -1, pdc = 3, pps = 0, ppc = -1, pf = 15, pq = 1, pop = 75, aa = 2,
       atd = true, ati = true, atp = true, ad = 8, of = false, ofs = 30, dm = 0,
       tpl = false, tpi = true, tpg = false, tpv = true, tpp = false, tql = false, tqi = true, tqg = false, tqv = true, tqp = false, trl = true, tri = false, trg = true, trv = false, trp = true,
-      tpc = true, tqc = true, trc = true, tpf = 1, tqf = 1, trf = 0 }
+      tpc = true, tqc = true, trc = true, tpf = 1, tqf = 1, trf = 0,
+      aad = 2, aap = 2, aai = 2, aac = 2, add = 8, adp = 8, adi = 8, adc = 8, apw = false, amp = 1, ams = 0, amc = -1, amd = 8 }
     for k, v in pairs(CR_START) do
       BC.opt[k] = v
       if CR_KEYS[k] == 'bool' then BOOLS[k] = true elseif CR_KEYS[k] ~= 'move' then NUMS[k] = true end
@@ -16682,6 +16686,7 @@ float4 main(PS_IN pin) {
           if not BroadcastPip.show(id, slot < 0 and sim.focusedCar or slotCar(slot)) then return false end
         elseif x == 'HIDE' then BroadcastPip.close(id)
         elseif x == 'SWAP' then if not BroadcastPip.swap(id) then return false end
+        elseif x == 'GO' then if not BroadcastPip.manual(id, slotCar(tonumber(w[4]) or -1)) then return false end
         else return false end
       elseif a == 'CR' then
         local key = (w[2] or ''):lower()
@@ -17859,7 +17864,7 @@ float4 main(PS_IN pin) {
       return nil
     end
     local PIP_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.9)
-    local PIP_TAG = { duel = FLAGC.yellow, pit = FLAGC.green, stop = FLAGC.red, broken = FLAGC.red, oil = FLAGC.red }
+    local PIP_TAG = { duel = FLAGC.yellow, pit = FLAGC.green, stop = FLAGC.red, broken = FLAGC.red, oil = FLAGC.red, crash = FLAGC.red }
     local function pipTag(P)
       if P.alert then
         local tag = (TEXTS.bc.pipAl or {})[P.alert.k] or P.alert.k
@@ -17869,8 +17874,9 @@ float4 main(PS_IN pin) {
       end
       local s = Broadcast.sets()[(P.set or -1) + 1]
       if not s then return '' end
+      local name = s.name:gsub('%s*%b()$', '')
       local c = s.car and (BroadcastCams.list(s)[(P.cam or 0) + 1] or {}).name
-      return c and (s.name .. ' · ' .. c) or s.name
+      return c and (name .. ' · ' .. c) or name
     end
     local function pipOne(P, x, y, k)
       if not P.shot then return end
@@ -17884,24 +17890,27 @@ float4 main(PS_IN pin) {
       PIP_BG.mult = 0.9 * opOf(BC.opt.pop, 75)
       rect(x, y, x + w2, y + hh, PIP_BG)
       rect(x, y, x + w2, y + 2 * k, TWELVE)
+      local cy = y + (hh + 2 * k) / 2
       local tx = x
       if r then
         local _, cc = classStyle(r.class)
         rect(x, y, x + 6 * k, y + hh, cc)
-        tx = x + 14 * k
-        drawText(tostring(r.pos or ''), F.rb, 20 * k, TMP.a:set(tx, y + 6 * k), PAPER)
+        tx = x + 18 * k
+        drawText(tostring(r.pos or ''), F.rb, 20 * k, TMP.a:set(tx, CR.midTop(cy, 20 * k, CR.MID_R)), PAPER)
         tx = tx + 32 * k
-        drawText('#' .. tostring(r.number or ''), F.rb, 13 * k, TMP.a:set(tx, y + 10 * k), PAPER)
-        tx = tx + textWidth('#000', F.rb, 13 * k) + 12 * k
-        drawText(nameOf(r), F.name, 18 * k, TMP.a:set(tx, y + 7 * k), PAPER)
+        local num, nw = '#' .. tostring(r.number or ''), textWidth('#000', F.rb, 13 * k) + 10 * k
+        frame(tx, cy - 9 * k, tx + nw, cy + 9 * k, NUMB, k)
+        drawText(num, F.rb, 13 * k, TMP.a:set(tx + nw / 2 - textWidth(num, F.rb, 13 * k) / 2, CR.midTop(cy, 13 * k, CR.MID_R)), PAPER)
+        tx = tx + nw + 9 * k
+        drawText(nameOf(r), F.name, 18 * k, TMP.a:set(tx, CR.midTop(cy, 18 * k, CR.MID_B)), PAPER)
         tx = tx + textWidth(nameOf(r), F.name, 18 * k) + 9 * k
-        drawText(teamOf(r), F.team, 13 * k, TMP.a:set(tx, y + 10 * k), DIMW)
+        drawText(teamOf(r), F.team, 13 * k, TMP.a:set(tx, CR.midTop(cy, 13 * k, CR.MID_B) + k), DIMW)
       end
       if P.tagSeq ~= P.seq then P.tagSeq, P.tag = P.seq, pipTag(P) end
       local tag = P.tag
       local tw = textWidth(tag, F.legend, 13 * k) + 18 * k
-      slanted(x + w2 - 12 * k - tw, y + 6 * k, x + w2 - 12 * k, y + 28 * k, 6 * k, P.alert and PIP_TAG[P.alert.k] or MIST)
-      drawText(tag, F.legend, 13 * k, TMP.a:set(x + w2 - 12 * k - tw + 9 * k, y + 8 * k), LT_INK)
+      slanted(x + w2 - 12 * k - tw, cy - 11 * k, x + w2 - 12 * k, cy + 11 * k, 6 * k, P.alert and PIP_TAG[P.alert.k] or MIST)
+      drawText(tag, F.legend, 13 * k, TMP.a:set(x + w2 - 12 * k - tw + 9 * k, CR.midTop(cy, 13 * k, CR.MID_B)), LT_INK)
       ui.popClipRect()
       if vp <= 0 then return end
       ui.pushClipRect(CR.va:set(x, y + hh), CR.vb:set(x + w2, y + hh + 270 * k * vp), true)
@@ -20483,6 +20492,14 @@ do
     local c = ac.getCar(i)
     return c and c.sessionID or i
   end
+  local crashes, crashT, crashSub = {}, {}, nil
+  local function onCrash(i)
+    local c = ac.getCar(i)
+    if not c or CarRead.isStaff(i) then return end
+    local now = state.ui.clock
+    if now - (crashT[i] or -1e9) >= 1 then crashes[#crashes + 1] = { a = i, at = now, sp = CarRead.num(c.splinePosition) } end
+    crashT[i] = now
+  end
   local function tyres()
     local n = 0
     for k in pairs(seen) do seen[k] = nil end
@@ -20531,6 +20548,7 @@ do
       end
     end
     for n = #pits, 1, -1 do if now - pits[n].at > 60 then table.remove(pits, n) end end
+    for n = #crashes, 1, -1 do if now - crashes[n].at > 60 then table.remove(crashes, n) end end
     local list = {}
     for _, d in pairs(duels) do if d.on then list[#list + 1] = { k = 'duel', a = d.a, b = d.b, gap = d.gap, sp = d.sp, at = d.at } end end
     for i in pairs(Flags.incidents) do
@@ -20539,36 +20557,41 @@ do
       if k and not CarRead.isStaff(i) then list[#list + 1] = { k = k, a = i, sp = pos or 0, at = t or now } end
     end
     for _, p in ipairs(pits) do list[#list + 1] = { k = 'pit', a = p.a, sp = p.sp or 0, at = p.at } end
+    for _, c in ipairs(crashes) do list[#list + 1] = { k = 'crash', a = c.a, sp = c.sp, at = c.at } end
     table.sort(list, function(x, y) return x.at > y.at end)
     return list
   end
   local aired, onAir = {}, nil
-  local KIND_ON = { duel = 'atd', pit = 'atp' }
+  local KIND_OF = { duel = 'd', pit = 'p', crash = 'c' }
   local function keyOf(e) return string.format('%s:%d:%d:%d', e.k, e.a, e.b or -1, math.floor(e.at)) end
   local function auto(list, now)
     local o = Broadcast.opt
     local live = {}
     for _, e in ipairs(list) do live[keyOf(e)] = true end
     for key in pairs(aired) do if not live[key] then aired[key] = nil end end
+    if onAir and onAir.hold and not BroadcastPip.isOpen(onAir.id) then onAir = nil end
     if (o.aa or 0) == 0 or Broadcast.wait.on or (onAir and now < onAir.till) then return end
-    if o.aa >= 2 and Broadcast.barHid then return end
     for _, e in ipairs(list) do
       local key = keyOf(e)
-      if o[KIND_ON[e.k] or 'ati'] ~= false and not aired[key] then
+      local x = KIND_OF[e.k] or 'i'
+      local dest = tonumber(o['aa' .. x]) or 0
+      if dest > 0 and not aired[key] and not (dest >= 2 and Broadcast.barHid) then
         aired[key] = true
-        local went = true
-        if o.aa == 1 then
+        local went, id = true, dest == 2 and 'S' or 'I'
+        if dest == 1 then
           Broadcast.command('FOCUS ' .. slotOf(e.a))
           if o.defSet then Broadcast.command('SET ' .. o.defSet) end
         else
-          went = BroadcastPip.alert(o.aa == 2 and 'S' or 'I', e)
+          went = BroadcastPip.alert(id, e, x)
         end
-        if went then onAir = { key = key, till = now + (o.ad or 8), dest = o.aa } end
+        local hold = dest >= 2 and x == 'p' and o.apw == true
+        if went then onAir = { key = key, till = hold and math.huge or now + (o['ad' .. x] or 8), dest = dest, hold = hold, id = id } end
         return
       end
     end
   end
   function BroadcastAlerts.beat()
+    if not crashSub then crashSub = ac.onCarCollision(-1, onCrash) end
     BroadcastAlerts.tyres = tyres()
     local now = state.ui.clock
     local list = alerts()
@@ -20723,11 +20746,16 @@ do
     local s = id == 'S'
     return open(B[id], 'image', s and o.pss or o.pis, s and o.psc or o.pic, car, s and o.psd or o.pid)
   end
-  function B.alert(id, e)
+  function B.alert(id, e, x)
     local o = Broadcast.opt
-    local duel = e.k == 'duel'
-    return open(B[id], 'alert', duel and o.pds or o.pps, duel and o.pdc or o.ppc, duel and e.b or e.a, o.ad, e)
+    local whole = x == 'p' and o.apw == true
+    return open(B[id], 'alert', o.defSet, -1, e.k == 'duel' and e.b or e.a, not whole and o['ad' .. x] or 0, e)
   end
+  function B.manual(id, car)
+    local o = Broadcast.opt
+    return open(B[id], 'image', o.ams, o.amc, car, o.amd)
+  end
+  function B.isOpen(id) local P = B[id] return P.open and not P.closeAt end
   function B.close(id)
     local P = B[id]
     if not P.open or P.closeAt then return end
@@ -20754,7 +20782,8 @@ do
       local P = B[id]
       if P.shot then
         if Broadcast.wait.on or (P.closeAt and now - P.closeAt >= 2 * Broadcast.ROLL) then B.release(id)
-        elseif P.till and now >= P.till and not P.closeAt then B.close(id) end
+        elseif P.till and now >= P.till and not P.closeAt then B.close(id)
+        elseif not P.till and not P.closeAt and P.alert and P.alert.k == 'pit' and not (ac.getCar(P.car or -1) or {}).isInPitlane then B.close(id) end
       end
     end
   end
