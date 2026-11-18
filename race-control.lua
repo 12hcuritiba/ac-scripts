@@ -875,8 +875,8 @@ local config = (function()
   }
   local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, staffPits = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
     pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
-  local FIELDS = { kmr = { points = 1, ratingDsq = 1, pitSpeed = 1 }, base = { realName = 1, offline = 1, downMax = 1, downPractice = 1, persist = 1 },
-    driverSwap = { unconfirmedSeconds = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
+  local FIELDS = { kmr = { points = 1, ratingDsq = 1, pitSpeed = 1 }, base = { realName = 1, offline = 1, downMax = 1, downPractice = 1, persist = 1, read = 1 },
+    control = { loop = 1 }, driverSwap = { unconfirmedSeconds = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
     stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
   for _, m in pairs(OLD) do
     if THEMES[m[1]] then FIELDS[m[1]] = FIELDS[m[1]] or {}; FIELDS[m[1]][m[2]] = 1 end
@@ -1057,6 +1057,8 @@ local config = (function()
     baseDownMax = math.max(math.floor(tonumber((theme('base') or {}).downMax or '') or 120), 0),
     baseDownPractice = tostring((theme('base') or {}).downPractice or ''):lower():match('drop') and 'drop' or 'warn',
     persist = { seconds = tonumber((theme('base') or {}).persist or '') or 0.5 },
+    baseRead = { seconds = tonumber((theme('base') or {}).read or '') or 5 },
+    sessionLoop = { seconds = tonumber((theme('control') or {}).loop or '') or 0.25 },
     swapUnconfirmed = { seconds = tonumber((theme('driverSwap') or {}).unconfirmedSeconds or '') or 300 },
     sendHz = 18,
     gameHud = (function()
@@ -1737,7 +1739,7 @@ do
     CarsTick.seq = CarsTick.seq + 1
     local rows, byIndex, n = CarsTick.rows, CarsTick.byIndex, 0
     ringN = 0
-    local secLive = Broadcast and Broadcast.secCar and (Broadcast.on() or Broadcast.orgOn()) and Broadcast.secCar or nil
+    local boxLive = Broadcast and Broadcast.boxCar and (Broadcast.on() or Broadcast.orgOn()) and Broadcast.boxCar or nil
     for i = 0, (sim.carsCount or 1) - 1 do
       local c = ac.getCar(i)
       if c then
@@ -1758,7 +1760,7 @@ do
         end
         n = n + 1
         rows[n] = r
-        if secLive and i > 0 and on and not r.staff then secLive(r) end
+        if boxLive and i > 0 and on and not r.staff then boxLive(r) end
         if i > 0 and on and not r.staff and not c.isInPitlane then
           ringN = ringN + 1
           ring[ringN] = r
@@ -2541,14 +2543,14 @@ do
       end
     end
   end
-  local DIR_GAP = 5
   B.dirPen = { bySlot = {}, nextT = 0, busy = false, pit = {}, sec = {}, stat = {}, fullUntil = 0 }
   function B.dirPenAsk(only)
     local D = B.dirPen
     if not on() or not Session.id or D.busy or state.ui.clock < D.nextT then return end
+    local gap = config.baseRead.seconds
     if only and state.ui.clock < D.fullUntil then return end
-    if not only then D.fullUntil = state.ui.clock + 2 * DIR_GAP end
-    D.busy, D.nextT = true, state.ui.clock + DIR_GAP
+    if not only then D.fullUntil = state.ui.clock + 2 * gap end
+    D.busy, D.nextT = true, state.ui.clock + gap
     WebQueue.request('GET', config.baseUrl .. '/v1/report/penalties?sid=' .. Session.id .. (only and '&only=stat' or ''), nil, nil, function(err, res)
       D.busy = false
       if err or not res or tonumber(res.status) ~= 200 then return end
@@ -2773,6 +2775,8 @@ do
       R.abortSpline = tonumber(body:match('|abortSpline=([%d%.]+)')) or R.abortSpline
       R.abortEndSpline = tonumber(body:match('|abortEndSpline=([%d%.]+)')) or R.abortEndSpline
       R.abortTailSeconds = tonumber(body:match('|abortTailSeconds=([%d%.]+)')) or R.abortTailSeconds
+      config.sessionLoop.seconds = tonumber(body:match('|sessionLoopSeconds=([%d%.]+)')) or config.sessionLoop.seconds
+      config.baseRead.seconds = tonumber(body:match('|baseReadSeconds=([%d%.]+)')) or config.baseRead.seconds
       R.procedure = R[config.raceNo == 2 and 'procedure2' or 'procedure1']
       local cc = body:match('carClasses=([^|]*)')
       if cc and cc ~= '' and cc ~= config.carClassesText then
@@ -3856,11 +3860,11 @@ do
   sessionPart('lap', Lap, function()
     return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false, form = false, closed = false }, last = SESSION_NONE, others = {},
       best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false, baseDone = false, baseBusy = false, baseTries = 0,
-      ownBt = 0 }
+      ownBt = 0, rec = { all = {}, cls = {}, drv = {}, lapCls = {}, lapDrv = {}, clsOf = {} } }
   end, { 'splits' })
   local P = {}
   sessionPart('lapWay', P, function()
-    return { sp = SESSION_NONE, t = SESSION_NONE, raw = SESSION_NONE, prog = 1, start = SESSION_NONE, open = false, secT = {}, broken = false, trace = {},
+    return { sp = SESSION_NONE, t = SESSION_NONE, raw = SESSION_NONE, prog = 1, start = SESSION_NONE, open = false, secT = {}, secN = 0, broken = false, trace = {},
       lineT = -1e9, info = newInfo(), pit = { entered = false, left = false }, crashT = -1e9, spinning = false, calmT = SESSION_NONE, recDriver = SESSION_NONE }
   end)
   local function splits()
@@ -3974,7 +3978,10 @@ do
     if p1 <= p0 then return end
     local function at(x) return t0 + (x - p0) / (p1 - p0) * (t1 - t0) end
     for k, b in ipairs(splits()) do
-      if p0 < b and b <= p1 then P.secT[k] = at(b) end
+      if p0 < b and b <= p1 then
+        P.secT[k] = at(b)
+        if k > P.secN then P.secN = k end
+      end
     end
     if P.start then binsAlong(p0, p1, t0, t1, P.trace, P.start) end
   end
@@ -4018,7 +4025,7 @@ do
     ac.log(string.format('race-control: line - lap %d %s %d ms%s%s%s', L.lap, L.valid and 'valid' or ('invalid ' .. L.why), ms,
       #s > 0 and (' sectors ' .. table.concat(s, '/')) or '', L.out and ' out lap' or '', L.inLap and ' in lap' or ''))
     m.cut, m.overdue, m.fuel, m.form, m.closed = false, false, false, false, false
-    P.start, P.secT, P.broken, P.trace, P.info = t, {}, false, {}, newInfo()
+    P.start, P.secT, P.secN, P.broken, P.trace, P.info = t, {}, 0, false, {}, newInfo()
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
     preMarks(car, true)
     P.lineT = state.ui.clock
@@ -4031,7 +4038,7 @@ do
     Lap.save()
   end
   local function open(car, t)
-    P.open, P.start, P.secT, P.broken, P.trace, P.info = true, t, {}, false, {}, newInfo()
+    P.open, P.start, P.secT, P.secN, P.broken, P.trace, P.info = true, t, {}, 0, false, {}, newInfo()
     Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel, Lap.marks.form, Lap.marks.closed = false, false, false, false, false
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
     preMarks(car, true)
@@ -4128,13 +4135,108 @@ do
     end
     return b
   end
-  local function otherKeep(i, n, best, sec, last, lastOk, lastSec, lastT, bestT, lastOut)
+  local EQ_MS = 60
+  local keyMemo = {}
+  local function keyOf(i, name)
+    name = name or (CarsTick.byIndex[i] and CarsTick.byIndex[i].name) or ''
+    local m = keyMemo[i]
+    if not m then
+      m = {}
+      keyMemo[i] = m
+    end
+    local k = m[name]
+    if not k then
+      k = i .. '|' .. (tostring(name):gsub('[,;|]', ' '))
+      m[name] = k
+    end
+    return k
+  end
+  Lap.keyOf = keyOf
+  local function barCode(key, q, ms)
+    local R = Lap.rec
+    local sb, mine = R.all[q], R.drv[key] and R.drv[key][q]
+    return (not sb or ms <= sb) and 'p' or (not mine or ms < mine - EQ_MS) and 'g' or ms <= mine + EQ_MS and 'e' or 'o'
+  end
+  local function take(R, cls, key, q, v)
+    if not v or v <= 0 then return end
+    if not R.all[q] or v < R.all[q] then R.all[q] = v end
+    local c = R.cls[cls]
+    if not c then c = {}; R.cls[cls] = c end
+    if not c[q] or v < c[q] then c[q] = v end
+    local d = R.drv[key]
+    if not d then d = {}; R.drv[key] = d end
+    if not d[q] or v < d[q] then d[q] = v end
+  end
+  local function takeLap(R, cls, key, ms)
+    if not ms or ms <= 0 then return end
+    if not R.lapCls[cls] or ms < R.lapCls[cls] then R.lapCls[cls] = ms end
+    if not R.lapDrv[key] or ms < R.lapDrv[key] then R.lapDrv[key] = ms end
+  end
+  function Lap.recBuild()
+    local R = { all = {}, cls = {}, drv = {}, lapCls = {}, lapDrv = {}, clsOf = {} }
+    local function clsOf(i)
+      local c = Lap.classOf and Lap.classOf(i) or ''
+      c = c or ''
+      R.clsOf[i] = c
+      return c
+    end
+    if not CarRead.isStaff(0) then
+      local mine = clsOf(0)
+      for _, l in ipairs(Lap.ownLaps and Lap.ownLaps() or {}) do
+        if l.valid and l.ms > 0 then
+          local key = keyOf(0, l.driver)
+          for q, v in ipairs(l.s or {}) do take(R, mine, key, q, v) end
+          takeLap(R, mine, key, l.ms)
+        end
+      end
+      if P.open and not P.broken and Lap.valid(Lap.marks) then
+        local key = keyOf(0)
+        for k, v in pairs(Lap.currentSectors()) do take(R, mine, key, k + 1, v) end
+      end
+    end
+    for i, o in pairs(Lap.others) do
+      local r = CarsTick.byIndex[i]
+      if not (r and r.staff) then
+        local cls = clsOf(i)
+        for key, s in pairs(o.bs or {}) do for q, v in pairs(s) do take(R, cls, key, q, v) end end
+        for key, ms in pairs(o.bl or {}) do takeLap(R, cls, key, ms) end
+        if o.curOk and o.cur then
+          local key = keyOf(i)
+          for k, v in pairs(o.cur) do take(R, cls, key, k + 1, v) end
+        end
+      end
+    end
+    Lap.rec = R
+    for _, o in pairs(Lap.others) do
+      for q, c in pairs(o.barC or {}) do
+        local v = o.cur and o.cur[q - 1]
+        if c == 'p' and v and R.all[q] and v > R.all[q] then o.barC[q] = 'g' end
+      end
+    end
+  end
+  function Lap.codeOf(ms, cb, db, valid)
+    if not valid then return 'r' end
+    if cb and ms <= cb then return 'p' end
+    if db and ms <= db then return 'g' end
+    return 'w'
+  end
+  function Lap.secCode(i, key, q, ms, valid)
+    local R = Lap.rec
+    local c, d = R.cls[R.clsOf[i] or ''], R.drv[key]
+    return Lap.codeOf(ms, c and c[q], d and d[q], valid)
+  end
+  function Lap.lapCode(i, key, ms, valid)
+    local R = Lap.rec
+    return Lap.codeOf(ms, R.lapCls[R.clsOf[i] or ''], R.lapDrv[key], valid)
+  end
+  local function otherKeep(i, n, best, sec, last, lastOk, lastSec, lastT, bestT, lastOut, cur, curOk)
     local o = Lap.others[i]
     if not o then
-      o = { n = 0, best = 0, last = 0, lastOk = false, s = {}, t = state.ui.clock }
+      o = { n = 0, best = 0, last = 0, lastOk = false, s = {}, t = state.ui.clock, bs = {}, bl = {}, barC = {} }
       Lap.others[i] = o
     end
     local recent = n >= o.n
+    local newLap = n > o.n
     if n > o.n then o.n = n end
     local bt = (bestT or 0) > 0 and bestT or (lastT or 0)
     if best > 0 and best == o.best and bt > 0 and bt < (o.bt or math.huge) then o.bt = bt end
@@ -4151,6 +4253,39 @@ do
       for v in tostring(lastSec):gmatch('%d+') do s[k], k = tonumber(v), k + 1 end
       o.lastS, o.lastN = s, n
     end
+    if newLap and cur ~= nil then
+      local key = keyOf(i)
+      if o.lastOk and (o.lastOut or 0) ~= 2 and o.lastS and o.lastN == n then
+        local b = o.bs[key] or {}
+        o.bs[key] = b
+        local nS = 0
+        for q0, v in pairs(o.lastS) do
+          if v > 0 and (not b[q0 + 1] or v < b[q0 + 1]) then b[q0 + 1] = v end
+          if q0 + 1 > nS then nS = q0 + 1 end
+        end
+        if o.last > 0 and (not o.bl[key] or o.last < o.bl[key]) then o.bl[key] = o.last end
+        local lv = o.lastS[nS - 1]
+        if lv and lv > 0 and not o.barC[nS] then o.barC[nS] = barCode(key, nS, lv) end
+        o.lastBarC, o.lastAt = o.barC, state.ui.clock
+      else
+        o.lastBarC = nil
+      end
+      o.barC, o.cur = {}, {}
+    end
+    if cur ~= nil and recent then
+      local c, k = {}, 0
+      for v in tostring(cur):gmatch('%d+') do c[k], k = tonumber(v), k + 1 end
+      o.curOk = curOk ~= false
+      local key = keyOf(i)
+      for q0, v in pairs(c) do
+        if not (o.cur and o.cur[q0]) then
+          o.barC[q0 + 1] = o.curOk and barCode(key, q0 + 1, v) or 'r'
+          o.at = state.ui.clock
+        end
+      end
+      if not o.curOk then for q in pairs(o.barC) do o.barC[q] = 'r' end end
+      o.cur = c
+    end
     o.t = state.ui.clock
   end
   local sendLap = ac.OnlineEvent({
@@ -4164,10 +4299,13 @@ do
     lapLastSec = ac.StructItem.string(48),
     lapT = ac.StructItem.uint32(),
     lapOut = ac.StructItem.uint8(),
+    lapCur = ac.StructItem.string(16),
+    lapCurOk = ac.StructItem.uint8(),
   }, function(sender, msg)
     if not sender or sender.index == 0 or tonumber(msg.lapSid) ~= (Session.id or 0) then return end
     otherKeep(sender.index, tonumber(msg.lapN) or 0, tonumber(msg.lapBest) or 0, msg.lapSec, tonumber(msg.lapLast) or 0, tonumber(msg.lapOk) == 1, msg.lapLastSec,
-      tonumber(msg.lapT) or 0, 0, tonumber(msg.lapOut) or 0)
+      tonumber(msg.lapT) or 0, 0, tonumber(msg.lapOut) or 0, msg.lapCur or '', tonumber(msg.lapCurOk) == 1)
+    Lap.recBuild()
   end, nil, nil, { processPostponed = true })
   local BASE_TRIES = 3
   RecordSync.base.beat[#RecordSync.base.beat + 1] = function()
@@ -4190,11 +4328,25 @@ do
           otherKeep(car.index, tonumber(c.laps) or 0, tonumber(c.best) or 0, type(c.bestS) == 'table' and table.concat(c.bestS, '/') or '',
             tonumber(c.last) or 0, c.lastValid ~= false, type(c.lastS) == 'table' and table.concat(c.lastS, '/') or '', tonumber(c.cross) or 0, tonumber(c.bestT) or 0,
             tonumber(c.lastOut) or 0)
-          if Broadcast and Broadcast.secBase then Broadcast.secBase(car.index, c.drv) end
+          if type(c.drv) == 'table' then
+            local o = Lap.others[car.index]
+            for name, s in pairs(c.drv) do
+              if type(s) == 'table' then
+                local key = keyOf(car.index, tostring(name))
+                local b = o.bs[key] or {}
+                o.bs[key] = b
+                for q, ms in ipairs(s) do
+                  ms = tonumber(ms)
+                  if ms and ms > 0 and (not b[q] or ms < b[q]) then b[q] = ms end
+                end
+              end
+            end
+          end
           n = n + 1
         end
         if slot == mine and (tonumber(c.bestT) or 0) > 0 and tonumber(c.best) == (Lap.ownBest and Lap.ownBest() or 0) then Lap.ownBt = tonumber(c.bestT) end
       end
+      Lap.recBuild()
       ac.log(string.format('race-control: laps of %d other cars from the base (session id %d)', n, sid))
     end)
   end
@@ -4202,7 +4354,9 @@ do
   function Lap.tell()
     local all = Lap.ownBestAll and Lap.ownBestAll() or noBest
     local best, n, s = all.ms or 0, Lap.number(), Lap.sentBest
-    if s and s.n == n and s.ms == best and s.lap == all.lap then return end
+    local cn = (P.open and not P.broken) and P.secN or 0
+    local ok = Lap.valid(Lap.marks)
+    if s and s.n == n and s.ms == best and s.lap == all.lap and s.cn == cn and s.ok == ok then return end
     local parts = {}
     for k = 0, 15 do
       local v = all.lapS and all.lapS[k]
@@ -4211,13 +4365,23 @@ do
     end
     local lastParts = {}
     for _, v in ipairs(Lap.last and Lap.last.s or {}) do lastParts[#lastParts + 1] = tostring(math.floor(v)) end
+    local curParts = {}
+    if cn > 0 then
+      local cs = Lap.currentSectors()
+      for k = 0, cn - 1 do
+        if not cs[k] then break end
+        curParts[#curParts + 1] = tostring(math.floor(cs[k]))
+      end
+    end
     local msg = { lapN = math.min(n, 65535), lapBest = math.floor(best), lapSec = table.concat(parts, '/'),
       lapLast = Lap.last and math.max(math.floor(Lap.last.ms or 0), 0) or 0, lapOk = Lap.last and Lap.last.valid and 1 or 0, lapSid = Session.id or 0,
       lapLastSec = table.concat(lastParts, '/'), lapT = Lap.last and math.max(math.floor(Lap.last.t or 0), 0) or 0,
-      lapOut = Lap.last and (Lap.last.outside and 2 or Lap.last.out and 1 or 0) or 0 }
+      lapOut = Lap.last and (Lap.last.outside and 2 or Lap.last.out and 1 or 0) or 0,
+      lapCur = table.concat(curParts, '/'), lapCurOk = ok and 1 or 0 }
     if all.lap and Lap.last and all.lap.lap == Lap.last.lap and (Lap.last.t or 0) > 0 then Lap.ownBt = Lap.last.t end
-    Lap.sentBest, Lap.sentT = { n = n, ms = best, lap = all.lap, msg = msg }, state.ui.clock
+    Lap.sentBest, Lap.sentT = { n = n, ms = best, lap = all.lap, cn = cn, ok = ok, msg = msg }, state.ui.clock
     OnlineQueue.push(sendLap, msg, nil, true)
+    Lap.recBuild()
   end
   function Lap.of(i)
     if i == 0 then return Lap.number(), Lap.ownBest and Lap.ownBest() or 0, Lap.last and Lap.last.ms or 0, Lap.last ~= nil and Lap.last.valid == true,
@@ -10324,7 +10488,6 @@ sessionPart('raceTable', RaceTable, function()
     stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0, totals = {} }, stintDone = false, maxDsq = false, minDone = false, prevParked = SESSION_NONE }
 end, { 'losses' })
 do
-  local REFRESH = 0.25
   local MAX_LAPS = 600
   local classes = {}
   for item in tostring(cfg.classes or ''):gmatch('[^|]+') do
@@ -10624,6 +10787,8 @@ do
   end
   Lap.ownBest = function() return RaceTable.ownBest().ms end
   Lap.ownBestAll = RaceTable.ownBest
+  Lap.ownLaps = function() return RaceTable.laps end
+  Lap.classOf = RaceTable.classOf
   function RaceTable.lapMarked() return Lap.invalidNow() end
   function RaceTable.flying()
     local laps, sum, n = RaceTable.laps, 0, 0
@@ -10766,7 +10931,7 @@ do
     passUpdate(car)
     stintUpdate(car)
     if state.ui.clock >= RaceTable.nextT then
-      RaceTable.nextT = state.ui.clock + REFRESH
+      RaceTable.nextT = state.ui.clock + config.sessionLoop.seconds
       RaceTable.refresh()
     end
   end
@@ -13939,6 +14104,7 @@ local drawRaceScreens = (function()
     end
     Drag.icons('standings', p1, p2, s)
   end
+  local function secColor(c) return c == 'p' and PURPLE or c == 'g' and GREEN or c == 'r' and RED or COLOR_TITLE end
   local function lapTimeScreen(car, w, h, s)
     local p1, p2, y = frame('laptime', w, h, s, 10.2, TEXTS.scrLapTime, nil)
     local on = Drag.mode('delta') ~= 'hidden'
@@ -13955,16 +14121,14 @@ local drawRaceScreens = (function()
     y = y + ROW * s
     local own = RaceTable.ownBest()
     local marked = Lap.invalidNow()
+    local nowKey, bestKey = Lap.keyOf(0), Lap.keyOf(0, own.lap and own.lap.driver)
     local lines = { { TEXTS.scrNow, Lap.currentSectors() }, { TEXTS.scrBest, own.lapS }, { TEXTS.scrOpt, own.s } }
     for li, l in ipairs(lines) do
       local cells = { { l[1], 14, COLOR_DIM } }
       for k = 0, 2 do
         local v = l[2] and CarRead.num(l[2][k]) or 0
-        local col = COLOR_TITLE
-        if li == 1 and v > 0 then
-          local best = CarRead.num(own.s[k])
-          col = (not marked and best > 0 and v <= best) and GREEN or RED
-        elseif li == 3 then col = PURPLE end
+        local col = li == 3 and PURPLE or COLOR_TITLE
+        if v > 0 then col = secColor(Lap.secCode(0, li == 2 and bestKey or nowKey, k + 1, v, li ~= 1 or not marked)) end
         cells[#cells + 1] = { secs(v), 110 + k * 68, col, true }
       end
       row(p1, y, s, cells)
@@ -13981,8 +14145,9 @@ local drawRaceScreens = (function()
     local kept = RaceTable.laps[#RaceTable.laps]
     local lastValid = not kept or kept.valid
     for _, l in ipairs({
-      { TEXTS.scrLast, lapTime(kept and kept.ms or 0) .. (lastValid and '' or (' ' .. TEXTS.lapTag.cut)), lastValid and COLOR_TITLE or RED },
-      { TEXTS.scrBest, lapTime(best), (best > 0 and best == sessionBest) and PURPLE or GREEN },
+      { TEXTS.scrLast, lapTime(kept and kept.ms or 0) .. (lastValid and '' or (' ' .. TEXTS.lapTag.cut)),
+        (kept and (kept.ms or 0) > 0) and secColor(Lap.lapCode(0, Lap.keyOf(0, kept.driver), kept.ms, kept.valid)) or (lastValid and COLOR_TITLE or RED) },
+      { TEXTS.scrBest, lapTime(best), best > 0 and secColor(Lap.lapCode(0, bestKey, best, true)) or GREEN },
       { TEXTS.scrSession, sessionBest > 0 and (lapTime(sessionBest) .. owner) or '-', PURPLE },
       { TEXTS.scrOptimal, optimal > 0 and lapTime(optimal) or '-', COLOR_TITLE } }) do
       row(p1, y, s, { { l[1], 14, COLOR_DIM }, { l[2], 246, l[3], true } })
@@ -14037,9 +14202,11 @@ local drawRaceScreens = (function()
     y = y + 15 * s
     local cells = { { TEXTS.scrDeltaSectors, 14, COLOR_DIM } }
     local ds = Delta.sectors(ref)
+    local cur = Lap.currentSectors()
+    local bad = Lap.invalidNow()
     for k = 0, 2 do
       local v = ds[k]
-      cells[#cells + 1] = { v and string.format('%+.2f', v) or '-', 104 + k * 46, v and (v > 0 and RED or GREEN) or nil, true }
+      cells[#cells + 1] = { v and string.format('%+.2f', v) or '-', 104 + k * 46, v and cur[k] and secColor(Lap.secCode(0, Lap.keyOf(0), k + 1, cur[k], not bad)) or nil, true }
     end
     row(p1, y, s, cells)
     Drag.icons('delta', p1, p2, s)
@@ -15065,9 +15232,8 @@ float4 main(PS_IN pin) {
     end
     if #stints == 0 then row(p1, yl, s, { { '-', 14 } }) end
     local best = RaceTable.ownBest().ms
-    local sessionBest = Lap.sessionBest()
     local function lapCells(l, x0)
-      local col = not l.valid and RED or (l.ms == sessionBest and PURPLE) or (l.ms == best and GREEN) or COLOR_TITLE
+      local col = secColor(Lap.lapCode(0, Lap.keyOf(0, l.driver), l.ms, l.valid))
       return { lapTime(l.ms), x0, col, true }, { not l.valid and TEXTS.lapTag.cut or l.pit and TEXTS.lapTag.pit or (l.ms == best and TEXTS.lapTag.best)
         or string.format('%+.3f', (l.ms - best) / 1000), x0 + 50, not l.valid and RED or (l.ms == best and GREEN) or RED, true }
     end
@@ -15085,7 +15251,10 @@ float4 main(PS_IN pin) {
         local l = sel.laps[k]
         local t, d = lapCells(l, 336)
         local cells = { { tostring(l.lap) .. (l.pit and ' P' or ''), 246, l.pit and YELLOW or COLOR_TITLE }, t, d }
-        for q = 1, 3 do cells[#cells + 1] = { secs(l.s and l.s[q]), 386 + q * 48, l.valid and COLOR_TITLE or RED, true } end
+        for q = 1, 3 do
+          local v = l.s and l.s[q]
+          cells[#cells + 1] = { secs(v), 386 + q * 48, (v and v > 0) and secColor(Lap.secCode(0, Lap.keyOf(0, l.driver), q, v, l.valid)) or COLOR_TITLE, true }
+        end
         local cl = cmp and cmp.laps[k] or nil
         if cl then
           local ct, cd = lapCells(cl, 640)
@@ -15139,7 +15308,10 @@ float4 main(PS_IN pin) {
         { lapTime(l.ms), 118, col, true },
         { not l.valid and TEXTS.lapTag.cut or l.pit and TEXTS.lapTag.pit or (l.ms == best and TEXTS.lapTag.best) or string.format('%+.3f', (l.ms - best) / 1000),
           172, not l.valid and RED or (l.ms == best and GREEN) or (l.pit and COLOR_DIM) or RED, true } }
-      for q = 1, 3 do cells[#cells + 1] = { secs(l.s[q]), 172 + q * 48, l.valid and COLOR_TITLE or RED, true } end
+      for q = 1, 3 do
+        local v = l.s[q]
+        cells[#cells + 1] = { secs(v), 172 + q * 48, (v and v > 0) and secColor(Lap.secCode(0, Lap.keyOf(0, l.driver), q, v, l.valid)) or COLOR_TITLE, true }
+      end
       row(p1, y, s, cells)
       y = y + ROW * s
     end
@@ -15907,8 +16079,33 @@ float4 main(PS_IN pin) {
       ask('session', { key = key }, function(d) P.drivers = d.drivers or {} end)
     end
     local function openDriver(d)
-      P.page, P.drv, P.laps, P.best, P.sel, P.top = 'laps', d, nil, nil, 1, 0
-      ask('laps', { idx = d.id }, function(r) P.laps = r.laps or {} end)
+      P.page, P.drv, P.laps, P.best, P.cb, P.db, P.cl, P.dl, P.sel, P.top = 'laps', d, nil, nil, nil, nil, nil, nil, 1, 0
+      ask('laps', { idx = d.id }, function(r)
+        P.laps = r.laps or {}
+        local cls, cb, db, cl, dl = RaceTable.classOfModel(d.car), {}, {}, nil, nil
+        for key, v in pairs(type(r.sbest) == 'table' and r.sbest or {}) do
+          local model, q = tostring(key):match('^(.*):(%d+)$')
+          local ms = type(v) == 'table' and tonumber(v[1]) or nil
+          q = tonumber(q)
+          if model and q and ms and ms > 0 and RaceTable.classOfModel(model) == cls and (not cb[q] or ms < cb[q]) then cb[q] = ms end
+        end
+        for _, x in ipairs(P.drivers or {}) do
+          local ms = tonumber(x.best)
+          if ms and ms > 0 and RaceTable.classOfModel(x.car) == cls and (not cl or ms < cl) then cl = ms end
+        end
+        for _, l in ipairs(P.laps) do
+          if tonumber(l.valid) == 1 then
+            local ms = tonumber(l.ms)
+            if ms and ms > 0 and (not dl or ms < dl) then dl = ms end
+            local q = 0
+            for v in tostring(l.sectors or ''):gmatch('[^/,;%s]+') do
+              q, v = q + 1, tonumber(v)
+              if v and v > 0 and (not db[q] or v < db[q]) then db[q] = v end
+            end
+          end
+        end
+        P.cb, P.db, P.cl, P.dl = cb, db, cl, dl
+      end)
       RecordSync.base.reportGet('best', { track = d.track, car = d.car, session = P.sess }, function(b) P.best = b end)
     end
     local function lapGet(id)
@@ -16162,15 +16359,19 @@ float4 main(PS_IN pin) {
           { 'S3', 256 + d, COLOR_AXIS, true }, { H.hdrValid, 266 + d, COLOR_AXIS }, { H.hdrPit, 296 + d, COLOR_AXIS }, { H.hdrFuel, 370 + d, COLOR_AXIS, true },
           { H.hdrTyre, 380 + d, COLOR_AXIS }, { H.hdrTel, 510 + d, COLOR_AXIS } })
         y = y + ROW * s
+        local function secCol(v, q, ok, col) return (v and v > 0) and secColor(Lap.codeOf(v, P.cb and P.cb[q], P.db and P.db[q], ok)) or col end
         for i = fixed + P.top + 1, math.min(#list, fixed + P.top + rows) do
           local l = list[i].lap
           local ss = {}
           for v in tostring(l.sectors or ''):gmatch('[^/,;%s]+') do ss[#ss + 1] = tonumber(v) end
-          local col = tonumber(l.valid) == 1 and nil or RED
-          line(i, { { tostring(l.lap or ''), lx, col, true }, { lapTime(tonumber(l.ms)), 100 + d, col, true }, { secs(ss[1]), 156 + d, col, true }, { secs(ss[2]), 206 + d, col, true },
-            { secs(ss[3]), 256 + d, col, true }, { tonumber(l.valid) == 1 and 'V' or '-', 266 + d, col }, { tonumber(l.pit) == 1 and 'P' or '-', 296 + d, COLOR_DIM },
-            { l.fuel and string.format('%.1f', tonumber(l.fuel) or 0) or '-', 370 + d, COLOR_DIM, true }, { cell(l.compound), 380 + d, COLOR_DIM },
-            { l.trace and 'T' or '-', 510 + d, COLOR_DIM } }, function() openLap(l.id) end, l.id)
+          local ok = tonumber(l.valid) == 1
+          local col = not ok and RED or nil
+          local ms = tonumber(l.ms)
+          local tcol = (ms and ms > 0) and secColor(Lap.codeOf(ms, P.cl, P.dl, ok)) or col
+          line(i, { { tostring(l.lap or ''), lx, nil, true }, { lapTime(ms), 100 + d, tcol, true }, { secs(ss[1]), 156 + d, secCol(ss[1], 1, ok, col), true },
+            { secs(ss[2]), 206 + d, secCol(ss[2], 2, ok, col), true }, { secs(ss[3]), 256 + d, secCol(ss[3], 3, ok, col), true }, { ok and 'V' or '-', 266 + d, col },
+            { tonumber(l.pit) == 1 and 'P' or '-', 296 + d, COLOR_DIM }, { l.fuel and string.format('%.1f', tonumber(l.fuel) or 0) or '-', 370 + d, COLOR_DIM, true },
+            { cell(l.compound), 380 + d, COLOR_DIM }, { l.trace and 'T' or '-', 510 + d, COLOR_DIM } }, function() openLap(l.id) end, l.id)
         end
       else
         local A = P.L[P.lapId]
@@ -17350,13 +17551,16 @@ float4 main(PS_IN pin) {
       local T = TEXTS.bc
       local n, _, ms = Lap.of(idx)
       local o = Lap.others[idx]
+      if o and o.lastOk == false then return end
       local ls = o and o.lastS or {}
+      local key = Lap.keyOf(idx)
       local parts, txt = {}, {}
       for q = 1, #Lap.readSplits() + 1 do
         local v = ls[q - 1] or best[q]
         if v and v > 0 then
           if #parts > 0 then parts[#parts + 1] = { ' · ', PAPER } end
-          parts[#parts + 1] = { 'S' .. q .. ' ' .. (v < 60000 and secs(v) or lapTime(v)), best[q] and PURPLE or PAPER }
+          local code = Lap.secCode(idx, key, q, v, true)
+          parts[#parts + 1] = { 'S' .. q .. ' ' .. (v < 60000 and secs(v) or lapTime(v)), (best[q] or code == 'p') and PURPLE or code == 'g' and FLAGC.green or PAPER }
         end
       end
       for _, pp in ipairs(parts) do txt[#txt + 1] = pp[1] end
@@ -17367,75 +17571,30 @@ float4 main(PS_IN pin) {
         end
       end
     end
-    CR.q = { cars = {}, best = {}, pb = {} }
+    CR.q = { cars = {} }
     CR.LAST_SEC_S = 3
     CR.qOff, CR.qOrange = rgbm(1, 1, 1, 0.16), rgbm(1, 0x8a / 255, 0x1f / 255, 1)
-    local EQ_MS = 60
     local function secQ()
       local Q = CR.q
-      if Q.sid ~= Session.id then Q.sid, Q.cars, Q.best, Q.pb = Session.id, {}, {}, {} end
+      if Q.sid ~= Session.id then Q.sid, Q.cars = Session.id, {} end
       return Q
     end
-    local function secMark(Q, key, q, ms)
-      local pb = Q.pb[key] or {}
-      Q.pb[key] = pb
-      local sb, mine = Q.best[q], pb[q]
-      local c = (not sb or ms <= sb) and 'p' or (not mine or ms < mine - EQ_MS) and 'g' or ms <= mine + EQ_MS and 'e' or 'o'
-      if not sb or ms < sb then Q.best[q] = ms end
-      if not mine or ms < mine then pb[q] = ms end
-      return c
-    end
-    function Broadcast.secCar(r)
+    function Broadcast.boxCar(r)
       local Q = secQ()
-      local sp = Lap.readSplits()
-      local nS = #sp + 1
-      local now = serverTimeMs()
-      local key = r.i .. '|' .. tostring(r.name or ''):gsub('[,;|]', ' ')
-      local q = 1
-      for _, v in ipairs(sp) do if r.sp >= v then q = q + 1 end end
       local st = Q.cars[r.i]
       if not st then
-        st = { done = {} }
+        st = {}
         Q.cars[r.i] = st
       end
-      local o = Lap.others[r.i]
-      if o and o.lastS and o.lastN and o.lastN ~= st.offN then
-        st.offN = o.lastN
-        for qq = 1, nS do if (o.lastS[qq - 1] or 0) > 0 then secMark(Q, key, qq, o.lastS[qq - 1]) end end
-      end
       if r.c.isInPitlane then
-        if st.q then st.q, st.t0, st.done, st.prev = nil, nil, {}, nil end
         if not st.pl then st.box = nil end
-        st.pl, st.out, st.lap0 = true, nil, nil
+        st.pl, st.out = true, nil
         if r.c.isInPit then st.box = true end
       else
         if st.pl then st.pl, st.out = nil, true end
-        if st.q ~= q then
-          if st.q and q == st.q % nS + 1 then
-            if st.t0 then
-              st.done[st.q] = secMark(Q, key, st.q, now - st.t0)
-              st.at = state.ui.clock
-            end
-            if q == 1 then st.prev, st.done, st.lapAt = st.done, {}, state.ui.clock end
-            if q == 1 then st.out, st.lap0 = nil, now end
-            st.t0 = now
-          else
-            st.t0, st.done, st.prev, st.lap0 = nil, {}, nil, nil
-          end
-          st.q = q
-        end
+        if st.out and st.sp and r.sp < st.sp - 0.5 then st.out = nil end
       end
       st.sp = r.sp
-    end
-    function Broadcast.secBase(i, drv)
-      if type(drv) ~= 'table' then return end
-      local Q = secQ()
-      for name, s in pairs(drv) do
-        if type(s) == 'table' then
-          local key = i .. '|' .. tostring(name):gsub('[,;|]', ' ')
-          for qq, ms in ipairs(s) do if tonumber(ms) and tonumber(ms) > 0 then secMark(Q, key, qq, tonumber(ms)) end end
-        end
-      end
     end
     function CR.onBy(q, p, qq, rr, d)
       q = tonumber(q) or d
@@ -17453,23 +17612,30 @@ float4 main(PS_IN pin) {
       return small and (8 * k + nS * 8 * k + (nS - 1) * 2 * k) or (10 * k + nS * 13 * k + (nS - 1) * 2 * k)
     end
     function CR.qualiBars(x, cy, k, idx, small)
-      local st = CR.q.cars[idx]
       if not CR.qualiShown(idx) then return 0 end
+      local o = Lap.others[idx]
+      local t = CarsTick.byIndex[idx]
       local sp = Lap.readSplits()
       local nS = #sp + 1
       local bw = CR.qualiW(k, small)
       local hh, sw, sh, pad = (small and 7 or 10) * k, (small and 8 or 13) * k, (small and 2 or 3) * k, (small and 4 or 5) * k
       rect(x, cy - hh, x + bw, cy + hh, BOXBG)
-      local held = st.prev ~= nil and state.ui.clock - (st.lapAt or -1e9) < CR.LAST_SEC_S
+      local inPit = not t or not t.c or t.c.isInPitlane
+      local held = o.lastBarC ~= nil and state.ui.clock - (o.lastAt or -1e9) < CR.LAST_SEC_S
+      local bad = not held and not inPit and o.cur ~= nil and o.curOk == false
+      local done = 0
+      while o.cur and o.cur[done] do done = done + 1 end
       for q = 1, nS do
         local bx = x + pad + (q - 1) * (sw + 2 * k)
         rect(bx, cy - sh, bx + sw, cy + sh, CR.qOff)
-        local c = held and st.prev[q] or not held and st.done[q]
-        if c then
-          rect(bx, cy - sh, bx + sw, cy + sh, c == 'p' and PURPLE or c == 'g' and FLAGC.green or c == 'e' and YELLOW or CR.qOrange)
-        elseif not held and st.q == q and st.t0 and st.sp then
+        local c = held and o.lastBarC[q] or (not held and not inPit and o.barC[q])
+        if bad then
+          rect(bx, cy - sh, bx + sw, cy + sh, RED)
+        elseif c then
+          rect(bx, cy - sh, bx + sw, cy + sh, c == 'p' and PURPLE or c == 'g' and FLAGC.green or c == 'e' and YELLOW or c == 'r' and RED or CR.qOrange)
+        elseif not held and not inPit and o.cur ~= nil and q == done + 1 then
           local a, b = sp[q - 1] or 0, sp[q] or 1
-          local f = math.min(math.max((st.sp - a) / math.max(b - a, 1e-6), 0), 1)
+          local f = math.min(math.max((t.sp - a) / math.max(b - a, 1e-6), 0), 1)
           rect(bx, cy - sh, bx + sw * f, cy + sh, PAPER)
         end
       end
@@ -17756,9 +17922,9 @@ float4 main(PS_IN pin) {
       drawText(s, F.rb, fs, TMP.a:set(cx - textWidth(s, F.rb, fs) / 2, small and CR.midTop(cy, fs, CR.MID_R) or (cy - fs * 0.62)), LT_INK)
     end
     function CR.qualiShown(idx)
-      local st = CR.q.cars[idx]
-      if not CR.secOn() or not st or CR.q.sid ~= Session.id then return false end
-      return not ((BC.opt.qbs or 0) > 0 and state.ui.clock - (st.at or -1e9) > BC.opt.qbs)
+      local o = Lap.others[idx]
+      if not CR.secOn() or not o then return false end
+      return not ((BC.opt.qbs or 0) > 0 and state.ui.clock - (o.at or -1e9) > BC.opt.qbs)
     end
     function CR.noteNow(q)
       local list = CR.notes[q]
@@ -18131,6 +18297,7 @@ float4 main(PS_IN pin) {
       cols(y, { nil, H[1], H[2], H[3], H[4], H[5], H[6], H[7], H[8], H[9], H[10] }, nil)
       y = y + th
       local function line(r, yy)
+        yy = math.floor(yy + 0.5)
         rect(x1, yy, x2, yy + k, HAIR)
         local drv = R.drv and R.drv[r.slot]
         local names = r.name
@@ -19476,7 +19643,7 @@ float4 main(PS_IN pin) {
       local fc = sim.focusedCar
       if BC.cardCar ~= fc then BC.cardCar, BC.cardAt = fc, state.ui.clock end
       local m = BC.opt.card or 'AUTO'
-      if m == 'OFF' or fc == nil or fc < 0 or CarRead.isStaff(fc) or CR.hideList() or CR.flagUp(q) then return nil end
+      if m == 'OFF' or fc == nil or fc < 0 or CarRead.isStaff(fc) or CR.hideList() or (q == 'b' and CR.noteNow(q) ~= nil) or (q ~= 'b' and CR.flagUp(q)) then return nil end
       if m == 'AUTO' and state.ui.clock - (BC.cardAt or 0) >= (BC.opt.cards or 10) then return nil end
       for _, r in ipairs(RaceTable.rows or {}) do if r.index == fc and not r.absent then return r end end
       return nil
@@ -23841,7 +24008,7 @@ function script.update(dt)
     TrackList.update()
     Broadcast.update()
     if state.ui.clock >= RaceTable.nextT then
-      RaceTable.nextT = state.ui.clock + 0.25
+      RaceTable.nextT = state.ui.clock + config.sessionLoop.seconds
       RaceTable.refresh()
     end
     l.prevInPit = inPit
