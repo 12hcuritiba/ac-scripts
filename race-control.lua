@@ -136,7 +136,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V316 - 2026.11.19'
+local RC_VERSION = 'V317 - 2026.11.19'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -576,6 +576,7 @@ local TEXTS = {
     newForm = 'New formation lap', secLapS = 'Lap %d · sectors', secLapT = 'Lap %d · time', sess = { [1] = 'Practice', [2] = 'Qualifying', [3] = 'Race' },
     raceN = 'Race %d', lap = 'lap %d', sessEnd = 'End of %s', next = 'Next: %s', laps = '%d L',
     callIn = 'inlap', callOut = 'outlap', pitClosed = 'Pit closed', opensIn = 'Opens in ', lastI = 'LL', bestI = 'BL', ftF = 'F', ftT = 'T',
+    noTime = 'no time',
     cars = '%d cars',
     thTimes = 'Times', thFight = 'Battle', thClass = 'Class', lastLap = 'Last lap', bestLap = 'Best lap', ahead = 'Ahead', behind = 'Behind', classK = 'Class',
     classPos = 'Class position', narrator = 'Narrator', commentator = 'Commentator',
@@ -2544,7 +2545,7 @@ do
       end
     end
   end
-  B.dirPen = { bySlot = {}, nextT = 0, busy = false, pit = {}, sec = {}, stat = {}, fullUntil = 0 }
+  B.dirPen = { bySlot = {}, nextT = 0, busy = false, pit = {}, sec = {}, stat = {}, fullUntil = 0, answered = false }
   function B.dirPenAsk(only)
     local D = B.dirPen
     if not on() or not Session.id or D.busy or state.ui.clock < D.nextT then return end
@@ -2574,6 +2575,7 @@ do
         if m then sec[m .. ':' .. q] = { ms = tonumber(ms), slot = tonumber(slot), driver = drv, wet = wet == '1' } end
       end
       D.sec = sec
+      D.answered = true
       local rep = {}
       for slot in (tostring(res.body or ''):match('REP|([^\r\n]*)') or ''):gmatch('%d+') do rep[tonumber(slot)] = true end
       D.rep = rep
@@ -7379,7 +7381,8 @@ do
     end
     if PitStops.pass and PitStops.pass.entryMs and CarRead.parked(car) and not PitControl.settling() then
       PitStops.pass.stopped = true
-      if not sgItem() and not state.redFlag and not (PitStops.pass.restored and Lap.rejoin) then PitStops.countStop() end
+      if state.redFlag then PitStops.pass.redParked = true end
+      if not sgItem() and not PitStops.pass.sgPaid and not PitStops.pass.redParked and not (PitStops.pass.restored and Lap.rejoin) then PitStops.countStop() end
     end
     local p = PitStops.pass
     if p and p.sgServiced then
@@ -17366,7 +17369,9 @@ float4 main(PS_IN pin) {
       if ph == 'LAPS' then return string.format(T.laps, r.laps or 0) end
       local _, _, ms, ok, _, _, out = Lap.of(r.index)
       if (ms or 0) > 0 and not (out == 2 or (out == 1 and sim.raceSessionType ~= ac.SessionType.Race)) then return lapTime(ms), not ok end
-      return r.best > 0 and lapTime(r.best) or '-'
+      if r.best > 0 then return lapTime(r.best) end
+      if sim.raceSessionType ~= ac.SessionType.Race then return T.noTime end
+      return '-'
     end
     local function ringSize(sig, size, room)
       while size > 6 and textWidth(sig, F.rb, size) > room do size = size - 1 end
@@ -17562,8 +17567,9 @@ float4 main(PS_IN pin) {
       return o.px, o.pxs
     end
     function CR.pitScan()
-      local pit = RecordSync.base.dirPen.pit
-      if not pit or pit == CR.pitSeen then return end
+      local D = RecordSync.base.dirPen
+      local pit = D.pit
+      if not D.answered or not pit or pit == CR.pitSeen then return end
       CR.pitSeen = pit
       local first = CR.pitSid ~= Session.id
       if first then CR.pitSid, CR.pitKept = Session.id, {} end
@@ -17595,8 +17601,9 @@ float4 main(PS_IN pin) {
       end
     end
     function CR.secScan()
-      local sec = RecordSync.base.dirPen.sec
-      if not sec or sec == CR.secSeen then return end
+      local D = RecordSync.base.dirPen
+      local sec = D.sec
+      if not D.answered or not sec or sec == CR.secSeen then return end
       CR.secSeen = sec
       local first = CR.secSid ~= Session.id
       if first then CR.secSid, CR.secKept = Session.id, {} end
@@ -19114,10 +19121,17 @@ float4 main(PS_IN pin) {
     function BC.firstWait()
       return BC.opt.of and not BC.firstDone and (Session.id == nil or tostring(ac.storage.bcFirst or '') ~= tostring(Session.id))
     end
+    function CR.cardOn()
+      return CR.res.at ~= nil or BC.openAt ~= nil or BC.openWant == true or CR.sn.at ~= nil or CR.sn.want == true or CR.gr.at ~= nil
+    end
     function CR.opening(w, h, k, id)
       if BC.opt.of and not BC.firstDone and Session.id then
+        local entering = BC.firstAt == nil
         BC.firstAt = BC.firstAt or state.ui.clock + BC.opt.ofs
-        if state.ui.clock >= BC.firstAt then
+        if (entering or state.ui.clock >= BC.firstAt) and CR.cardOn() then
+          BC.firstDone = true
+          ac.storage.bcFirst = tostring(Session.id)
+        elseif state.ui.clock >= BC.firstAt then
           BC.firstDone = true
           if tostring(ac.storage.bcFirst or '') ~= tostring(Session.id) then
             ac.storage.bcFirst = tostring(Session.id)
