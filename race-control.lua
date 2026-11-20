@@ -136,7 +136,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V320 - 2026.11.20'
+local RC_VERSION = 'V321 - 2026.11.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -20513,7 +20513,7 @@ float4 main(PS_IN pin) {
         ui.drawRectFilledMultiColor(TMP.a:set(0, y1 - k), TMP.b:set(math.min(240 * k, xEnd), y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
         local kText, el, tot, note, ended = sessionTexts()
         ui.pushClipRect(TMP.a:set(0, y1), TMP.b:set(sw - 4 * k, y2))
-        sessR(18 * k, y1 + 2 * k, k, 16 * k, kText, el, tot, note, pre, 2 * k)
+        sessR(18 * k, y1 + 2 * k, k, 15 * k, kText, el, tot, note, pre, 2 * k)
         ui.popClipRect()
         local x = sw
         if pre then
