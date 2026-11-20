@@ -136,7 +136,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V319 - 2026.11.20'
+local RC_VERSION = 'V320 - 2026.11.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -12941,7 +12941,8 @@ local TMP = { text = vec2(0, 0), a = vec2(0, 0), b = vec2(0, 0) }
 local function drawText(text, font, size, pos, color)
   size = math.max(size, Desktop.text.minPx)
   ui.pushDWriteFont(font)
-  ui.dwriteDrawText(text, size, TMP.text:set(px(pos.x), px(pos.y)), color)
+  local ex = Desktop.text.exact
+  ui.dwriteDrawText(text, size, TMP.text:set(ex and pos.x or px(pos.x), ex and pos.y or px(pos.y)), color)
   ui.popDWriteFont()
 end
 do
@@ -13140,13 +13141,14 @@ local function drawTextRight(text, font, size, xRight, y, color)
   size = math.max(size, Desktop.text.minPx)
   local tw = TMP.width(text, font, size)
   ui.pushDWriteFont(font)
-  ui.dwriteDrawText(text, size, TMP.text:set(px(xRight - tw), px(y)), color)
+  local ex = Desktop.text.exact
+  ui.dwriteDrawText(text, size, TMP.text:set(ex and (xRight - tw) or px(xRight - tw), ex and y or px(y)), color)
   ui.popDWriteFont()
 end
 CarRadar = { on = false, want = false, close = false, PLACE = { 875, 364, 170 } }
 do
   local EDGE, RISK, CONTACT = 7 * 3.5 / 3, 1.5, 0.75
-  local K = { START = EDGE * 1.15, LEN = 0.9, FACTOR = 1.8, IN = EDGE * 0.95, OUT = EDGE * 1.08 }
+  local K = { START = EDGE * 1.15, LEN = 0.81, FACTOR = 1.8, IN = EDGE * 0.95, OUT = EDGE * 1.08 }
   K.RINGS = { 3, 5, 7, EDGE }
   local ZONE = { rgbm(0.12, 0.77, 0.23, 1), rgbm(1, 0.54, 0.11, 1), rgbm(0.88, 0.09, 0.09, 1) }
   K.FLAG = { yellow = rgbm(1, 0.83, 0, 1), white = rgbm(1, 1, 1, 1), blue = rgbm(0.11, 0.31, 0.85, 1) }
@@ -13313,13 +13315,14 @@ do
     ui.pushStyleVar(ui.StyleVar.Alpha, a)
     ui.beginRotation()
     local seg = (0.327 * hl * m + hl * m - 0.8 * s) / 2
-    drawText(pos, FONT_RADAR, fs, V.a:set(x - textWidth(pos, FONT_RADAR, fs) / 2, y - seg - 0.788 * fs), bodyInk)
-    drawText(num, FONT_RADAR, fn, V.a:set(x - textWidth(num, FONT_RADAR, fn) / 2, y - 0.788 * fn), bandInk)
-    drawText(nm, FONT_RADAR, fs, V.a:set(x - textWidth(nm, FONT_RADAR, fs) / 2, y + seg - 0.788 * fs), bodyInk)
+    drawText(pos, FONT_RADAR, fs, V.a:set(x - textWidth(pos, FONT_RADAR, fs) / 2, y - seg - 0.788 * math.max(fs, Desktop.text.minPx)), bodyInk)
+    drawText(num, FONT_RADAR, fn, V.a:set(x - textWidth(num, FONT_RADAR, fn) / 2, y - 0.788 * math.max(fn, Desktop.text.minPx)), bandInk)
+    drawText(nm, FONT_RADAR, fs, V.a:set(x - textWidth(nm, FONT_RADAR, fs) / 2, y + seg - 0.788 * math.max(fs, Desktop.text.minPx)), bodyInk)
     ui.endRotation(90 - math.deg(r.rh))
     ui.popStyleVar()
   end
   function CarRadar.draw(w, h, s)
+    Desktop.text.exact = true
     local pl = CarRadar.PLACE
     local size = math.floor(pl[3] * s)
     if img.size ~= size then images(size) end
@@ -13338,6 +13341,7 @@ do
     me.rw, me.rl, me.ri = my.w, my.l, 0
     H.car(me, cx, cy, m, s, mp1, mp2, true)
     Drag.icons('carradar', p1, p2, s)
+    Desktop.text.exact = false
   end
 end
 local drawPitBox
@@ -17232,6 +17236,7 @@ float4 main(PS_IN pin) {
     local F = nil
     local function fonts(k)
       if F and F.k == k then return F end
+      if BC.fk[k] then F = BC.fk[k] return F end
       local barlow, raj
       for _, f in ipairs(Desktop.text.sets) do
         if f.id == 'barlow' then barlow = f end
@@ -17252,6 +17257,7 @@ float4 main(PS_IN pin) {
         lch = spaced(it, 0.2 * 13 * k), lcl = spaced(it, 0.1 * 18 * k),
         tkl = spaced(it, 0.18 * 13 * k), tkn = spaced(it, 0.14 * 11 * k),
         ft = spaced(it, 0.06 * 11 * k), ftS = spaced(it, 0.06 * 9 * k) }
+      BC.fk[k] = F
       return F
     end
     local function identity() return config.bcIdentity or {} end
@@ -17601,7 +17607,7 @@ float4 main(PS_IN pin) {
       local sig, tc = tyreStyle(tyre or '')
       ui.drawCircle(TMP.a:set(rx, ry), 8.75 * k, tc, 24, 2.5 * k)
       local rs = ringSize(sig, 11 * k, 12 * k)
-      drawText(sig, F.rb, rs, TMP.a:set(rx - textWidth(sig, F.rb, rs) / 2, ry - 7 * k * rs / (11 * k)), PAPER)
+      drawText(sig, F.rb, rs, TMP.a:set(rx - textWidth(sig, F.rb, rs) / 2, BC.midR(ry, rs)), PAPER)
     end
     local CR = { pen = {}, notes = { t = {}, b = {} }, seals = {}, nSeals = 0, res = { at = nil, rows = nil, pages = nil }, sn = { at = nil, secs = 6, sid = nil, pending = false },
       fg = { sid = nil, k = nil, r = false } }
@@ -17609,7 +17615,7 @@ float4 main(PS_IN pin) {
     local SAY_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.96)
     local ROLL = 0.45
     BC.ROLL = ROLL
-    BC.SCALE = 0.86
+    BC.SCALE, BC.SCALE_R, BC.fk = 0.88, 0.90, {}
     local BOX_TINT, BOX_SOFT, RES_PIN = rgbm(1, 1, 1, 0.04), rgbm(31 / 255, 104 / 255, 207 / 255, 0.30), rgbm(1, 1, 1, 0.22)
     ACCENT[#ACCENT + 1] = BOX_SOFT
     CR.va, CR.vb = vec2(0, 0), vec2(0, 0)
@@ -18102,6 +18108,12 @@ float4 main(PS_IN pin) {
     end
     CR.MID_B, CR.MID_R = 0.65, 0.6085
     function CR.midTop(cy, size, r) return cy - math.max(size, Desktop.text.minPx) * r end
+    function BC.midR(cy, size) return CR.midTop(cy, size, CR.MID_R) end
+    function CR.useK(k)
+      CR.k = k
+      fonts(k)
+    end
+    function CR.timeWR(k) return 4 * k / BC.SCALE_R end
     function BC.flagSig(bx, by, bw, bh, k, fk, small, sig)
       local fs = (small and 9 or 12) * k
       drawText(sig, F.rb, fs, TMP.a:set(bx + bw / 2 - textWidth(sig, F.rb, fs) / 2, CR.midTop(by + bh / 2, fs, CR.MID_R)), fk == 'code' and LT_INK or FLAGC.yellow)
@@ -19507,7 +19519,7 @@ float4 main(PS_IN pin) {
       drawText(p, F.rb, 22 * k, TMP.a:set(cx + pcol - textWidth(p, F.rb, 22 * k), y1 + 8 * k + dy), PAPER)
       cx = cx + pcol + (tw and 9 * k or G)
       frame(cx, y1 + 13 * k + dy, cx + nw, y1 + 31 * k + dy, NUMB, k)
-      drawText(num, F.rb, 13 * k, TMP.a:set(cx + nw / 2 - textWidth(num, F.rb, 13 * k) / 2, y1 + 14 * k + dy), PAPER)
+      drawText(num, F.rb, 13 * k, TMP.a:set(cx + nw / 2 - textWidth(num, F.rb, 13 * k) / 2, CR.midTop(y1 + 22 * k + dy, 13 * k, CR.MID_R)), PAPER)
       local tx1, tx2
       if tw then
         cx = cx + 59 * k
@@ -19549,12 +19561,12 @@ float4 main(PS_IN pin) {
         or ((phaseGap and not ended) and MIST_GAP or MIST))
       local call = not gain and not ended and CR.pitCall(r)
       if gain then
-        posMark(bx1, bx2, by1, by2, k, d, by1 + (tw and 2 or 3) * k)
+        posMark(bx1, bx2, by1, by2, k, d, CR.midTop((by1 + by2) / 2, 17 * k, CR.MID_R))
       elseif call then
         CR.callText(call, (bx1 + bx2) / 2, (by1 + by2) / 2, k, false)
       else
         local ttw = textWidth(tt, F.rb, 17 * k)
-        drawText(tt, F.rb, 17 * k, TMP.a:set((bx1 + bx2) / 2 - ttw / 2, by1 + (tw and 2 or 3) * k), bad and RED or LT_INK)
+        drawText(tt, F.rb, 17 * k, TMP.a:set((bx1 + bx2) / 2 - ttw / 2, CR.midTop((by1 + by2) / 2, 17 * k, CR.MID_R)), bad and RED or LT_INK)
       end
       if r.index == BC.fastIdx then fastBadge(bx2 - 2 * k, by1 + k, k) end
       local sx = bx2 + (cls and 3.72 * k or 0) + 9 * k
@@ -19946,7 +19958,7 @@ float4 main(PS_IN pin) {
       local y1 = y2 - 44 * k
       local nbw = math.max(46 * k, textWidth('#000', F.rb, 13 * k) + 12 * k)
       local Wc = 16 * k + 26 * k + 9 * k + nbw + 9 * k + CW.name + 9 * k + 20 * k + 16 * k + 18 * k + CW.pages + 18 * k + 54 * k
-      local W = 665.6 * k
+      local W = CR.fixAt or 665.6 * k
       local pw = math.max(CW.pages + (W - Wc), 0)
       local xv = 16 * k + 35 * k + nbw + 9 * k + CW.name + 9 * k + 36 * k
       rect(0, y1, W, y2, BAR)
@@ -20100,8 +20112,8 @@ float4 main(PS_IN pin) {
     local drawCredits
     function BC.draw(w, h)
       local k = h / 1080 * BC.SCALE
-      CR.k = k
-      fonts(k)
+      Desktop.text.exact = true
+      CR.useK(k)
       CR.accent()
       RecordSync.base.dirPenAsk()
       CR.pitScan()
@@ -20116,6 +20128,7 @@ float4 main(PS_IN pin) {
       CR.opening(w, h, k, id)
       CR.sname(w, h, k, id)
       CR.gridDraw(w, h, k, id)
+      Desktop.text.exact = false
     end
     local function crawl(x, y1, y2, w, k, list, multi, phaseGap, ended, cyc, it)
       local item = it
@@ -20254,10 +20267,10 @@ float4 main(PS_IN pin) {
         drawText(sig, F.rb, rs, TMP.a:set(rx - textWidth(sig, F.rb, rs) / 2, CR.midTop(ry, rs, CR.MID_R)), PAPER)
       end
       local function boxR(bx, cy, k, r, list, i, multi, sel, phaseGap, ended, byClass)
-        local x1, x2, y1, y2 = bx + 4 * k, bx + 64 * k, cy - 9 * k, cy + 9 * k
+        local x1, x2, y1, y2 = bx + 4 * k, bx + 64 * k + CR.timeWR(k), cy - 9 * k, cy + 9 * k
         if multi and r.class then
           local _, cc = classStyle(r.class)
-          slanted(bx, y1, bx + 68 * k, y2, 5 * k, cc)
+          slanted(bx, y1, bx + 68 * k + CR.timeWR(k), y2, 5 * k, cc)
         end
         local gain = timePhase() == 'POS' and not ended
         local d = gain and gained(r, list, i) or nil
@@ -20303,7 +20316,7 @@ float4 main(PS_IN pin) {
           drawText(p, F.rb, 16 * k, TMP.a:set(cx + 20 * k - textWidth(p, F.rb, 16 * k), CR.midTop(cy, 16 * k, CR.MID_R)), PAPER)
           cx = cx + 20 * k + G
           cx = cx + slotR(cx, cy, k, r) + G
-          local bx = x + tw - 8 * k - 68 * k
+          local bx = x + tw - 8 * k - 68 * k - CR.timeWR(k)
           local tx = bx - G - 14 * k - G - 26 * k
           drawText(n3Of(r), F.name, 14 * k, TMP.a:set(cx, CR.midTop(cy, 14 * k, CR.MID_B)), PAPER)
           drawText(t3Of(r), F.team, 10 * k, TMP.a:set(tx, CR.midTop(cy, 10 * k, CR.MID_B)), DIMW)
@@ -20316,7 +20329,7 @@ float4 main(PS_IN pin) {
         local qb = not fin and CR.qualiShown(r.index)
         local ft = not fin and CR.ftOn()
         local sealW = sealsR(0, 0, k, r, pen, rep, true, fin)
-        local W = 8 * k + 16 * k + G + slotW(k) + G + RS.n3w + G + RS.t3w + G + 14 * k + G + 68 * k + (qb and (G + CR.qualiW(k, true)) or 0) + (ft and (G + CR.ftW(k, true)) or 0) + (sealW > 0 and (G + sealW) or 0) + 10 * k
+        local W = 8 * k + 16 * k + G + slotW(k) + G + RS.n3w + G + RS.t3w + G + 14 * k + G + 68 * k + CR.timeWR(k) + (qb and (G + CR.qualiW(k, true)) or 0) + (ft and (G + CR.ftW(k, true)) or 0) + (sealW > 0 and (G + sealW) or 0) + 10 * k
         if measure then return x + W end
         local y2, cy = y1 + 30 * k, y1 + 15 * k
         if sel then
@@ -20334,7 +20347,7 @@ float4 main(PS_IN pin) {
         ringR(cx + 7 * k, cy, k, BroadcastAlerts.tyreOf[r.index])
         cx = cx + 14 * k + G
         boxR(cx, cy, k, r, list, i, multi, sel, phaseGap, ended, byClass)
-        cx = cx + 68 * k
+        cx = cx + 68 * k + CR.timeWR(k)
         if qb then
           CR.qualiBars(cx + G, cy, k, r.index, true)
           cx = cx + G + CR.qualiW(k, true)
@@ -20401,7 +20414,7 @@ float4 main(PS_IN pin) {
         local colW = math.max(lt, textWidth(Lang.letters.upper(T.lastLap), F.lab, 9 * k), textWidth(Lang.letters.upper(T.bestLap), F.lab, 9 * k))
         local xv = 12 * k + 16 * k + G + slotW(k) + G + RS.n3w + G + RS.t3w + G + 14 * k + 12 * k
         local Wc = xv + 14 * k + pw + 12 * k + colW + 12 * k + colW + 14 * k + 10 * k + 3 * 8 * k + 10 * k
-        local W = 462.3 * k
+        local W = CR.fixAtR or 462.3 * k
         colW = math.max(colW + (W - Wc) / 2, 0)
         rect(0, y1, W, y2, BAR)
         rect(0, y1, W, y1 + k, HAIR)
@@ -20517,6 +20530,7 @@ float4 main(PS_IN pin) {
           strip(0, xEnd, h - 14 * k, k, id.logoStrip, BAR.mult, 14 * k)
           local list0 = creditRows(nil)
           measureR(list0, nil, k)
+          CR.fixAtR = nil
           cardHR(h, k, multi0)
           CR.stack(k, y1)
           return
@@ -20541,6 +20555,7 @@ float4 main(PS_IN pin) {
         local phaseGap = gapNow()
         local fixed, fixedL, fixedK, fixedB = fixedOf(list, cyc and towerParts or nil)
         measureR(list, fixed, k)
+        CR.fixAtR = x
         if fixed then x = itemR(x, y1, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, nil, nil, fixedB) end
         crawl(x, y1, y2, w, k, list, multi, phaseGap, ended, cyc, itemR)
         strip(w - w * 0.42, w, h - 14 * k, k, id.logoStrip, BAR.mult, 14 * k)
@@ -20548,7 +20563,7 @@ float4 main(PS_IN pin) {
         CR.stack(k, y1)
       end
       function CR.towerR(h, k, id)
-        local x1, x2, ty1 = 44 * k, 294 * k, 104 * k
+        local x1, x2, ty1 = 44 * k, 294 * k + CR.timeWR(k), 104 * k
         local fk, ft, fsig = flagNow()
         local onlyBox = BC.opt.flag == 'AUTO'
         local hide, pre = CR.hideList(), CR.preOpen()
@@ -20698,23 +20713,31 @@ float4 main(PS_IN pin) {
         return
       end
       if BC.opt.form == 'V' then
-        if BC.opt.md == 1 then CR.towerR(h, k, id) else
+        if BC.opt.md == 1 then
+          local kr = h / 1080 * BC.SCALE_R
+          CR.useK(kr)
+          CR.towerR(h, kr, id)
+          CR.flagTower(kr)
+          CR.useK(k)
+        else
           towerDraw(h, k, id)
           cardV(k, #RaceTable.classKeys() > 1)
+          CR.flagTower(k)
         end
-        CR.flagTower(k)
         voices(w, h, k, true)
         return
       end
-      if CR.logoIn(id) then
-        if BC.opt.md == 1 then CR.towerLogo(44 * k, 294 * k, 104 * k, k, id, 230 * k, 14, 14, 1) rect(44 * k, 104 * k, 294 * k, 105 * k, HAIR)
-        else CR.towerLogo(44 * k, 416 * k, 104 * k, k, id, 340 * k, 19, 22, 2) rect(44 * k, 104 * k, 416 * k, 105 * k, HAIR) end
-      end
       if BC.opt.md == 1 then
-        CR.barR(w, h, k, id)
+        local kr = h / 1080 * BC.SCALE_R
+        CR.useK(kr)
+        local lx2 = 294 * kr + CR.timeWR(kr)
+        if CR.logoIn(id) then CR.towerLogo(44 * kr, lx2, 104 * kr, kr, id, 230 * kr, 14, 14, 1) rect(44 * kr, 104 * kr, lx2, 105 * kr, HAIR) end
+        CR.barR(w, h, kr, id)
+        CR.useK(k)
         voices(w, h, k, false)
         return
       end
+      if CR.logoIn(id) then CR.towerLogo(44 * k, 416 * k, 104 * k, k, id, 340 * k, 19, 22, 2) rect(44 * k, 104 * k, 416 * k, 105 * k, HAIR) end
       local y2 = h - 20 * k
       local y1 = y2 - 44 * k
       local hide, pre = CR.hideList(), CR.preOpen()
@@ -20758,6 +20781,7 @@ float4 main(PS_IN pin) {
       x = fEnd
       if hide then
         strip(0, xEnd, h - 20 * k, k, id.logoStrip, BAR.mult)
+        CR.fixAt = nil
         cardH(h, k, #RaceTable.classKeys() > 1)
         voices(w, h, k, false)
         CR.stack(k, y1)
@@ -20793,6 +20817,7 @@ float4 main(PS_IN pin) {
       local phaseGap = gapNow()
       local fixed, fixedL, fixedK, fixedB = fixedOf(list, cyc and towerParts or nil)
       columns(list, fixed, k)
+      CR.fixAt = x
       if fixed then x = item(x, y1, k, fixed, fixedL, fixedK, multi, true, phaseGap, ended, nil, nil, fixedB) end
       crawl(x, y1, y2, w, k, list, multi, phaseGap, ended, cyc, item)
       strip(w - w * 0.42, w, h - 20 * k, k, id.logoStrip, BAR.mult)
