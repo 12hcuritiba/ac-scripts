@@ -136,7 +136,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V318 - 2026.11.19'
+local RC_VERSION = 'V319 - 2026.11.20'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2244,6 +2244,7 @@ do
     end
     local car = ac.getCar(0)
     if car then beatPush('sp', string.format('%.4f|%d', CarRead.num(car.splinePosition), car.isInPitlane and 1 or 0)) end
+    if state.incOut and state.incSid == Session.id then beatPush('inc', state.incOut) end
     if Broadcast and (Broadcast.on() or Broadcast.orgOn()) then
       BroadcastAlerts.beat()
       if Broadcast.camsDirty or beatSent.tvcams == nil then Broadcast.camsDirty = false beatPush('tvcams', Broadcast.camsText()) end
@@ -3671,9 +3672,14 @@ do
     end
   end
   B.clockOut = function()
+    local ss = ac.getSession(Session.index)
+    local ab = Clock.abortOf and Clock.abortOf()
     return string.format(',"now":%d', math.floor(serverTimeMs())) .. ((Clock.lightsMs and not Clock.greenMs) and string.format(',"go":%d', Clock.lightsMs) or '')
       .. ((Clock.validAt and not Clock.validMs) and string.format(',"vs":%d', Clock.validAt) or '')
       .. ((Clock.stopAt and Clock.stopAt ~= Clock.stopMs) and string.format(',"rs":%d', Clock.stopAt) or '')
+      .. (ss and string.format(',"dur":%d,"xl":%d', math.floor(math.max(ss.durationMinutes or 0, 0) * 60000), (Clock.extraLapOn and Clock.extraLapOn(ss)) and 1 or 0) or '')
+      .. (ab and string.format(',"ab":%d', ab) or '')
+      .. ((ab and Clock.abortEnd == ab) and string.format(',"ae":%d', ab) or '')
   end
   B.clockAsk = function() return Clock.text end
 end
@@ -3684,11 +3690,11 @@ end)
 do
   local function trackBody()
     local red = state.redFlag
-    return string.format('%s|%d|%s|%s|%s|%d|%s|%d|%s|%s', state.code80 or 'GREEN', math.floor(math.max(TrackList.since, 0)),
+    return string.format('%s|%d|%s|%s|%s|%d|%s|%d|%s|%s|%s', state.code80 or 'GREEN', math.floor(math.max(TrackList.since, 0)),
       red and 'RED' or '-', red and red.reason and (red.reason:gsub('[|\r\n]', ' ')) or '',
       state.restart and math.floor(state.restart.t0) or '', math.floor(TrackList.frozenMs),
       TrackList.frozenSince and math.floor(TrackList.frozenSince) or '', state.postRed and 1 or 0,
-      TrackList.formText and TrackList.formText() or '0|||0', state.lights or '')
+      TrackList.formText and TrackList.formText() or '0|||0', TrackList.stateText and TrackList.stateText() or '|0', state.lights or '')
   end
   local function trackSave()
     Record.save('track', math.floor(math.max(TrackList.since, 0) / 1000), trackBody())
@@ -3721,8 +3727,14 @@ do
     if windowStill() ~= (TrackList.frozenSince ~= nil) then TrackList.changed() end
   end
   local function trackApply(body, source)
-    local kind, since, red, reason, rt, frozen, frozenSince, postRed, fe, fo, fd, fp, lights =
-      tostring(body):match('^([%w%-]+)|(%d+)|([%w%-]*)|([^|]*)|(%d*)|(%d*)|(%d*)|(%d?)|(%d*)|([%d:,]*)|([%d,]*)|([01]?)|(%a*)$')
+    local kind, since, red, reason, rt, frozen, frozenSince, postRed, fe, fo, fd, fp, lights
+    local m = { tostring(body):match('^([%w%-]+)|(%d+)|([%w%-]*)|([^|]*)|(%d*)|(%d*)|(%d*)|(%d?)|(%d*)|([%d:,]*)|([%d,]*)|([01]?)|(%a?)|([01]?)|(%a*)$') }
+    if m[1] then
+      kind, since, red, reason, rt, frozen, frozenSince, postRed, fe, fo, fd, fp, lights = m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[15]
+    else
+      kind, since, red, reason, rt, frozen, frozenSince, postRed, fe, fo, fd, fp, lights =
+        tostring(body):match('^([%w%-]+)|(%d+)|([%w%-]*)|([^|]*)|(%d*)|(%d*)|(%d*)|(%d?)|(%d*)|([%d:,]*)|([%d,]*)|([01]?)|(%a*)$')
+    end
     if not kind then
       kind, since, red, reason, rt, frozen, frozenSince, postRed, lights =
         tostring(body):match('^([%w%-]+)|(%d+)|?([%w%-]*)|?([^|]*)|?(%d*)|?(%d*)|?(%d*)|?(%d?)|?(%a*)|?%d*$')
@@ -3898,6 +3910,12 @@ do
     return out
   end
   Lap.readSplits = splits
+  function Lap.sectorOf(pos)
+    if (not Lap.splits or #Lap.splits == 0) and Lap.readSplits then Lap.readSplits() end
+    local sec = 1
+    for k, v in ipairs(Lap.splits or {}) do if pos >= v then sec = k + 1 end end
+    return sec
+  end
   function Lap.valid(m)
     m = m or Lap.marks
     return not (m.cut or m.overdue or m.fuel or m.form or m.closed)
@@ -4046,6 +4064,7 @@ do
     preMarks(car, true)
     P.lineT = state.ui.clock
     Lap.save()
+    if Lap.onLapCounted then Lap.onLapCounted(0) end
   end
   function Lap.finish()
     if Lap.over then return end
@@ -4320,9 +4339,12 @@ do
     lapCurOk = ac.StructItem.uint8(),
   }, function(sender, msg)
     if not sender or sender.index == 0 or tonumber(msg.lapSid) ~= (Session.id or 0) then return end
+    local o = Lap.others[sender.index]
+    local before = o and o.n or 0
     otherKeep(sender.index, tonumber(msg.lapN) or 0, tonumber(msg.lapBest) or 0, msg.lapSec, tonumber(msg.lapLast) or 0, tonumber(msg.lapOk) == 1, msg.lapLastSec,
       tonumber(msg.lapT) or 0, 0, tonumber(msg.lapOut) or 0, msg.lapCur or '', tonumber(msg.lapCurOk) == 1)
     Lap.recBuild()
+    if Lap.onLapCounted and (tonumber(msg.lapN) or 0) > before then Lap.onLapCounted(sender.index) end
   end, nil, nil, { processPostponed = true })
   local BASE_TRIES = 3
   RecordSync.base.beat[#RecordSync.base.beat + 1] = function()
@@ -8829,6 +8851,8 @@ do
       if kind ~= INC.none and Flags.formation then Flags.formation.detach(0) end
       OnlineQueue.push(sendIncident, { incKind = kind,
         incPos = math.floor(math.min(math.max(CarRead.num(car.splinePosition), 0), 1) * 65535) }, nil)
+      local pos = math.min(math.max(CarRead.num(car.splinePosition), 0), 1)
+      state.incOut, state.incSid = string.format('%d|%d|%d', kind, Lap.sectorOf(pos), math.floor(serverTimeMs())), Session.id
     end
     Flags.own = kind
   end
@@ -9287,6 +9311,7 @@ do
   function Flags.extraLapOn(ss)
     return ss and ss.type == ac.SessionType.Race and ss.isTimedRace and ss.hasAdditionalLap
   end
+  Clock.extraLapOn = Flags.extraLapOn
   local START_LIGHTS_FROM = 22
   function Flags.startLights(car)
     if Start.phase then return nil end
@@ -9888,7 +9913,7 @@ do
   function Formation.validStart(ms, lights)
     if Formation.started then return end
     Formation.started = true
-    if Formation.phase == 'red' then Formation.phase = 'done' end
+    if Formation.phase == 'red' then Formation.phase = 'done'; formSave() end
     if CarRead.isStaff(0) then return end
     if lights then Clock.lightsOut(ms) else Clock.startValid(ms) end
   end
@@ -10208,6 +10233,10 @@ do
     formSave()
     return true
   end
+  local PHASE_LETTER = { pre = 'p', lap = 'l', ['end'] = 'e', red = 'r', done = 'd' }
+  function Formation.stateText()
+    return string.format('%s|%d', PHASE_LETTER[Formation.phase or ''] or '', state.restart and state.restart.start and 1 or 0)
+  end
   function Formation.trackText()
     local s = Formation.saved
     if s and not s.applied then return string.format('%d|%s|%s|%s', s.e, s.o, s.d, s.p) end
@@ -10286,6 +10315,7 @@ do
     Formation.phase, Formation.t0, Formation.armed, Formation.aligned = 'red', nil, false, false
     Flags.onGrid = false
     Lock.release('grid')
+    formSave()
     ac.log('race-control: formation lap: red flag before the valid start, the procedure stopped')
   end
   function Flags.formationUpdate(car)
@@ -10394,9 +10424,11 @@ do
         if crossed then Formation.validStart(serverTimeMs()) end
         ac.log(string.format('race-control: rolling start: the leader at %.2f of the lap, green flag', sp or 0))
         if not staff then rcLog(TEXTS.rc.rollingStart, 'green flag') end
+        formSave()
       elseif r.procedure == 'STANDING' and green then
         Formation.phase = 'done'
         ac.log('race-control: standing start: the start was given while this car was back in its box')
+        formSave()
       elseif r.procedure == 'STANDING' and lc and Formation.prog >= 0.5 then
         local lp = slotPos(Formation.slot[Formation.leader])
         local left = lp and ((CarRead.num(ac.worldCoordinateToTrackProgress(lp)) - sp) % 1) * lapLen() or 0
@@ -10407,6 +10439,7 @@ do
           Formation.pitStart = Formation.pitStart or (not staff and car.isInPitlane)
           ac.log('race-control: standing start: formation lap over, to the grid' .. (Formation.pitStart and ' (start from the pit lane)' or ''))
           if not staff then rcLog(TEXTS.rc.standingStart, Formation.pitStart and 'start from the pit lane' or 'to the grid') end
+          formSave()
         end
       end
     end
@@ -10452,6 +10485,7 @@ do
       Formation.phase = 'done'
       Lock.release('grid')
       ac.log('race-control: standing start: the start was given while this car was back in its box')
+      formSave()
     end
     if Formation.phase == 'end' then
       align(car)
@@ -10472,7 +10506,7 @@ do
           carDsq(1, TEXTS.fmMissedStart)
         end
       end
-      if Formation.armed and not state.restart then Formation.phase = 'done' end
+      if Formation.armed and not state.restart and Formation.phase ~= 'done' then Formation.phase = 'done'; formSave() end
     end
     local sr = Flags.sr
     if r.procedure == 'STANDING' and Formation.phase == 'done' and CarsTick.frame and sr.go and sr.start and sr.relPos and car.position then
@@ -10543,6 +10577,8 @@ do
   Lap.formRunning = Formation.running
   TrackList.formText = Formation.trackText
   TrackList.formRestore = Formation.trackRestore
+  TrackList.stateText = Formation.stateText
+  Clock.abortOf = function() return Formation.abortMs end
 end
 local PassMirror = {}
 sessionPart('passMirror', PassMirror, function() return { seq = 0, loaded = 0, last = SESSION_NONE, red = SESSION_NONE } end)
@@ -10941,6 +10977,12 @@ do
   Lap.ownBestAll = RaceTable.ownBest
   Lap.ownLaps = function() return RaceTable.laps end
   Lap.classOf = RaceTable.classOf
+  Lap.onLapCounted = function(i)
+    local ab = Formation.abortMs
+    if not ab or Clock.abortEnd == ab then return end
+    local L = RaceTable.rows and RaceTable.rows[1]
+    if L and L.index == i then Clock.abortEnd = ab end
+  end
   function RaceTable.lapMarked() return Lap.invalidNow() end
   function RaceTable.flying()
     local laps, sum, n = RaceTable.laps, 0, 0
@@ -17278,13 +17320,18 @@ float4 main(PS_IN pin) {
       end
       if state.restart then return 'red', T.red end
       if state.code80 then return 'code', T.yellow, state.code80 == 'CODE-80' and 'FCY' or state.code80 end
+      local secs, seen = {}, {}
       for i in pairs(Flags.incidents) do
         local _, flag, pos = Flags.incidentOf(i)
         if flag == 'yellow' and pos and not CarRead.isStaff(i) then
-          local sec, sp = 1, Lap.splits or {}
-          for k, v in ipairs(sp) do if pos >= v then sec = k + 1 end end
-          return 'yellow', T.yellow, 'S' .. sec
+          local sec = Lap.sectorOf(pos)
+          if not seen[sec] then seen[sec] = true; secs[#secs + 1] = sec end
         end
+      end
+      if #secs > 0 then
+        table.sort(secs)
+        local mark = #secs == 1 and ('S' .. secs[1]) or #secs == 2 and ('S' .. secs[1] .. '/' .. secs[2]) or ('S' .. secs[1] .. '-' .. secs[#secs])
+        return 'yellow', T.yellow, mark
       end
       if sim.raceSessionType == ac.SessionType.Race and Clock.zeroed() then
         local ss = ac.getSession(Session.index)
