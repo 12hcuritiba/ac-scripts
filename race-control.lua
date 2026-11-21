@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V327 - 2026.11.21'
+local RC_VERSION = 'V330 - 2026.11.21'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16201,9 +16201,9 @@ float4 main(PS_IN pin) {
     replayRow(p1, p2, y, s, 1, ui.Icons.Record, autoOn, K.auto == 'FREE' and 'open' or 'closed', autoOn and TEXTS.replayAutoOn or TEXTS.replayAutoOff,
       K.auto == 'FREE' and TEXTS.replayAutoHint or (K.auto == 'FORCED' and TEXTS.replayOrgOnHint or TEXTS.replayOrgOffHint), function() AppLink.clipSetAuto(not pr.auto) end)
     y = y + 2 * ROW * s
-    local manual = K.manual == 'FREE'
+    local manual = K.manual == 'FREE' and not CarRead.isStaff(0)
     local left = manual and AppLink.clipLeft() or 0
-    replayRow(p1, p2, y, s, 2, ui.Icons.Save, false, manual and 'open' or 'closed', manual and string.format('%s (%d)', TEXTS.replaySaveNow, left) or TEXTS.replaySaveNow,
+    replayRow(p1, p2, y, s, 2, ui.Icons.Save, manual and left > 0, manual and 'open' or 'closed', manual and string.format('%s (%d)', TEXTS.replaySaveNow, left) or TEXTS.replaySaveNow,
       manual and TEXTS.replaySaveHint or TEXTS.replayLocked, (manual and left > 0) and function() AppLink.clipWant('manual') end or nil)
     y = y + 2 * ROW * s
     replayRow(p1, p2, y, s, 3, ui.Icons.Folder, pr.localCopy, nil, pr.localCopy and TEXTS.replayLocalOn or TEXTS.replayLocalOff, TEXTS.replayLocalHint,
