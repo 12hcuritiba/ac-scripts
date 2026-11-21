@@ -67,6 +67,7 @@ local cfg = ac.configValues({
   raceDriverSwapRequired = '',
   wrongDriverSeconds = '120',
   driverStint = '',
+  replay = '',
   pitStopOrder = 'F<TR>',
   pitStopMode = 'AUTO',
   swapWindowStartMinutes = 0,
@@ -136,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V321 - 2026.11.20'
+local RC_VERSION = 'V322 - 2026.11.21'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -526,6 +527,11 @@ local TEXTS = {
   lobbyTitle = 'RACING CONTROL', lobbyStops = 'Stops', lobbyKmr = 'KMR points / rating', lobbyWeather = 'Air / track / humidity',
   lobbyMessages = 'MESSAGES', lobbyWindow = 'Racing Control - lobby',
   scrShare = 'RACING ROOM', shareOn = 'GAME SCREEN SHARED', shareOff = 'GAME SCREEN NOT SHARED', shareHint = '< off   on >',
+  scrReplay = 'REPLAYS', replayAutoOn = 'AUTOMATIC ON', replayAutoOff = 'AUTOMATIC OFF', replaySaveNow = 'SAVE REPLAY', replayLocalOn = 'LOCAL COPY ON',
+  replayLocalOff = 'LOCAL COPY OFF', replayAutoHint = 'Unlocked, saves at each incident', replayOrgOnHint = 'Locked on by the organization',
+  replayOrgOffHint = 'Locked off by the organization', replaySaveHint = 'Unlocked, the last seconds', replayLocked = 'Locked by the organization',
+  replayLocalHint = 'Keeps the clip on this PC too', replayLast = 'Last clip: %s, on the server', replayNone = 'No clip in this session', replayManualKind = 'Manual',
+  replayCollision = 'Collision', replayInc_spin = 'Loss of control', replayInc_stopped = 'Car stopped', replayInc_broken = 'Car broken', replayInc_oil = 'Oil on track',
   ownOn = 'MY SCREENS SHOWN TO ME', ownOff = 'MY SCREENS HIDDEN FROM ME', ownHint = 'Hidden: less traffic and load; the others still see them',
   focusOn = 'FOCUS ON', focusOff = 'FOCUS OFF', focusWith = 'Talking to you: %s', focusNobody = 'Choose who talks to you', focusHint = 'Only one person talks to you',
   focusNoRoom = 'Focus: Racing Room in a private room',
@@ -1046,6 +1052,7 @@ local config = (function()
       leaderSlowKmh = 30, slowFarKmh = 40, slowFarM = 75, alignMeters = 0.7, alignKmh = 1, alignSeconds = 60, approachM = 400, limitSpline = 0.788,
       pitExitSpline = 0.024, abortSpline = 0.85, abortEndSpline = 0.15, abortTailSeconds = 5 }),
     driverStint = structKey('driverStint', { minMinutes = 0, maxMinutes = 0 }),
+    replay = structKey('replay', { auto = 'FREE', manual = 'FREE', manualMinutes = 60, manualMax = 2, manualCutMinutes = 30, manualAccumulate = 0 }),
     kmrPoints = kmrPoints,
     kmrRating = kmrRating,
     lobbyPos = structKey('lobbyPos', { x = -1, y = -1 }),
@@ -1374,7 +1381,7 @@ ac.log('race-control: section=' .. tostring(__cfgSection__)
   .. ' physics.allowed=' .. tostring(physics.allowed())
   .. ' ' .. table.concat(zoneLog, ' '))
 for _, key in ipairs({ 'screenScale', 'tyreLife', 'tyreTemp', 'wrongWay', 'stopAndGo', 'practiceTow', 'qualifyTow', 'raceTow', 'repairFormula', 'damage',
-    'raceProcedure', 'flags', 'restart', 'screens', 'parkedCar', 'driverStint', 'lobbyPos', 'classes', 'kmrPoints', 'kmrRating' }) do
+    'raceProcedure', 'flags', 'restart', 'screens', 'parkedCar', 'driverStint', 'replay', 'lobbyPos', 'classes', 'kmrPoints', 'kmrRating' }) do
   ac.log('race-control: key ' .. key .. ' = ' .. tostring(cfg[key]))
 end
 ac.log('race-control: theme keys on the server: ' .. (#config.themesOnServer > 0 and table.concat(config.themesOnServer, ' ') or 'none (old keys)'))
@@ -1695,6 +1702,12 @@ end
 local function driverTag()
   return string.format('#%d %s', CarRead.number(0), tostring(ac.getDriverName(0) or ''))
 end
+RC_CLIP, RC_CLIP_PREFIX, RcClip = {}, {}, { want = function() return false end }
+local function rcClipOf(what)
+  if RC_CLIP[what] then return true end
+  for _, p in ipairs(RC_CLIP_PREFIX) do if p ~= '' and tostring(what):sub(1, #p) == p then return true end end
+  return false
+end
 local function rcLog(what, reason)
   local msg = string.format('%s%s - %s - %s', TEXTS.rcPrefix, what, driverTag(), reason)
   if config.baseUrl ~= '' then
@@ -1703,6 +1716,7 @@ local function rcLog(what, reason)
     state.outDirty = true
   end
   ac.log('race-control: ' .. msg)
+  if rcClipOf(what) then RcClip.want('penalty', tostring(what)) end
 end
 local NOTICE_SECONDS = config.screens.noticeSeconds
 local SERVER_NOTICE_SECONDS = config.screens.serverNoticeSeconds
@@ -2245,6 +2259,7 @@ do
     local car = ac.getCar(0)
     if car then beatPush('sp', string.format('%.4f|%d', CarRead.num(car.splinePosition), car.isInPitlane and 1 or 0)) end
     if state.incOut and state.incSid == Session.id then beatPush('inc', state.incOut) end
+    if state.clipOut and state.clipSid == Session.id then beatPush('clip', state.clipOut) end
     if Broadcast and (Broadcast.on() or Broadcast.orgOn()) then
       BroadcastAlerts.beat()
       if Broadcast.camsDirty or beatSent.tvcams == nil then Broadcast.camsDirty = false beatPush('tvcams', Broadcast.camsText()) end
@@ -2778,6 +2793,13 @@ do
       R.abortTailSeconds = tonumber(body:match('|abortTailSeconds=([%d%.]+)')) or R.abortTailSeconds
       config.sessionLoop.seconds = tonumber(body:match('|sessionLoopSeconds=([%d%.]+)')) or config.sessionLoop.seconds
       config.baseRead.seconds = tonumber(body:match('|baseReadSeconds=([%d%.]+)')) or config.baseRead.seconds
+      local P = config.replay
+      P.auto = body:match('|replayAuto=(%u+)') or P.auto
+      P.manual = body:match('|replayManual=(%u+)') or P.manual
+      P.manualMinutes = tonumber(body:match('|replayManualMinutes=(%d+)')) or P.manualMinutes
+      P.manualMax = tonumber(body:match('|replayManualMax=(%d+)')) or P.manualMax
+      P.manualCutMinutes = tonumber(body:match('|replayManualCutMinutes=(%d+)')) or P.manualCutMinutes
+      P.manualAccumulate = tonumber(body:match('|replayManualAccumulate=(%d)')) or P.manualAccumulate
       R.procedure = R[config.raceNo == 2 and 'procedure2' or 'procedure1']
       local cc = body:match('carClasses=([^|]*)')
       if cc and cc ~= '' and cc ~= config.carClassesText then
@@ -3149,6 +3171,75 @@ do
     ac.broadcastSharedEvent(KEY_REQUEST, tostring(math.floor(code)))
     ac.log('race-control: key ' .. tostring(code) .. ' asked to the app (broadcast)')
   end
+  AppLink.clockMs = function() return 0 end
+  local CLIP_PREFS = 'rc.replay'
+  local prefs = { auto = true, localCopy = true }
+  do
+    local v = tostring(ac.storage[CLIP_PREFS] or '')
+    if #v == 2 then prefs.auto, prefs.localCopy = v:sub(1, 1) == '1', v:sub(2, 2) == '1' end
+  end
+  local function prefsSave() ac.storage[CLIP_PREFS] = (prefs.auto and '1' or '0') .. (prefs.localCopy and '1' or '0') end
+  sessionPart('clip', AppLink, function() return { clipUsed = 0, clipCut = SESSION_NONE, clipWin = SESSION_NONE, clipLast = SESSION_NONE } end)
+  local MODS = { CTRL = 17, CONTROL = 17, SHIFT = 16, ALT = 18 }
+  local saveBtn = ac.ControlButton('__EXT_SAVE_CLIP')
+  local function clipCodes()
+    local codes = {}
+    for part in tostring(saveBtn:boundTo() or ''):gmatch('[^+]+') do
+      local k = part:match('^%s*(.-)%s*$')
+      local c = MODS[k:upper()] or ui.KeyIndex[k] or (#k == 1 and k:upper():byte()) or nil
+      if not c then return nil end
+      codes[#codes + 1] = math.floor(c)
+    end
+    return #codes > 0 and table.concat(codes, '+') or nil
+  end
+  local function clipLeft()
+    local K = config.replay
+    if K.manual ~= 'FREE' then return 0 end
+    if K.manualAccumulate == 1 then return math.max(K.manualMax - AppLink.clipUsed, 0) end
+    local now = AppLink.clockMs()
+    if AppLink.clipCut == math.floor(now / (math.max(K.manualCutMinutes, 1) * 60000)) then return 0 end
+    local win = math.floor(now / (math.max(K.manualMinutes, 1) * 60000))
+    if AppLink.clipWin == win and AppLink.clipUsed >= K.manualMax then return 0 end
+    return 1
+  end
+  local function autoOn()
+    local a = config.replay.auto
+    return a == 'FORCED' or (a == 'FREE' and prefs.auto)
+  end
+  AppLink.clipPrefs, AppLink.clipLeft = prefs, clipLeft
+  function AppLink.clipSetAuto(on) if config.replay.auto == 'FREE' then prefs.auto = on and true or false; prefsSave() end end
+  function AppLink.clipSetLocal(on) prefs.localCopy = on and true or false; prefsSave() end
+  function AppLink.clipWant(kind, label)
+    local manual = kind == 'manual'
+    if manual then
+      if clipLeft() <= 0 then return false end
+    elseif not autoOn() then
+      return false
+    end
+    if CarRead.isStaff(0) then return false end
+    local codes = clipCodes()
+    if not codes then
+      ac.log('race-control: clip: the shortcut of the clip of the CSP has no key')
+      return false
+    end
+    ac.broadcastSharedEvent(KEY_REQUEST, codes .. (prefs.localCopy and '|1' or '|0'))
+    local K = config.replay
+    if manual then
+      local now = AppLink.clockMs()
+      local win = math.floor(now / (math.max(K.manualMinutes, 1) * 60000))
+      if K.manualAccumulate ~= 1 and AppLink.clipWin ~= win then AppLink.clipUsed = 0 end
+      AppLink.clipUsed = AppLink.clipUsed + 1
+      AppLink.clipCut, AppLink.clipWin = math.floor(now / (math.max(K.manualCutMinutes, 1) * 60000)), win
+    end
+    local t = serverTimeMs()
+    AppLink.clipLast = { t = os.date('!%H:%M:%S', math.floor(t / 1000)), kind = label or TEXTS.replayManualKind }
+    state.clipOut, state.clipSid = string.format('%s|%d|%d|%s', kind, manual and 1 or 0, math.floor(t), (tostring(AppLink.clipLast.kind):gsub('|', '/'))), Session.id
+    ac.log(string.format('race-control: clip asked (%s, keys %s)', kind, codes))
+    return true
+  end
+  RcClip.want = AppLink.clipWant
+  for _, w in ipairs({ TEXTS.rc.dsq, TEXTS.rc.dt, TEXTS.rc.dtAfterDsq, TEXTS.rc.reprimand, TEXTS.rc.timePenalty, TEXTS.rc.wrongWay }) do if w then RC_CLIP[w] = true end end
+  for _, w in ipairs({ TEXTS.rc.sgSeconds, TEXTS.rc.hold }) do if w then RC_CLIP_PREFIX[#RC_CLIP_PREFIX + 1] = tostring(w):match('^([^%%]*)') end end
   local pingT = -1e9
   function AppLink.ping()
     pingT = state.ui.clock
@@ -3625,6 +3716,7 @@ do
     local shown = math.max(serverTimeMs() - from, 0)
     return total and math.min(shown, total) or shown
   end
+  AppLink.clockMs = function() return Clock.ms() end
   function Clock.since()
     if sim.raceSessionType == ac.SessionType.Race then return Clock.greenMs end
     return 0
@@ -5101,6 +5193,7 @@ ac.onChatMessage(function(message, senderCarIndex)
     local t, n = state.chat.stamp()
     state.kmrMessages[#state.kmrMessages + 1] = { text = text, sender = senderCarIndex, t = t, n = n }
     if not nextRace then Audit.add('KMR', text) end
+    if not nextRace then AppLink.clipWant('kmr', text) end
     return true
   end
   if server and onDriverSwapMessage(message) then
@@ -5115,6 +5208,7 @@ ac.onChatMessage(function(message, senderCarIndex)
     if points or rating then
       if staff then return true end
       Audit.add('KMR', message, true, DICT.area(low) == 'damage' and 'damage' or 'points')
+      if points then AppLink.clipWant('kmr', message) end
       return true
     end
   end
@@ -5728,6 +5822,7 @@ end
 local COLLISION_DAMAGE_WINDOW = 1.5
 ac.onCarCollision(0, function()
   state.tow.collisionUntil = state.ui.clock + COLLISION_DAMAGE_WINDOW
+  AppLink.clipWant('collision', TEXTS.replayCollision)
 end)
 local function readDamage(car)
   local body, suspension = 0, 0
@@ -8844,6 +8939,7 @@ do
     if kind ~= Flags.sentKind or (kind ~= INC.none and clock - Flags.sentT >= INC_RESEND) then
       if kind ~= Flags.sentKind then
         rcLog(TEXTS.rc.incident, kind == INC.none and 'cleared' or incNames[kind])
+        if kind == INC.stopped or kind == INC.broken or kind == INC.oil or kind == INC.spin then AppLink.clipWant('incident', TEXTS['replayInc_' .. incNames[kind]]) end
         if kind == INC.spin then Audit.add('RC', TEXTS.bc.pipAl.spin, true, 'points') end
         if Flags.sentKind == INC.stopped and kind == INC.none then Flags.regained(0) end
       end
@@ -11856,7 +11952,7 @@ local Desktop = { current = 1, count = 1, pitOn = true, place = {}, focus = nil,
   indicatorUntil = 0, drawnOrder = {}, wasInPit = nil }
 do
   local SCREENS = { 'pitbox', 'setup', 'status', 'race', 'laps', 'standings', 'relative', 'laptime', 'delta', 'event',
-    'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'carradar' }
+    'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'carradar', 'replay' }
   local MODE_NEXT = { visible = 'auto', auto = 'hidden', hidden = 'visible' }
   local STORAGE_KEY = 'rc.desktops'
   local OFF_KEY = 'rc.desktopsOff'
@@ -12108,6 +12204,8 @@ do
       Desktop.shareStep(dir)
     elseif g == 'cockpit' then
       Desktop.cockpitStep(dir)
+    elseif g == 'replay' then
+      Desktop.replayStep(dir)
     elseif g == 'calc' then
       Desktop.calcStep(dir)
     end
@@ -12127,6 +12225,8 @@ do
   Desktop.deltaStep = function() end
   Desktop.cockpitStep = function() end
   Desktop.cockpitMove = function() end
+  Desktop.replayStep = function() end
+  Desktop.replayMove = function() end
   Desktop.calcStep = function() end
   Desktop.calcMove = function() end
   Desktop.shareStep = function(dir) RecordSync.base.rrShare(dir > 0) end
@@ -12421,6 +12521,10 @@ do
       if g == 'calc' then
         if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.calcMove(-1) end
         if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.calcMove(1) end
+      end
+      if g == 'replay' then
+        if PitBox.PAD.up:pressed() or Desktop.dir.up then Desktop.replayMove(-1) end
+        if PitBox.PAD.down:pressed() or Desktop.dir.down then Desktop.replayMove(1) end
       end
     end
   end
@@ -14089,7 +14193,7 @@ local drawRaceScreens = (function()
   local FS = 10
   local PLACE = { relative = { 1572, 380, 330 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 210 },
     race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 516 }, event = { 770, 200, 380 },
-    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 616 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 },
+    weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 616 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 }, replay = { 1300, 640, 250 },
     calc = { 380, 110, 380 } }
   local filter = Desktop.filter
   local function lapTime(ms)
@@ -16063,6 +16167,48 @@ float4 main(PS_IN pin) {
     local p1, p2, y = frame('cockpit', w, h, s, 1 + #cockpitLines(), TEXTS.scrCockpit, AppLink.alive and nil or TEXTS.cockpitNoApp, nil, dx)
     cockpitBody(car, p1, p2, y, s, Desktop.focus == 'cockpit')
     Drag.icons('cockpit', p1, p2, s)
+  end
+  local REPLAY_ROWS = 3
+  local replay = { row = 1 }
+  Desktop.replayMove = function(dir) replay.row = (replay.row - 1 + dir) % REPLAY_ROWS + 1 end
+  Desktop.replayStep = function(dir)
+    if replay.row == 1 then AppLink.clipSetAuto(dir > 0)
+    elseif replay.row == 2 then if dir > 0 then AppLink.clipWant('manual') end
+    else AppLink.clipSetLocal(dir > 0) end
+  end
+  local function replayRow(p1, p2, y, s, i, icon, on, lock, label, hint, fn)
+    local isz = 22 * s
+    local a = vec2(p1.x + 14 * s, y)
+    local b = vec2(a.x + isz, a.y + isz)
+    if Desktop.focus == 'replay' and replay.row == i then ui.drawRectFilled(vec2(p1.x + 9 * s, y + 2 * s), vec2(p1.x + 11 * s, y + 20 * s), YELLOW) end
+    ui.drawRectFilled(a, b, on and rgbm(0.2, 0.6, 0.3, 0.9) or rgbm(1, 1, 1, 0.08), 3 * s)
+    ui.drawIcon(icon, vec2(a.x + 3 * s, a.y + 3 * s), vec2(b.x - 3 * s, b.y - 3 * s), on and COLOR_TITLE or COLOR_DIM)
+    if lock == 'closed' then ui.drawIcon(ui.Icons.Padlock, vec2(b.x - 7 * s, a.y - 4 * s), vec2(b.x + 4 * s, a.y + 7 * s), YELLOW)
+    elseif lock == 'open' then ui.drawIcon(ui.Icons.PadlockUnlocked, vec2(b.x - 7 * s, a.y - 4 * s), vec2(b.x + 4 * s, a.y + 7 * s), COLOR_DIM) end
+    if lock ~= 'closed' and fn then Drag.clickable(a, b, function() replay.row = i; fn() end) end
+    drawText(label, FONT_TITLE, 10 * s, TMP.a:set(b.x + 10 * s, y), on and GREEN or COLOR_DIM)
+    drawText(fitText(hint, FONT_TEXT, 9 * s, p2.x - 14 * s - (b.x + 10 * s)), FONT_TEXT, 9 * s, TMP.a:set(b.x + 10 * s, y + 13 * s), lock == 'closed' and YELLOW or COLOR_DIM)
+  end
+  local function replayScreen(car, w, h, s)
+    local p1, p2, y = frame('replay', w, h, s, 8, TEXTS.scrReplay, (not AppLink.alive) and TEXTS.cockpitNoApp or nil, nil, 0)
+    local K, pr, last = config.replay, AppLink.clipPrefs, AppLink.clipLast
+    local autoOn = K.auto == 'FORCED' or (K.auto == 'FREE' and pr.auto)
+    replayRow(p1, p2, y, s, 1, ui.Icons.Record, autoOn, K.auto == 'FREE' and 'open' or 'closed', autoOn and TEXTS.replayAutoOn or TEXTS.replayAutoOff,
+      K.auto == 'FREE' and TEXTS.replayAutoHint or (K.auto == 'FORCED' and TEXTS.replayOrgOnHint or TEXTS.replayOrgOffHint), function() AppLink.clipSetAuto(not pr.auto) end)
+    y = y + 2 * ROW * s
+    local manual = K.manual == 'FREE'
+    local left = manual and AppLink.clipLeft() or 0
+    replayRow(p1, p2, y, s, 2, ui.Icons.Save, false, manual and 'open' or 'closed', manual and string.format('%s (%d)', TEXTS.replaySaveNow, left) or TEXTS.replaySaveNow,
+      manual and TEXTS.replaySaveHint or TEXTS.replayLocked, (manual and left > 0) and function() AppLink.clipWant('manual') end or nil)
+    y = y + 2 * ROW * s
+    replayRow(p1, p2, y, s, 3, ui.Icons.Folder, pr.localCopy, nil, pr.localCopy and TEXTS.replayLocalOn or TEXTS.replayLocalOff, TEXTS.replayLocalHint,
+      function() AppLink.clipSetLocal(not pr.localCopy) end)
+    y = y + 2 * ROW * s
+    if last then ui.drawIcon(ui.Icons.Cloud, vec2(p1.x + 14 * s, y), vec2(p1.x + 26 * s, y + 12 * s), GREEN) end
+    local t = last and string.format(TEXTS.replayLast, last.t) or TEXTS.replayNone
+    drawText(fitText(t, FONT_TEXT, 9 * s, p2.x - p1.x - 44 * s), FONT_TEXT, 9 * s, TMP.a:set(p1.x + (last and 30 or 14) * s, y), COLOR_DIM)
+    if last then drawText(fitText(last.kind, FONT_TEXT, 9 * s, p2.x - p1.x - 28 * s), FONT_TEXT, 9 * s, TMP.a:set(p1.x + 14 * s, y + ROW * s), COLOR_DIM) end
+    Drag.icons('replay', p1, p2, s)
   end
   local calcScreen = (function()
     local PARAMS = { { k = 'race', step = 5, fmt = '%.0f min' }, { k = 'lap', step = 0.1, fmt = '%.1f s' }, { k = 'tank', step = 1, fmt = '%.0f L' },
@@ -20866,6 +21012,7 @@ float4 main(PS_IN pin) {
     if shown('telemetry', false) then telemetryScreen(car, w, h, s) end
     if shown('share', car.isInPitlane) then shareScreen(car, w, h, s) end
     if shown('cockpit', car.isInPitlane) then cockpitScreen(car, w, h, s) end
+    if shown('replay', false) then replayScreen(car, w, h, s) end
     if shown('perf', false) then perfScreen(car, w, h, s) end
     if shown('calc', false) then calcScreen(car, w, h, s) end
     CarRadar.want = Drag.mode('carradar') ~= 'hidden'
