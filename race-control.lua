@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V334 - 2026.11.21'
+local RC_VERSION = 'V336 - 2026.11.21'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -883,8 +883,7 @@ local function build(src)
   local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, staffPits = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
     pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
   local FIELDS = { kmr = { points = 1, ratingDsq = 1, pitSpeed = 1 }, base = { realName = 1, offline = 1, downMax = 1, downPractice = 1, persist = 1, read = 1 },
-    control = { loop = 1 }, driverSwap = { unconfirmedSeconds = 1 },
-    pitExit = { practiceMinutes = 1, qualifyMinutes = 1, raceMinutes = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
+    control = { loop = 1 }, driverSwap = { unconfirmedSeconds = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
     stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
   for _, m in pairs(OLD) do
     if THEMES[m[1]] then FIELDS[m[1]] = FIELDS[m[1]] or {}; FIELDS[m[1]][m[2]] = 1 end
@@ -1105,11 +1104,6 @@ local function build(src)
         tonumber(K('qualifyClosedSeconds')) or 0,
         tonumber(K('raceClosedSeconds')) or 0),
       rules = bySession(rule(K('practicePenalty'), -1), rule(K('qualifyPenalty'), -1), rule(K('racePenalty'), -1)),
-      minutes = (function()
-        local p = theme('pitExit') or {}
-        local function m(v) local x = tonumber(v) return x and x > 0 and x or nil end
-        return bySession(m(p.practiceMinutes), m(p.qualifyMinutes), m(p.raceMinutes))
-      end)(),
     },
     cutZones = {
       makeZone('SD1', K('cutZoneStart'), K('cutZoneEnd'), K('cutMaxWheelsOut'),
@@ -3748,16 +3742,12 @@ sessionPart('clock', Clock, function() return { greenMs = SESSION_NONE, endMs = 
   stopMs = SESSION_NONE, stopAt = SESSION_NONE } end)
 do
   local B = RecordSync.base
-  function Clock.minutes(s)
-    return config.pit.minutes[s.type] or s.durationMinutes or 0
-  end
   function Clock.ms(kind, s)
     s = s or ac.getSession(Session.index)
     if not s then return 0 end
     local closed = (config.pit.closedSeconds[s.type] or 0) * 1000
     local stop = (s.type == ac.SessionType.Race and sim.raceSessionType == ac.SessionType.Race and Clock.stopMs) or 0
-    local minutes = Clock.minutes(s)
-    local total = minutes > 0 and math.max(minutes * 60000 - closed - stop, 0) or nil
+    local total = s.durationMinutes > 0 and math.max(s.durationMinutes * 60000 - closed - stop, 0) or nil
     if kind == 'total' then return total end
     if kind == 'raw' then return s.durationMinutes > 0 and s.durationMinutes * 60000 - sim.sessionTimeLeft or sim.time - s.startTime end
     if not Session.ready or Session.beforeStart() then return 0 end
@@ -3822,7 +3812,7 @@ do
     return string.format(',"now":%d', math.floor(serverTimeMs())) .. ((Clock.lightsMs and not Clock.greenMs) and string.format(',"go":%d', Clock.lightsMs) or '')
       .. ((Clock.validAt and not Clock.validMs) and string.format(',"vs":%d', Clock.validAt) or '')
       .. ((Clock.stopAt and Clock.stopAt ~= Clock.stopMs) and string.format(',"rs":%d', Clock.stopAt) or '')
-      .. (ss and string.format(',"xl":%d', (Clock.extraLapOn and Clock.extraLapOn(ss)) and 1 or 0) or '')
+      .. (ss and string.format(',"dur":%d,"xl":%d', math.floor(math.max(ss.durationMinutes or 0, 0) * 60000), (Clock.extraLapOn and Clock.extraLapOn(ss)) and 1 or 0) or '')
       .. (ab and string.format(',"ab":%d', ab) or '')
       .. ((ab and Clock.abortEnd == ab) and string.format(',"ae":%d', ab) or '')
   end
@@ -15432,10 +15422,10 @@ float4 main(PS_IN pin) {
         for n = 1, races do
           local on = now and (races == 1 or (config.raceNo or 1) == n)
           local at = n == 1 and starts and starts[i] or nil
-          if n == 2 and not at and firstAt and Clock.minutes(ss) > 0 then
+          if n == 2 and not at and firstAt and ss.durationMinutes and ss.durationMinutes > 0 then
             local hh, mm = firstAt:match('^(%d+):(%d+)')
             if hh then
-              local t = (tonumber(hh) * 60 + tonumber(mm) + math.floor(Clock.minutes(ss)) + math.ceil((tonumber(config.raceOverTime) or 0) / 60)) % 1440
+              local t = (tonumber(hh) * 60 + tonumber(mm) + math.floor(ss.durationMinutes) + math.ceil((tonumber(config.raceOverTime) or 0) / 60)) % 1440
               at = hhmm(t)
             end
           end
@@ -17515,7 +17505,7 @@ float4 main(PS_IN pin) {
         over, endAt = Clock.endMs ~= nil, Clock.endMs
       elseif ss then
         local total = Clock.ms('total', ss)
-        over, endAt = total ~= nil and total > 0 and Clock.ms(nil, ss) >= total, Clock.minutes(ss) * 60000
+        over, endAt = total ~= nil and total > 0 and Clock.ms(nil, ss) >= total, ss.durationMinutes * 60000
       end
       return over or Session.phase == 'resultados', over and endAt or nil
     end
