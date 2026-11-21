@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V323 - 2026.11.21'
+local RC_VERSION = 'V324 - 2026.11.21'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -557,7 +557,7 @@ local TEXTS = {
   screenNames = { pitbox = 'Pit stop', setup = 'Setup status', status = 'Car status', race = 'Race status', laps = 'Laps',
     standings = 'Standings', relative = 'Relative', laptime = 'Lap time', delta = 'Delta', event = 'Event',
     weather = 'Weather', map = 'Track map', telemetry = 'Telemetry', share = 'Racing Room', cockpit = 'Cockpit', perf = 'Performance',
-    calc = 'Strategy calculator', report = 'Session report', carradar = 'Car radar' },
+    calc = 'Strategy calculator', report = 'Session report', carradar = 'Car radar', replay = 'Replays' },
   iconTips = { settings = 'Menu of the Racing Control', eye = 'Show or hide', ghost = 'Auto-hide', pin = 'Lock the place', reset = 'Every box back to its place' },
   scrTelemetry = 'TELEMETRY',
   scrReport = 'SESSION REPORT',
@@ -12702,8 +12702,8 @@ Lang.hooks[#Lang.hooks + 1] = commandTexts
 local Drag = {}
 do
   local GROUPS = { 'panel', 'pitbox', 'setup', 'status', 'laps', 'race', 'laptime', 'delta', 'relative', 'standings',
-    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'carradar' }
-  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden', calc = 'hidden' }
+    'event', 'weather', 'map', 'telemetry', 'share', 'cockpit', 'perf', 'calc', 'carradar', 'replay' }
+  local DEFAULT_MODE = { laps = 'hidden', telemetry = 'hidden', cockpit = 'hidden', perf = 'hidden', calc = 'hidden', replay = 'hidden' }
   local MODES = { visible = true, auto = true, hidden = true }
   Drag.EYE_NEXT = { visible = 'hidden', auto = 'hidden', hidden = 'visible' }
   Drag.GHOST_NEXT = { visible = 'auto', auto = 'visible', hidden = 'auto' }
@@ -12792,7 +12792,8 @@ do
           { ui.Icons.Leaderboard, 'standings' }, { ui.Icons.Group, 'relative' }, { ui.Icons.Stopwatch, 'laptime' },
           { ui.Icons.Stats, 'delta' }, { ui.Icons.Info, 'event' }, { ui.Icons.WeatherOvercast, 'weather' },
           { ui.Icons.Map, 'map' }, { ui.Icons.Pedals, 'telemetry' }, { ui.Icons.VideoCamera, 'share' },
-          { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' }, { ui.Icons.Calculator, 'calc' }, { ui.Icons.Crosshair, 'carradar' } }) do
+          { ui.Icons.SteeringWheel, 'cockpit' }, { ui.Icons.Speedometer, 'perf' }, { ui.Icons.Calculator, 'calc' }, { ui.Icons.Crosshair, 'carradar' },
+          { ui.Icons.Record, 'replay' } }) do
         row[#row + 1] = { it[1], Drag.mode(it[2]) == 'visible' and ICON_COLOR or ICON_OFF, 'show:' .. it[2], TEXTS.screenNames[it[2]] }
       end
     end
