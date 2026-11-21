@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V322 - 2026.11.21'
+local RC_VERSION = 'V323 - 2026.11.21'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -19092,11 +19092,11 @@ float4 main(PS_IN pin) {
           local tx = ini:get(s, 'TEXT', ac.INIConfig.OptionalList)
           tx = tx and table.concat(tx, ', ') or ''
           if a >= 0 and b >= 0 and tx ~= '' then
-            secs[#secs + 1] = { i = math.floor((a + (b >= a and b or b + 1)) / 2 % 1 * N + 0.5) % N + 1, text = tx }
+            secs[#secs + 1] = { i = math.floor((a + (b >= a and b or b + 1)) / 2 % 1 * N + 0.5) % N + 1, a = math.floor(a * N + 0.5) % N + 1, b = math.floor(b * N + 0.5) % N + 1, text = tx }
           end
         end
       end
-      CR.tkL = { P = P, Y = Y, lo = lo, hi = hi, turns = turns, cut = cut, secs = secs }
+      CR.tkL = { P = P, Y = Y, W = G.W, lo = lo, hi = hi, turns = turns, cut = cut, secs = secs }
       return CR.tkL
     end
     function CR.tkName(t)
@@ -19104,14 +19104,38 @@ float4 main(PS_IN pin) {
       if a and a ~= '' and b ~= '' and not b:find('%s/%s') then return (tonumber(TEXTS.bc.tkPart) or 2) == 1 and a or b end
       return tostring(t)
     end
-    function CR.tkFree(r, pts, clear, boxes, lim, k)
-      if r[1] < 0 or r[2] < 0 or r[4] > lim.bottom then return false end
-      if r[3] > 278 * k and (r[2] < lim.rightH + 12 * k or r[3] > lim.cw) then return false end
+    function CR.tkGrid(pts, clear, lim, k)
+      local g = 1.5 * k
+      local nc, nr = math.ceil(lim.cw / g) + 1, math.ceil(lim.bottom / g) + 1
+      local T, rc = {}, math.ceil(clear / g)
+      for r = 1, nr do T[r] = {} end
       for n = 1, #pts do
         local p = pts[n]
-        local dx, dy = math.max(r[1] - p[1], 0, p[1] - r[3]), math.max(r[2] - p[2], 0, p[2] - r[4])
-        if dx * dx + dy * dy < clear * clear then return false end
+        local c0, r0 = math.floor(p[1] / g) + 1, math.floor(p[2] / g) + 1
+        for r = math.max(1, r0 - rc), math.min(nr, r0 + rc) do
+          local row = T[r]
+          for c = math.max(1, c0 - rc), math.min(nc, c0 + rc) do
+            local dx, dy = math.max((c - 1) * g - p[1], 0, p[1] - c * g), math.max((r - 1) * g - p[2], 0, p[2] - r * g)
+            if dx * dx + dy * dy < clear * clear then row[c] = 1 end
+          end
+        end
       end
+      local S = { [0] = {} }
+      for c = 0, nc do S[0][c] = 0 end
+      for r = 1, nr do
+        local row, up, s = { [0] = 0 }, S[r - 1], 0
+        for c = 1, nc do s = s + (T[r][c] or 0) row[c] = up[c] + s end
+        S[r] = row
+      end
+      return { g = g, nc = nc, nr = nr, S = S }
+    end
+    function CR.tkFree(r, G, boxes, lim, k)
+      if r[1] < 0 or r[2] < 0 or r[4] > lim.bottom or r[3] > lim.cw then return false end
+      if r[3] > lim.colR and r[2] < lim.rightH + 12 * k then return false end
+      local g, S = G.g, G.S
+      local c1, c2 = math.max(1, math.floor(r[1] / g) + 1), math.min(G.nc, math.floor(r[3] / g) + 1)
+      local r1, r2 = math.max(1, math.floor(r[2] / g) + 1), math.min(G.nr, math.floor(r[4] / g) + 1)
+      if S[r2][c2] - S[r1 - 1][c2] - S[r2][c1 - 1] + S[r1 - 1][c1 - 1] > 0 then return false end
       for _, b in ipairs(boxes) do
         if not (r[3] + 14 * k < b[1] or r[1] - 14 * k > b[3] or r[4] + 10 * k < b[2] or r[2] - 10 * k > b[4]) then return false end
       end
@@ -19125,10 +19149,10 @@ float4 main(PS_IN pin) {
       end
       return c
     end
-    function CR.tkPlace(px, py, w, h, pts, clear, boxes, lim, k, poly, pen)
-      local st, R, bw, bins, nmax = 3 * k, 160 * k, 1.5 * k, {}, 0
-      for y = math.max(0, py - R - h), math.min(lim.bottom - h, py + R), st do
-        for x = math.max(0, px - R - w), math.min(lim.cw - w, px + R), st do
+    function CR.tkPlace(px, py, w, h, G, boxes, lim, k, poly, pen, C, st)
+      local stp, R, bw, bins, nmax = 3 * k, 160 * k, 1.5 * k, {}, 0
+      for y = math.max(0, py - R - h), math.min(lim.bottom - h, py + R), stp do
+        for x = math.max(0, px - R - w), math.min(lim.cw - w, px + R), stp do
           local dx, dy = math.max(x - px, 0, px - x - w), math.max(y - py, 0, py - y - h)
           local d = math.sqrt(dx * dx + dy * dy)
           local n = math.floor(d / bw) + 1
@@ -19137,6 +19161,18 @@ float4 main(PS_IN pin) {
           b[#b + 1], b[#b + 2], b[#b + 3] = x, y, d
         end
       end
+      local N, near = #C, {}
+      local b1 = st.b >= st.a and st.b or st.b + N
+      for j = st.a - 25, b1 + 25 do near[(j - 1) % N + 1] = true end
+      local function sep(r)
+        local mx, my, own, oth = (r[1] + r[3]) / 2, (r[2] + r[4]) / 2, math.huge, math.huge
+        for j = 1, N do
+          local d = (C[j][1] - mx) ^ 2 + (C[j][2] - my) ^ 2
+          local inS = (st.b >= st.a and j >= st.a and j <= st.b) or (st.b < st.a and (j >= st.a or j <= st.b))
+          if inS then own = math.min(own, d) elseif not near[j] then oth = math.min(oth, d) end
+        end
+        return math.sqrt(own) - math.sqrt(oth)
+      end
       local best
       for n = 1, nmax do
         if best and (n - 1) * bw >= best[1] then break end
@@ -19144,23 +19180,110 @@ float4 main(PS_IN pin) {
         if b then
           for q = 1, #b, 3 do
             local r = { b[q], b[q + 1], b[q] + w, b[q + 1] + h }
-            if CR.tkFree(r, pts, clear, boxes, lim, k) then
-              local s = b[q + 2] + (CR.tkInside(poly, (r[1] + r[3]) / 2, (r[2] + r[4]) / 2) and pen or 0)
+            if CR.tkFree(r, G, boxes, lim, k) and sep(r) < 0 then
+              local s = b[q + 2] + ((pen > 0 and CR.tkInside(poly, (r[1] + r[3]) / 2, (r[2] + r[4]) / 2)) and pen or 0)
               if not best or s < best[1] then best = { s, r } end
             end
           end
         end
       end
-      return best and best[2]
+      if best then return best[2] end
+      local two
+      for n = 1, nmax do
+        local b = bins[n]
+        if b then
+          for q = 1, #b, 3 do
+            local r = { b[q], b[q + 1], b[q] + w, b[q + 1] + h }
+            if CR.tkFree(r, G, boxes, lim, k) then
+              local s = sep(r)
+              if not two or s < two[1] then two = { s, r } end
+            end
+          end
+        end
+      end
+      return two and two[1] <= 6 * k and two[2] or nil
     end
-    function CR.tk2(L, k, cw, rightH, finW)
-      local key = k .. '|' .. cw .. '|' .. rightH .. '|' .. finW
-      if L.v2 and L.v2.key == key then return L.v2 end
-      local P, N = L.P, #L.P
+    function CR.tkHalo(ci)
+      local a = CR.tkAcc
+      local akey = string.format('%.4f|%.4f|%.4f', a.r, a.g, a.b)
+      if CR.tkHk ~= akey then CR.tkHk, CR.tkHc = akey, {} end
+      if CR.tkHc[ci] then return CR.tkHc[ci] end
+      local function lum(r, g, b)
+        local function f(v) return v <= 0.03928 and v / 12.92 or ((v + 0.055) / 1.055) ^ 2.4 end
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+      end
+      local r, g, b = a.r, a.g, a.b
+      if ci == 3 then r, g, b = a.r * 0.45 + PAPER.r * 0.55, a.g * 0.45 + PAPER.g * 0.55, a.b * 0.45 + PAPER.b * 0.55 end
+      local lt, f = lum(DIMW.r * DIMW.mult, DIMW.g * DIMW.mult, DIMW.b * DIMW.mult), 1
+      while f > 0 and (lt + 0.05) / (lum(r * f, g * f, b * f) + 0.05) < 4.5 do f = f - 0.01 end
+      CR.tkHc[ci] = rgbm(r * f, g * f, b * f, 1)
+      return CR.tkHc[ci]
+    end
+    function CR.tkSecOf(L, i)
+      for q = 1, #L.cut - 1 do if i >= L.cut[q] and i < L.cut[q + 1] then return (q - 1) % #CR.tkSec + 1 end end
+      return 1
+    end
+    function CR.tkNameDraw(n, x, y, k)
+      if n[4] then
+        local hc = CR.tkHalo(n[4])
+        for ox = -1.5, 1.5, 1.5 do
+          for oy = -1.5, 1.5, 1.5 do
+            if ox ~= 0 or oy ~= 0 then drawText(n[1], F.tkn, 11 * k, TMP.a:set(x + n[2] + ox * k, y + n[3] + oy * k), hc) end
+          end
+        end
+      end
+      drawText(n[1], F.tkn, 11 * k, TMP.a:set(x + n[2], y + n[3]), DIMW)
+    end
+    function CR.tkMap()
+      local m = identity().map
+      m = type(m) == 'table' and m or {}
+      local function ang(v) v = tonumber(v) return v and v >= 0 and v < 360 and math.floor(v) or nil end
+      return { mode = m.mode == '3D' and '3D' or '2D', a2 = ang(m.a2), a3 = ang(m.a3), names = m.names ~= false }
+    end
+    function CR.tkTurn(P, deg, fit)
       local x0, x1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
       for _, p in ipairs(P) do x0, x1, z0, z1 = math.min(x0, p[1]), math.max(x1, p[1]), math.min(z0, p[2]), math.max(z1, p[2]) end
-      local sc = math.min((250 * k - 12 * k) / math.max(x1 - x0, 1), (470 * k - 12 * k) / math.max(z1 - z0, 1))
-      local ox = (250 * k - (x1 - x0) * sc) / 2
+      local mx, mz = (x0 + x1) / 2, (z0 + z1) / 2
+      local function turned(a)
+        local c, s, Q = math.cos(math.rad(a)), math.sin(math.rad(a)), {}
+        for i, p in ipairs(P) do Q[i] = { mx + (p[1] - mx) * c - (p[2] - mz) * s, mz + (p[1] - mx) * s + (p[2] - mz) * c } end
+        return Q
+      end
+      if deg then return turned(deg), deg end
+      local best, ba = -1, 0
+      for a = 0, 359 do
+        local s = fit(turned(a))
+        if s > best then best, ba = s, a end
+      end
+      return turned(ba), ba
+    end
+    function CR.tkRose(cx, cy, ux, uy, k)
+      local rr = 13 * k
+      ui.drawCircle(TMP.a:set(cx, cy), rr, CR.tkDark, 32, 1.2 * k)
+      for q = 0, 3 do
+        local an = math.atan2(uy, ux) + q * math.pi / 2
+        local ox, oy = math.cos(an), math.sin(an)
+        ui.drawLine(TMP.a:set(cx + ox * rr * 0.55, cy + oy * rr * 0.55), TMP.b:set(cx + ox * rr * 1.18, cy + oy * rr * 1.18), DIMW, k)
+      end
+      local px, py = -uy, ux
+      ui.drawTriangleFilled(Q1:set(cx - px * 3.6 * k, cy - py * 3.6 * k), Q2:set(cx + ux * rr * 0.95, cy + uy * rr * 0.95), Q3:set(cx + px * 3.6 * k, cy + py * 3.6 * k), PAPER)
+      ui.drawTriangleFilled(Q1:set(cx - px * 3.6 * k, cy - py * 3.6 * k), Q2:set(cx + px * 3.6 * k, cy + py * 3.6 * k), Q3:set(cx - ux * rr * 0.95, cy - uy * rr * 0.95), CR.tkDark)
+      local nx, ny = cx + ux * (rr + 10 * k), cy + uy * (rr + 10 * k)
+      drawText('N', F.tkl, 12 * k, TMP.a:set(nx - textWidth('N', F.tkl, 12 * k) / 2, ny - 6 * k), PAPER)
+    end
+    function CR.tk2(L, k, cw, rightH, finW, M)
+      local key = k .. '|' .. cw .. '|' .. rightH .. '|' .. finW .. '|' .. tostring(M.a2) .. '|' .. tostring(M.names)
+      if L.v2 and L.v2.key == key then return L.v2 end
+      local AW, AH = 350 * k, 470 * k
+      local function fit(Q)
+        local x0, x1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
+        for _, p in ipairs(Q) do x0, x1, z0, z1 = math.min(x0, p[1]), math.max(x1, p[1]), math.min(z0, p[2]), math.max(z1, p[2]) end
+        return math.min((AW - 12 * k) / math.max(x1 - x0, 1), (AH - 12 * k) / math.max(z1 - z0, 1)), x0, x1, z0, z1
+      end
+      local P, deg = CR.tkTurn(L.P, M.a2, fit)
+      local N = #P
+      local sc, x0, x1, z0, z1 = fit(P)
+      local ox = (AW - (x1 - x0) * sc) / 2
       local poly, pts = {}, {}
       for i = 1, N do poly[i] = { ox + (P[i][1] - x0) * sc, 6 * k + (P[i][2] - z0) * sc } end
       for i = 1, N do
@@ -19182,22 +19305,282 @@ float4 main(PS_IN pin) {
         end
       end
       local boxes = { { f[1] + 8 * k, f[2] - 14 * k, f[1] + 8 * k + finW, f[2] - k }, { f[1] - 12 * k, f[2] - 12 * k, f[1] + 12 * k, f[2] + 12 * k } }
-      local lim = { cw = cw, rightH = rightH, bottom = h }
+      local lim = { cw = cw, colR = AW + 28 * k, rightH = rightH, bottom = h }
       local names = {}
-      for _, st in ipairs(L.secs) do
-        local name = Lang.letters.upper(CR.tkName(st.text))
-        local w = textWidth(name, F.tkn, 11 * k)
-        local r = CR.tkPlace(poly[st.i][1], poly[st.i][2], w, 11 * k, pts, 7.5 * k, boxes, lim, k, poly, 10 * k)
-        if r then boxes[#boxes + 1] = r names[#names + 1] = { name, r[1], r[2] } end
+      if M.names then
+        local G = CR.tkGrid(pts, 7.5 * k, lim, k)
+        for _, st in ipairs(L.secs) do
+          local name = Lang.letters.upper(CR.tkName(st.text))
+          local w = textWidth(name, F.tkn, 11 * k)
+          local p = poly[st.i]
+          local r = CR.tkPlace(p[1], p[2], w, 11 * k, G, boxes, lim, k, poly, 10 * k, poly, st)
+          local over = not r and CR.tkSecOf(L, st.i) or nil
+          r = r or { p[1] - w / 2, p[2] - 5.5 * k, p[1] + w / 2, p[2] + 5.5 * k }
+          boxes[#boxes + 1] = r
+          names[#names + 1] = { name, r[1], r[2], over }
+        end
       end
-      L.v2 = { key = key, poly = poly, h = h, names = names, chk = chk }
+      local arrow
+      do
+        local cum = { 0 }
+        for i = 2, N do local a, b = poly[i - 1], poly[i] cum[i] = cum[i - 1] + math.sqrt((b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2) end
+        local function nrm(i)
+          local a, b = poly[(i - 2) % N + 1], poly[i % N + 1]
+          local dx, dy = b[1] - a[1], b[2] - a[2]
+          local l = math.sqrt(dx * dx + dy * dy) + 1e-9
+          return -dy / l, dx / l, dx / l, dy / l
+        end
+        local len, off = 70 * k, 13 * k
+        local function free(q, m)
+          if q[1] < m or q[2] < m or q[1] > lim.cw - m or q[2] > h - m then return false end
+          if q[1] > lim.colR and q[2] < lim.rightH + 12 * k then return false end
+          for n = 1, #pts do local p = pts[n] if (p[1] - q[1]) ^ 2 + (p[2] - q[2]) ^ 2 < (off - 3 * k) ^ 2 then return false end end
+          for _, b in ipairs(boxes) do if q[1] > b[1] - m and q[1] < b[3] + m and q[2] > b[2] - m and q[2] < b[4] + m then return false end end
+          return true
+        end
+        for _, skip in ipairs({ 26, 38, 50, 62, 74, 90, 110 }) do
+          if arrow then break end
+          local i0 = 1
+          while i0 < N and cum[i0] < skip * k do i0 = i0 + 1 end
+          local i1 = i0
+          while i1 < N and cum[i1] - cum[i0] < len do i1 = i1 + 1 end
+          local mi = math.floor((i0 + i1) / 2)
+          local nx, ny = nrm(mi)
+          local outS = CR.tkInside(poly, poly[mi][1] + nx * off, poly[mi][2] + ny * off) and -1 or 1
+          for _, side in ipairs({ outS, -outS }) do
+            local c, ok = {}, true
+            for i = i0, i1 do
+              local ax, ay, tx, ty = nrm(i)
+              local q = { poly[i][1] + ax * off * side, poly[i][2] + ay * off * side, ax * side, ay * side, tx, ty }
+              if not free(q, 5 * k) then ok = false break end
+              c[#c + 1] = q
+            end
+            if ok and #c > 3 then
+              local n = #c
+              local Lft, Rgt = {}, {}
+              for j = 1, n do
+                local t = (j - 1) / (n - 1)
+                local hw = (0.8 + 2.4 * t) * k
+                Lft[j] = { c[j][1] + c[j][3] * hw, c[j][2] + c[j][4] * hw }
+                Rgt[j] = { c[j][1] - c[j][3] * hw, c[j][2] - c[j][4] * hw }
+              end
+              local e = c[n]
+              local hl, hw2 = 11 * k, 6.5 * k
+              arrow = { L = Lft, R = Rgt, tip = { e[1] + e[5] * hl, e[2] + e[6] * hl }, ha = { e[1] + e[3] * hw2, e[2] + e[4] * hw2 }, hb = { e[1] - e[3] * hw2, e[2] - e[4] * hw2 } }
+              break
+            end
+          end
+        end
+      end
+      local nr = math.rad(deg)
+      L.v2 = { key = key, poly = poly, h = h, names = names, chk = chk, arrow = arrow, north = { math.sin(nr), -math.cos(nr) } }
       return L.v2
+    end
+    function CR.tk3(L, k, finW, M)
+      local key = k .. '|' .. finW .. '|' .. tostring(M.a3) .. '|' .. tostring(M.names)
+      if L.v3 and L.v3.key == key then return L.v3 end
+      local AW, AH, FB = 560 * k, 500 * k, 448 * k
+      local N, lo, hi = #L.P, L.lo, L.hi
+      local th = math.rad(65)
+      local fy, fz, uy, uz = -math.sin(th), -math.cos(th), math.cos(th), -math.sin(th)
+      local function box(Q)
+        local x0, x1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
+        for _, p in ipairs(Q) do x0, x1, z0, z1 = math.min(x0, p[1]), math.max(x1, p[1]), math.min(z0, p[2]), math.max(z1, p[2]) end
+        return x0, x1, z0, z1
+      end
+      local gx0, gx1, gz0, gz1 = box(L.P)
+      local ex = 0.05 * math.max(gx1 - gx0, gz1 - gz0, 1) / math.max(hi - lo, 1e-3)
+      local function view(Q)
+        local Lp, Rp = Radar.sides(Q, L.W)
+        local x0, x1, z0, z1 = box(Q)
+        local size = math.max(x1 - x0, z1 - z0, 1)
+        local mx, mz = (x0 + x1) / 2, (z0 + z1) / 2
+        local camY, camZ = -fy * 8 * size, mz - fz * 8 * size
+        local function pr(x, hh, z)
+          local dy, dz = hh - camY, z - camZ
+          local d = dy * fy + dz * fz
+          return { (x - mx) / d, -(dy * uy + dz * uz) / d, d }
+        end
+        return Lp, Rp, ex, pr, mx, mz
+      end
+      local function fitOf(Q)
+        local Lp, Rp, ex, pr = view(Q)
+        local u0, u1, v0, v1 = math.huge, -math.huge, math.huge, -math.huge
+        for i = 1, N do
+          local hh = (L.Y[i] - lo) * ex
+          for _, q in ipairs({ pr(Lp[i][1], hh, Lp[i][2]), pr(Rp[i][1], hh, Rp[i][2]), pr(Lp[i][1], 0, Lp[i][2]), pr(Rp[i][1], 0, Rp[i][2]) }) do
+            u0, u1, v0, v1 = math.min(u0, q[1]), math.max(u1, q[1]), math.min(v0, q[2]), math.max(v1, q[2])
+          end
+        end
+        return math.min((AW - 12 * k) / math.max(u1 - u0, 1e-9), (FB - 6 * k) / math.max(v1 - v0, 1e-9)), u0, u1, v0, v1
+      end
+      local P, deg = CR.tkTurn(L.P, M.a3, fitOf)
+      local Lp, Rp, ex, pr, mx, mz = view(P)
+      local s, u0, u1, v0, v1 = fitOf(P)
+      local ou = (AW - (u1 - u0) * s) / 2
+      local ov = math.min(6 * k + (AH - 12 * k - (v1 - v0) * s) / 2, FB - (v1 - v0) * s)
+      local function sc(q) q[1], q[2] = ou + (q[1] - u0) * s, ov + (q[2] - v0) * s return q end
+      local A, B, FA, FB2, C, W3 = {}, {}, {}, {}, {}, {}
+      for i = 1, N do
+        local hh = (L.Y[i] - lo) * ex
+        A[i], B[i] = sc(pr(Lp[i][1], hh, Lp[i][2])), sc(pr(Rp[i][1], hh, Rp[i][2]))
+        FA[i], FB2[i] = sc(pr(Lp[i][1], 0, Lp[i][2])), sc(pr(Rp[i][1], 0, Rp[i][2]))
+        C[i] = sc(pr(P[i][1], hh, P[i][2]))
+        W3[i] = { P[i][1], hh, P[i][2] }
+      end
+      local order, zr, sec, dm = {}, {}, {}, 0
+      for i = 1, N do order[i] = i dm = dm + C[i][3] / N end
+      table.sort(order, function(a, b) return C[a][3] + C[a % N + 1][3] > C[b][3] + C[b % N + 1][3] end)
+      for i = 1, N do zr[i] = dm / C[i][3] end
+      for q = 1, #L.cut - 1 do for i = L.cut[q], L.cut[q + 1] - 1 do sec[(i - 1) % N + 1] = q end end
+      local ax, az = Rp[1][1] - Lp[1][1], Rp[1][2] - Lp[1][2]
+      local al = math.sqrt(ax * ax + az * az) + 1e-9
+      ax, az = ax / al, az / al
+      local bx, bz = P[2][1] - P[N][1], P[2][2] - P[N][2]
+      local bl = math.sqrt(bx * bx + bz * bz) + 1e-9
+      bx, bz = bx / bl, bz / bl
+      local sq = 5 * k * C[1][3] / s
+      local function on(u, v) return sc(pr(P[1][1] + ax * u + bx * v, W3[1][2], P[1][2] + az * u + bz * v)) end
+      local bd = 0.15 * sq
+      local chk = { { on(-1.5 * sq - bd, -sq - bd), on(1.5 * sq + bd, -sq - bd), on(1.5 * sq + bd, sq + bd), on(-1.5 * sq - bd, sq + bd), false } }
+      for c = 0, 2 do
+        for r = 0, 1 do
+          local ua, ub, va, vb = (c - 1.5) * sq, (c - 0.5) * sq, (r - 1) * sq, r * sq
+          chk[#chk + 1] = { on(ua, va), on(ub, va), on(ub, vb), on(ua, vb), (c + r) % 2 == 0 }
+        end
+      end
+      local pts3 = {}
+      for i = 1, N do
+        pts3[#pts3 + 1], pts3[#pts3 + 2], pts3[#pts3 + 3] = A[i], B[i], C[i]
+        for _, W2 in ipairs({ { A[i], FA[i] }, { B[i], FB2[i] } }) do
+          for f = 0.2, 1, 0.2 do pts3[#pts3 + 1] = { W2[1][1] + (W2[2][1] - W2[1][1]) * f, W2[1][2] + (W2[2][2] - W2[1][2]) * f } end
+        end
+      end
+      local arrow
+      do
+        local cum = { 0 }
+        for i = 2, N do cum[i] = cum[i - 1] + math.sqrt((C[i][1] - C[i - 1][1]) ^ 2 + (C[i][2] - C[i - 1][2]) ^ 2) end
+        local function tang(i)
+          local a, b = W3[(i - 2) % N + 1], W3[i % N + 1]
+          local tx, tz = b[1] - a[1], b[3] - a[3]
+          local l = math.sqrt(tx * tx + tz * tz) + 1e-9
+          return tx / l, tz / l
+        end
+        local function clear(q)
+          for i = 1, N do
+            if (A[i][1] - q[1]) ^ 2 + (A[i][2] - q[2]) ^ 2 < (6 * k) ^ 2 or (B[i][1] - q[1]) ^ 2 + (B[i][2] - q[2]) ^ 2 < (6 * k) ^ 2 then return false end
+          end
+          return true
+        end
+        for _, skip in ipairs({ 26, 38, 50, 62, 74, 90, 110 }) do
+          if arrow then break end
+          local i0 = 1
+          while i0 < N and cum[i0] <= skip * k do i0 = i0 + 1 end
+          local i1 = i0
+          while i1 < N and cum[i1] - cum[i0] < 70 * k do i1 = i1 + 1 end
+          local mi = math.floor((i0 + i1) / 2)
+          local tx, tz = tang(mi)
+          local outS = CR.tkInside(P, P[mi][1] - tz * 30, P[mi][2] + tx * 30) and -1 or 1
+          for _, side in ipairs({ outS, -outS }) do
+            local c, ok = {}, true
+            for i = i0, i1 do
+              local ex2, ez2 = tang(i)
+              local nx, nz = -ez2 * side, ex2 * side
+              local pm = s / C[i][3]
+              local w = W3[i]
+              local q = { w[1] + nx * 13 * k / pm, w[2], w[3] + nz * 13 * k / pm, nx, nz, ex2, ez2, pm }
+              if not clear(sc(pr(q[1], q[2], q[3]))) then ok = false break end
+              c[#c + 1] = q
+            end
+            if ok and #c > 3 then
+              local n = #c
+              local Lft, Rgt = {}, {}
+              for j = 1, n do
+                local q = c[j]
+                local hw = (0.8 + 2.4 * (j - 1) / (n - 1)) * k / q[8]
+                Lft[j] = sc(pr(q[1] + q[4] * hw, q[2], q[3] + q[5] * hw))
+                Rgt[j] = sc(pr(q[1] - q[4] * hw, q[2], q[3] - q[5] * hw))
+              end
+              local q = c[n]
+              arrow = { L = Lft, R = Rgt, tip = sc(pr(q[1] + q[6] * 11 * k / q[8], q[2], q[3] + q[7] * 11 * k / q[8])),
+                ha = sc(pr(q[1] + q[4] * 6.5 * k / q[8], q[2], q[3] + q[5] * 6.5 * k / q[8])), hb = sc(pr(q[1] - q[4] * 6.5 * k / q[8], q[2], q[3] - q[5] * 6.5 * k / q[8])) }
+              for j = 1, n do pts3[#pts3 + 1] = Lft[j] pts3[#pts3 + 1] = Rgt[j] end
+              break
+            end
+          end
+        end
+      end
+      local F3 = C[1]
+      local boxes = { { F3[1] + 8 * k, F3[2] - 14 * k, F3[1] + 8 * k + finW, F3[2] - k }, { F3[1] - 12 * k, F3[2] - 12 * k, F3[1] + 12 * k, F3[2] + 12 * k } }
+      local lim = { cw = 571 * k, colR = 571 * k, rightH = 0, bottom = FB }
+      local names = {}
+      if M.names then
+        local G = CR.tkGrid(pts3, 3 * k, lim, k)
+        for _, st in ipairs(L.secs) do
+          local name = Lang.letters.upper(CR.tkName(st.text))
+          local w = textWidth(name, F.tkn, 11 * k)
+          local p = C[st.i]
+          local r = CR.tkPlace(p[1], p[2], w, 11 * k, G, boxes, lim, k, nil, 0, C, st)
+          local over = not r and CR.tkSecOf(L, st.i) or nil
+          r = r or { p[1] - w / 2, p[2] - 5.5 * k, p[1] + w / 2, p[2] + 5.5 * k }
+          boxes[#boxes + 1] = r
+          names[#names + 1] = { name, r[1], r[2], over }
+        end
+      end
+      local nr = math.rad(deg)
+      local n0, n1 = sc(pr(mx, 0, mz)), sc(pr(mx + 100 * math.sin(nr), 0, mz - 100 * math.cos(nr)))
+      local nl = math.sqrt((n1[1] - n0[1]) ^ 2 + (n1[2] - n0[2]) ^ 2) + 1e-9
+      if L.v3 and L.v3.img then L.v3.img:dispose() end
+      L.v3 = { key = key, N = N, A = A, B = B, FA = FA, FB = FB2, C = C, order = order, zr = zr, sec = sec, chk = chk, names = names, arrow = arrow,
+        north = { (n1[1] - n0[1]) / nl, (n1[2] - n0[2]) / nl }, iw = math.ceil(AW), ih = math.ceil(AH) }
+      return L.v3
+    end
+    function CR.tkPaint(V, k)
+      if not ui.ExtraCanvas then return false end
+      local akey = string.format('%.4f|%.4f|%.4f', CR.tkAcc.r, CR.tkAcc.g, CR.tkAcc.b)
+      if V.img and V.akey == akey then return true end
+      V.akey = akey
+      V.img = V.img or ui.ExtraCanvas(vec2(V.iw, V.ih))
+      V.img:clear(rgbm(0, 0, 0, 0))
+      local a = CR.tkAcc
+      local s3 = rgbm(a.r * 0.45 + PAPER.r * 0.55, a.g * 0.45 + PAPER.g * 0.55, a.b * 0.45 + PAPER.b * 0.55, 1)
+      V.img:update(function()
+        local N = V.N
+        local function at(v, q) return v:set(q[1], q[2]) end
+        for _, i in ipairs(V.order) do
+          local j = i % N + 1
+          ui.drawQuadFilled(at(Q1, V.A[i]), at(Q2, V.A[j]), at(Q3, V.FA[j]), at(Q4, V.FA[i]), CR.tkWall)
+          ui.drawQuadFilled(at(Q1, V.B[i]), at(Q2, V.B[j]), at(Q3, V.FB[j]), at(Q4, V.FB[i]), CR.tkWall)
+          ui.drawQuadFilled(at(Q1, V.A[i]), at(Q2, V.A[j]), at(Q3, V.B[j]), at(Q4, V.B[i]), CR.tkSurf)
+          ui.drawLine(at(Q1, V.A[i]), at(Q2, V.A[j]), CR.tkEdge, k)
+          ui.drawLine(at(Q1, V.B[i]), at(Q2, V.B[j]), CR.tkEdge, k)
+          local ci, lw = (V.sec[i] - 1) % #CR.tkSec + 1, 3.2 * k * V.zr[i]
+          local col = ci == 3 and s3 or CR.tkSec[ci]
+          ui.drawLine(at(Q1, V.C[i]), at(Q2, V.C[j]), col, lw)
+          ui.drawCircleFilled(at(Q1, V.C[j]), lw / 2, col, 8)
+        end
+        for _, c in ipairs(V.chk) do ui.drawQuadFilled(at(Q1, c[1]), at(Q2, c[2]), at(Q3, c[3]), at(Q4, c[4]), c[5] and CHK_LIGHT or CHK_DARK) end
+      end)
+      return true
+    end
+    function CR.tkArrow(ar, x, y)
+      local n = #ar.L
+      CR.tkArw = CR.tkArw or rgbm(1, 1, 1, 1)
+      for j = 1, n - 1 do
+        CR.tkArw.mult = 0.12 + 0.83 * (j / (n - 1)) ^ 1.4
+        ui.drawQuadFilled(Q1:set(x + ar.L[j][1], y + ar.L[j][2]), Q2:set(x + ar.L[j + 1][1], y + ar.L[j + 1][2]), Q3:set(x + ar.R[j + 1][1], y + ar.R[j + 1][2]),
+          Q4:set(x + ar.R[j][1], y + ar.R[j][2]), CR.tkArw)
+      end
+      CR.tkArw.mult = 0.95
+      ui.drawTriangleFilled(Q1:set(x + ar.ha[1], y + ar.ha[2]), Q2:set(x + ar.tip[1], y + ar.tip[2]), Q3:set(x + ar.hb[1], y + ar.hb[2]), CR.tkArw)
     end
     function CR.tkBody(k)
       local T = TEXTS.bc
       return function(x, y, cw, draw)
         local tr = BroadcastEvent.track or {}
         local L = CR.tkLine()
+        local M = CR.tkMap()
+        local d3 = L and M.mode == '3D' and ui.ExtraCanvas and true or false
         local yy = y
         if draw then drawText(Lang.letters.upper(T.tkK), F.ck, 15 * k, TMP.a:set(x, yy), DIMW) end
         yy = yy + 22 * k
@@ -19210,16 +19593,28 @@ float4 main(PS_IN pin) {
         local cells = {}
         for _, c in ipairs({ { C[1], metres(tr.length) or string.format('%.0f m', CarRead.num(sim.trackLengthM)) }, { C[2], metres(tr.width) },
           { C[3], L and string.format('%.0f m', L.hi - L.lo) }, { C[4], L and tostring(L.turns) }, { C[5], tr.altitude and string.format('%.0f m', tr.altitude) },
-          { C[6], #sp > 0 and tostring(#sp + 1) }, { C[7], tr.pitboxes }, { C[8], place } }) do
+          { C[6], #sp > 0 and tostring(#sp + 1) }, { C[7], tr.pitboxes }, { T.opLayout, (tr.layout or '') ~= '' and tr.layout or nil } }) do
           if c[2] then cells[#cells + 1] = c end
         end
-        local rx, rw = x + 284 * k, cw - 284 * k
-        local colW = (rw - 18 * k) / 2
+        local rx = x + (d3 and 567 or 384) * k
+        local rw = d3 and 466 * k or cw - 384 * k
+        local colL = d3 and rw - 18 * k - 300 * k or (rw - 18 * k) / 2
+        local colR = d3 and 300 * k or colL
         local rowsN = math.ceil(#cells / 2)
         local cellsH = rowsN * 56 * k + math.max(rowsN - 1, 0) * 12 * k
-        local rightH = cellsH + (L and (16 * k + 70 * k + 24 * k) or 0)
-        local V = L and CR.tk2(L, k, cw, rightH, textWidth(Lang.letters.upper(T.tkLine), F.wtag, 13 * k))
-        local mapH = V and V.h or 0
+        local prof = L and Lang.letters.upper(string.format(T.tkProf, math.floor(L.hi - L.lo + 0.5)))
+        local pl1, pl2 = prof, nil
+        if prof and not d3 and textWidth(prof, F.tkl, 13 * k) > rw then
+          local cut = 0
+          for i in prof:gmatch('() · ') do if textWidth(prof:sub(1, i - 1), F.tkl, 13 * k) <= rw then cut = i end end
+          if cut > 0 then pl1, pl2 = prof:sub(1, cut - 1), prof:sub(cut + 4) end
+        end
+        local rightH = d3 and (cellsH + (place and 56 * k - 10.5 * k + 30 * k or 0))
+          or cellsH + (L and (16 * k + 70 * k + 24 * k + (pl2 and 17 * k or 0) + (place and 62 * k or 0)) or 0)
+        local finW = textWidth(Lang.letters.upper(T.tkLine), F.wtag, 13 * k)
+        local V = L and not d3 and CR.tk2(L, k, cw, rightH, finW, M)
+        local V3 = d3 and CR.tk3(L, k, finW, M)
+        local mapH = V and V.h or d3 and 470 * k or 0
         if draw then
           if V then
             local P = V.poly
@@ -19240,10 +19635,22 @@ float4 main(PS_IN pin) {
                 c[5] and CHK_LIGHT or CHK_DARK)
             end
             drawText(Lang.letters.upper(T.tkLine), F.wtag, 13 * k, TMP.a:set(fx + 8 * k, fz - 14 * k), PAPER)
-            for _, n in ipairs(V.names) do drawText(n[1], F.tkn, 11 * k, TMP.a:set(x + n[2], yy + n[3]), DIMW) end
+            for _, n in ipairs(V.names) do CR.tkNameDraw(n, x, yy, k) end
+            if V.arrow then CR.tkArrow(V.arrow, x, yy) end
+            CR.tkRose(x + 350 * k - 26 * k, yy + 26 * k, V.north[1], V.north[2], k)
+          end
+          if V3 and CR.tkPaint(V3, k) then
+            local ax, ay = x - 18 * k, yy - 6 * k
+            ui.drawImage(V3.img, TMP.a:set(ax, ay), TMP.b:set(ax + V3.iw, ay + V3.ih))
+            drawText(Lang.letters.upper(T.tkLine), F.wtag, 13 * k, TMP.a:set(ax + V3.C[1][1] + 8 * k, ay + V3.C[1][2] - 14 * k), PAPER)
+            for _, n in ipairs(V3.names) do CR.tkNameDraw(n, ax, ay, k) end
+            if V3.arrow then CR.tkArrow(V3.arrow, ax, ay) end
+            CR.tkRose(ax + 508 * k, ay + 30 * k, V3.north[1], V3.north[2], k)
           end
           for n, c in ipairs(cells) do
-            local cx = rx + ((n - 1) % 2) * (colW + 18 * k)
+            local right = (n - 1) % 2 == 1
+            local cx = rx + (right and colL + 18 * k or 0)
+            local colW = right and colR or colL
             local cy = yy + math.floor((n - 1) / 2) * (56 * k + 12 * k)
             rect(cx, cy, cx + colW, cy + k, HAIR)
             drawText(fitText(tostring(c[2]), F.rb, 28 * k, colW, '.'), F.rb, 28 * k, TMP.a:set(cx, cy + 7 * k), PAPER)
@@ -19258,7 +19665,7 @@ float4 main(PS_IN pin) {
               end
             end
           end
-          if L then
+          if L and not d3 then
             local px, py = rx, yy + cellsH + 16 * k
             local drop = math.max(L.hi - L.lo, 1)
             local N = #L.Y
@@ -19274,7 +19681,19 @@ float4 main(PS_IN pin) {
             end
             for i = 1, N do ui.pathLineTo(at(i)) end
             ui.pathStroke(PAPER, false, 2 * k)
-            drawText(Lang.letters.upper(string.format(T.tkProf, math.floor(L.hi - L.lo + 0.5))), F.tkl, 13 * k, TMP.a:set(px, py + 76 * k), DIMW)
+            if pl2 then
+              drawText(pl1, F.tkl, 13 * k, TMP.a:set(px + rw / 2 - textWidth(pl1, F.tkl, 13 * k) / 2, py + 76 * k), DIMW)
+              drawText(pl2, F.tkl, 13 * k, TMP.a:set(px + rw / 2 - textWidth(pl2, F.tkl, 13 * k) / 2, py + 93 * k), DIMW)
+            else
+              drawText(pl1, F.tkl, 13 * k, TMP.a:set(px, py + 76 * k), DIMW)
+            end
+            if place then
+              drawText(place, F.rb, 30 * k, TMP.a:set(px + rw / 2 - textWidth(place, F.rb, 30 * k) / 2, py + (pl2 and 93 or 76) * k + 13 * k + 28 * k), PAPER)
+            end
+          end
+          if d3 then
+            if place then drawText(place, F.rb, 30 * k, TMP.a:set(rx + rw / 2 - textWidth(place, F.rb, 30 * k) / 2, yy + cellsH + 56 * k - 10.5 * k), PAPER) end
+            if prof then drawText(prof, F.tkl, 13 * k, TMP.a:set(x + cw / 2 - textWidth(prof, F.tkl, 13 * k) / 2, yy + math.max(mapH, rightH) - k), DIMW) end
           end
         end
         yy = yy + math.max(mapH, rightH)
@@ -19282,6 +19701,7 @@ float4 main(PS_IN pin) {
       end
     end
     CR.tkDark, CR.tkFill = rgbm(0x3a / 255, 0x42 / 255, 0x50 / 255, 1), rgbm(1, 1, 1, 0.08)
+    CR.tkWall, CR.tkSurf, CR.tkEdge = rgbm(0x2c / 255, 0x32 / 255, 0x3d / 255, 1), rgbm(0x46 / 255, 0x4f / 255, 0x5f / 255, 1), rgbm(0x6a / 255, 0x75 / 255, 0x88 / 255, 1)
     CR.tkAcc, CR.tkAcc3 = rgbm(0x1f / 255, 0x68 / 255, 0xcf / 255, 1), rgbm(0x1f / 255, 0x68 / 255, 0xcf / 255, 0.45)
     ACCENT[#ACCENT + 1], ACCENT[#ACCENT + 2] = CR.tkAcc, CR.tkAcc3
     CR.tkSec = { PAPER, CR.tkAcc, CR.tkAcc3 }
