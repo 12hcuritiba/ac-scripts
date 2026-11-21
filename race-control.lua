@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V330 - 2026.11.21'
+local RC_VERSION = 'V331 - 2026.11.21'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -16865,9 +16865,9 @@ float4 main(PS_IN pin) {
       end
     end
     BC.tSetsMake()
-    local function speedOf(v)
+    local function speedOf(v, top)
       local sp = math.floor(tonumber(v) or 60)
-      return sp <= 0 and 0 or math.min(math.max(sp, 10), 180)
+      return sp <= 0 and 0 or math.min(math.max(sp, 10), top or 180)
     end
     local function crValue(key, v)
       local kind = CR_KEYS[key]
@@ -16886,7 +16886,7 @@ float4 main(PS_IN pin) {
       if kind == 'dest' then return math.min(math.max(n, 0), 3) end
       if kind == 'one' then return math.min(math.max(n, 0), 1) end
       if kind == 'ph' then return math.min(math.max(n, 0), 4) end
-      if kind == 'speed' then return speedOf(v) end
+      if kind == 'speed' then return speedOf(v, 210) end
       if kind == 'tri' then return v == true and 1 or v == false and 0 or math.min(math.max(n, 0), 2) end
       return math.min(math.max(n, 2), 600)
     end
