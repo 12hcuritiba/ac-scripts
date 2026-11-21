@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V325 - 2026.11.21'
+local RC_VERSION = 'V327 - 2026.11.21'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -11092,7 +11092,10 @@ do
   local function raceMinutes()
     for i = 0, (sim.sessionsCount or 0) - 1 do
       local ss = ac.getSession(i)
-      if ss and ss.type == ac.SessionType.Race and CarRead.num(ss.durationMinutes) > 0 then return ss.durationMinutes end
+      if ss and ss.type == ac.SessionType.Race and CarRead.num(ss.durationMinutes) > 0 then
+        local total = Clock.ms('total', ss)
+        return total and total / 60000 or nil
+      end
     end
     return nil
   end
@@ -19549,11 +19552,16 @@ float4 main(PS_IN pin) {
       V.img:update(function()
         local N = V.N
         local function at(v, q) return v:set(q[1], q[2]) end
+        local function tri(p, q, r, col)
+          if (q[1] - p[1]) * (r[2] - p[2]) - (q[2] - p[2]) * (r[1] - p[1]) < 0 then q, r = r, q end
+          ui.drawTriangleFilled(at(Q1, p), at(Q2, q), at(Q3, r), col)
+        end
+        local function quad(p, q, r, s, col) tri(p, q, r, col) tri(p, r, s, col) end
         for _, i in ipairs(V.order) do
           local j = i % N + 1
-          ui.drawQuadFilled(at(Q1, V.A[i]), at(Q2, V.A[j]), at(Q3, V.FA[j]), at(Q4, V.FA[i]), CR.tkWall)
-          ui.drawQuadFilled(at(Q1, V.B[i]), at(Q2, V.B[j]), at(Q3, V.FB[j]), at(Q4, V.FB[i]), CR.tkWall)
-          ui.drawQuadFilled(at(Q1, V.A[i]), at(Q2, V.A[j]), at(Q3, V.B[j]), at(Q4, V.B[i]), CR.tkSurf)
+          quad(V.A[i], V.A[j], V.FA[j], V.FA[i], CR.tkWall)
+          quad(V.B[i], V.B[j], V.FB[j], V.FB[i], CR.tkWall)
+          quad(V.A[i], V.A[j], V.B[j], V.B[i], CR.tkSurf)
           ui.drawLine(at(Q1, V.A[i]), at(Q2, V.A[j]), CR.tkEdge, k)
           ui.drawLine(at(Q1, V.B[i]), at(Q2, V.B[j]), CR.tkEdge, k)
           local ci, lw = (V.sec[i] - 1) % #CR.tkSec + 1, 3.2 * k * V.zr[i]
@@ -19561,7 +19569,7 @@ float4 main(PS_IN pin) {
           ui.drawLine(at(Q1, V.C[i]), at(Q2, V.C[j]), col, lw)
           ui.drawCircleFilled(at(Q1, V.C[j]), lw / 2, col, 8)
         end
-        for _, c in ipairs(V.chk) do ui.drawQuadFilled(at(Q1, c[1]), at(Q2, c[2]), at(Q3, c[3]), at(Q4, c[4]), c[5] and CHK_LIGHT or CHK_DARK) end
+        for _, c in ipairs(V.chk) do quad(c[1], c[2], c[3], c[4], c[5] and CHK_LIGHT or CHK_DARK) end
       end)
       return true
     end
