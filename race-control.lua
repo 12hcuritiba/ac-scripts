@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V331 - 2026.11.21'
+local RC_VERSION = 'V333 - 2026.11.21'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -829,7 +829,7 @@ local BLACK_FLAG = ac.PenaltyType.BlackFlag
 local TELEPORT_TO_PITS = ac.PenaltyType.TeleportToPits
 local NONE = ac.PenaltyType.None
 local GAME_DT = 2
-local config = (function()
+local function build(src)
   local OLD = {
     penaltyMode = { 'control', 'mode', nil, 'CSP' }, announce = { 'control', 'announce', nil, 0 },
     code80FreezeDeadlines = { 'control', 'code80Freeze', nil, 1 }, dataCheck = { 'control', 'dataCheck', nil, 1 },
@@ -883,7 +883,8 @@ local config = (function()
   local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, staffPits = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
     pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
   local FIELDS = { kmr = { points = 1, ratingDsq = 1, pitSpeed = 1 }, base = { realName = 1, offline = 1, downMax = 1, downPractice = 1, persist = 1, read = 1 },
-    control = { loop = 1 }, driverSwap = { unconfirmedSeconds = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
+    control = { loop = 1 }, driverSwap = { unconfirmedSeconds = 1 },
+    pitExit = { practiceMinutes = 1, qualifyMinutes = 1, raceMinutes = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
     stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
   for _, m in pairs(OLD) do
     if THEMES[m[1]] then FIELDS[m[1]] = FIELDS[m[1]] or {}; FIELDS[m[1]][m[2]] = 1 end
@@ -891,7 +892,7 @@ local config = (function()
   local raw = {}
   local function theme(key)
     if raw[key] == nil then
-      local text = tostring(cfg[key] or '')
+      local text = tostring(src(key) or '')
       if not text:match('%S') then
         raw[key] = false
       else
@@ -912,16 +913,16 @@ local config = (function()
     local t = m and THEMES[m[1]] and theme(m[1])
     if t then
       local v = t[m[2]]
-      if v == nil then return m[1] == 'stopAndGo' and cfg[old] or m[4] end
+      if v == nil then return m[1] == 'stopAndGo' and src(old) or m[4] end
       if m[3] then v = (v .. '/'):match(string.rep('[^/]*/', m[3] - 1) .. '([^/]*)/') or '' end
       if v == '' and type(m[4]) == 'number' and m[3] then return m[4] end
       return v
     end
-    if m and THEMES[m[1]] and tostring(cfg[old] or '') ~= tostring(m[4]) and not oldUsed[m[1]] then
+    if m and THEMES[m[1]] and tostring(src(old) or '') ~= tostring(m[4]) and not oldUsed[m[1]] then
       oldUsed[m[1]] = true
       ac.log('race-control: old keys of ' .. m[1] .. ' in use (theme key ' .. m[1] .. ' not on the server)')
     end
-    return cfg[old]
+    return src(old)
   end
   local function rule(penalty, param)
     local p = string.upper(tostring(penalty))
@@ -947,7 +948,7 @@ local config = (function()
   local function structKey(key, defaults)
     local out = {}
     for k, v in pairs(defaults) do out[k] = v end
-    for item in tostring(cfg[key] or ''):gmatch('[^|]+') do
+    for item in tostring(src(key) or ''):gmatch('[^|]+') do
       local k, v = item:match('^%s*([%w_]+)%s*:%s*(.-)%s*$')
       if k and out[k] ~= nil then
         out[k] = type(out[k]) == 'number' and (tonumber(v) or out[k]) or v:upper()
@@ -988,7 +989,7 @@ local config = (function()
     kmrRating = { dsqAt = tonumber(kmrTheme.ratingDsq) or 0, on = tostring(kmrTheme.ratingDsq or ''):match('%S') ~= nil }
   else
     kmrRating = structKey('kmrRating', { dsqAt = 0 })
-    kmrRating.on = tostring(cfg.kmrRating or ''):match('%S') ~= nil
+    kmrRating.on = tostring(src('kmrRating') or ''):match('%S') ~= nil
   end
   local c = {
     mode = string.upper(tostring(K('penaltyMode'))),
@@ -1104,6 +1105,11 @@ local config = (function()
         tonumber(K('qualifyClosedSeconds')) or 0,
         tonumber(K('raceClosedSeconds')) or 0),
       rules = bySession(rule(K('practicePenalty'), -1), rule(K('qualifyPenalty'), -1), rule(K('racePenalty'), -1)),
+      minutes = (function()
+        local p = theme('pitExit') or {}
+        local function m(v) local x = tonumber(v) return x and x > 0 and x or nil end
+        return bySession(m(p.practiceMinutes), m(p.qualifyMinutes), m(p.raceMinutes))
+      end)(),
     },
     cutZones = {
       makeZone('SD1', K('cutZoneStart'), K('cutZoneEnd'), K('cutMaxWheelsOut'),
@@ -1152,12 +1158,49 @@ local config = (function()
     return lines
   end
   return c
-end)()
+end
+local config = build(function(key) return cfg[key] end)
+config.keysText = ''
+do
+  local function fieldsOf(text)
+    local t, order = {}, {}
+    for item in tostring(text or ''):gmatch('[^|]+') do
+      local k, v = item:match('^%s*([%w_]+)%s*:%s*(.-)%s*$')
+      if k then
+        if t[k] == nil then order[#order + 1] = k end
+        t[k] = v
+      end
+    end
+    return t, order
+  end
+  local function into(dst, src)
+    for k, v in pairs(src) do
+      if type(v) == 'table' and type(dst[k]) == 'table' then into(dst[k], v) else dst[k] = v end
+    end
+  end
+  function config.over(texts, joined)
+    config.keysText = joined
+    local c = build(function(key)
+      if not texts[key] then return cfg[key] end
+      local t, order = fieldsOf(cfg[key])
+      local o, oo = fieldsOf(texts[key])
+      for _, k in ipairs(oo) do
+        if t[k] == nil then order[#order + 1] = k end
+        t[k] = o[k]
+      end
+      local out = {}
+      for _, k in ipairs(order) do out[#out + 1] = k .. ':' .. t[k] end
+      return table.concat(out, ' | ')
+    end)
+    into(config, c)
+    config.rolesNow()
+  end
+end
 function config.swapOn() return config.swap[ac.getSim().raceSessionType] == true end
 function config.stopsRequired() return config.pitStopsRequiredBy[ac.getSim().raceSessionType] or 0 end
 function config.swapRequiredNow() return config.swapRequiredBy[ac.getSim().raceSessionType] end
-config.isDirector = config.raceControlSteamID ~= '' and ac.getUserSteamID() == config.raceControlSteamID
-do
+function config.rolesNow()
+  config.isDirector = config.raceControlSteamID ~= '' and ac.getUserSteamID() == config.raceControlSteamID
   local me = tostring(ac.getUserSteamID() or '')
   local function listed(keyText)
     for id in tostring(keyText or ''):gmatch('[^|/]+') do
@@ -1169,8 +1212,9 @@ do
     or (listed(config.broadcastSteamIDs) and 'broadcast') or nil
   config.canCommand = config.role == 'director' or config.role == 'staff'
   config.watchCars = config.role ~= nil and config.watch
+  config.isRaceControl = config.mode == 'KMR' and config.isDirector
 end
-config.isRaceControl = config.mode == 'KMR' and config.isDirector
+config.rolesNow()
 local sim = ac.getSim()
 local state = {
   prevInPitlane = {},
@@ -2733,6 +2777,20 @@ do
       local body = tostring(res.body or '')
       if not body:match('^OK|') then return end
       if V.ask == ask then V.done = true end
+      local texts, parts = {}, {}
+      for name, b64 in body:gmatch('|key%.([%w_]+)=([%w%+/=_%-]+)') do
+        local ok, s = pcall(function() return ac.decodeBase64((b64:gsub('%-', '+'):gsub('_', '/'))) end)
+        if ok and s then
+          texts[name] = s
+          parts[#parts + 1] = name .. '=' .. s
+        end
+      end
+      table.sort(parts)
+      local joined = table.concat(parts, '\n')
+      if joined ~= config.keysText then
+        config.over(texts, joined)
+        ac.log('race-control: keys of the script from the online tool: ' .. (#parts > 0 and table.concat(parts, '; ') or 'none'))
+      end
       local hz = tonumber(body:match('sendHz=(%d+)'))
       if hz and hz > 0 and hz ~= config.sendHz then
         ac.log(string.format('race-control: packets of the server %d a second (from the base)', hz))
@@ -2791,15 +2849,6 @@ do
       R.abortSpline = tonumber(body:match('|abortSpline=([%d%.]+)')) or R.abortSpline
       R.abortEndSpline = tonumber(body:match('|abortEndSpline=([%d%.]+)')) or R.abortEndSpline
       R.abortTailSeconds = tonumber(body:match('|abortTailSeconds=([%d%.]+)')) or R.abortTailSeconds
-      config.sessionLoop.seconds = tonumber(body:match('|sessionLoopSeconds=([%d%.]+)')) or config.sessionLoop.seconds
-      config.baseRead.seconds = tonumber(body:match('|baseReadSeconds=([%d%.]+)')) or config.baseRead.seconds
-      local P = config.replay
-      P.auto = body:match('|replayAuto=(%u+)') or P.auto
-      P.manual = body:match('|replayManual=(%u+)') or P.manual
-      P.manualMinutes = tonumber(body:match('|replayManualMinutes=(%d+)')) or P.manualMinutes
-      P.manualMax = tonumber(body:match('|replayManualMax=(%d+)')) or P.manualMax
-      P.manualCutMinutes = tonumber(body:match('|replayManualCutMinutes=(%d+)')) or P.manualCutMinutes
-      P.manualAccumulate = tonumber(body:match('|replayManualAccumulate=(%d)')) or P.manualAccumulate
       R.procedure = R[config.raceNo == 2 and 'procedure2' or 'procedure1']
       local cc = body:match('carClasses=([^|]*)')
       if cc and cc ~= '' and cc ~= config.carClassesText then
@@ -3699,12 +3748,16 @@ sessionPart('clock', Clock, function() return { greenMs = SESSION_NONE, endMs = 
   stopMs = SESSION_NONE, stopAt = SESSION_NONE } end)
 do
   local B = RecordSync.base
+  function Clock.minutes(s)
+    return config.pit.minutes[s.type] or s.durationMinutes or 0
+  end
   function Clock.ms(kind, s)
     s = s or ac.getSession(Session.index)
     if not s then return 0 end
     local closed = (config.pit.closedSeconds[s.type] or 0) * 1000
     local stop = (s.type == ac.SessionType.Race and sim.raceSessionType == ac.SessionType.Race and Clock.stopMs) or 0
-    local total = s.durationMinutes > 0 and math.max(s.durationMinutes * 60000 - closed - stop, 0) or nil
+    local minutes = Clock.minutes(s)
+    local total = minutes > 0 and math.max(minutes * 60000 - closed - stop, 0) or nil
     if kind == 'total' then return total end
     if kind == 'raw' then return s.durationMinutes > 0 and s.durationMinutes * 60000 - sim.sessionTimeLeft or sim.time - s.startTime end
     if not Session.ready or Session.beforeStart() then return 0 end
@@ -3769,7 +3822,7 @@ do
     return string.format(',"now":%d', math.floor(serverTimeMs())) .. ((Clock.lightsMs and not Clock.greenMs) and string.format(',"go":%d', Clock.lightsMs) or '')
       .. ((Clock.validAt and not Clock.validMs) and string.format(',"vs":%d', Clock.validAt) or '')
       .. ((Clock.stopAt and Clock.stopAt ~= Clock.stopMs) and string.format(',"rs":%d', Clock.stopAt) or '')
-      .. (ss and string.format(',"dur":%d,"xl":%d', math.floor(math.max(ss.durationMinutes or 0, 0) * 60000), (Clock.extraLapOn and Clock.extraLapOn(ss)) and 1 or 0) or '')
+      .. (ss and string.format(',"xl":%d', (Clock.extraLapOn and Clock.extraLapOn(ss)) and 1 or 0) or '')
       .. (ab and string.format(',"ab":%d', ab) or '')
       .. ((ab and Clock.abortEnd == ab) and string.format(',"ae":%d', ab) or '')
   end
@@ -15379,10 +15432,10 @@ float4 main(PS_IN pin) {
         for n = 1, races do
           local on = now and (races == 1 or (config.raceNo or 1) == n)
           local at = n == 1 and starts and starts[i] or nil
-          if n == 2 and not at and firstAt and ss.durationMinutes and ss.durationMinutes > 0 then
+          if n == 2 and not at and firstAt and Clock.minutes(ss) > 0 then
             local hh, mm = firstAt:match('^(%d+):(%d+)')
             if hh then
-              local t = (tonumber(hh) * 60 + tonumber(mm) + math.floor(ss.durationMinutes) + math.ceil((tonumber(config.raceOverTime) or 0) / 60)) % 1440
+              local t = (tonumber(hh) * 60 + tonumber(mm) + math.floor(Clock.minutes(ss)) + math.ceil((tonumber(config.raceOverTime) or 0) / 60)) % 1440
               at = hhmm(t)
             end
           end
@@ -17462,7 +17515,7 @@ float4 main(PS_IN pin) {
         over, endAt = Clock.endMs ~= nil, Clock.endMs
       elseif ss then
         local total = Clock.ms('total', ss)
-        over, endAt = total ~= nil and total > 0 and Clock.ms(nil, ss) >= total, ss.durationMinutes * 60000
+        over, endAt = total ~= nil and total > 0 and Clock.ms(nil, ss) >= total, Clock.minutes(ss) * 60000
       end
       return over or Session.phase == 'resultados', over and endAt or nil
     end
