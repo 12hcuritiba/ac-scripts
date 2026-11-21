@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V324 - 2026.11.21'
+local RC_VERSION = 'V325 - 2026.11.21'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -12934,12 +12934,13 @@ do
     Drag.modal = nil
   end
 end
-local FONT_TITLE = 'Segoe UI;Weight=Bold'
-local FONT_TEXT = 'Segoe UI;Weight=SemiBold'
-local FONT_MONO = 'Consolas'
-local FONT_RADAR = 'Oswald;Weight=SemiBold'
+local FONT_TITLE = 'Segoe UI;Weight=Bold;AnyFontSize'
+local FONT_TEXT = 'Segoe UI;Weight=SemiBold;AnyFontSize'
+local FONT_MONO = 'Consolas;AnyFontSize'
+local FONT_RADAR = 'Oswald;Weight=SemiBold;AnyFontSize'
 do
   local function face(file, style, names)
+    style = style .. ';AnyFontSize'
     local out = {}
     for _, n in ipairs(names) do out[#out + 1] = n .. style end
     for _, n in ipairs(names) do out[#out + 1] = n .. ':@System' .. style end
@@ -12951,7 +12952,7 @@ do
   end
   local MONO = face('roboto-mono-500', ';Weight=Medium', { 'Roboto Mono', 'Roboto Mono Medium' })
   Desktop.text = { id = 'segoe', min = 0, minPx = 0, sets = {
-    { id = 'segoe', name = 'Segoe UI', title = 'Segoe UI;Weight=Bold', text = 'Segoe UI;Weight=SemiBold', mono = 'Consolas' },
+    { id = 'segoe', name = 'Segoe UI', title = 'Segoe UI;Weight=Bold;AnyFontSize', text = 'Segoe UI;Weight=SemiBold;AnyFontSize', mono = 'Consolas;AnyFontSize' },
     { id = '12h', name = '12h Curitiba', title = face('oswald-600', ';Weight=SemiBold', { 'Oswald', 'Oswald SemiBold' }),
       text = face('raleway-600', ';Weight=SemiBold', { 'Raleway Thin', 'Raleway Thin SemiBold', 'Raleway' }), mono = MONO, files = true },
     { id = 'titillium', name = 'Titillium Web', title = face('titillium-web-700', ';Weight=Bold', { 'Titillium Web', 'Titillium Web Bold' }),
@@ -12961,8 +12962,8 @@ do
       italic = face('barlow-condensed-600-italic', ';Weight=SemiBold;Stretch=Condensed;Style=Italic', { 'Barlow Condensed', 'Barlow Condensed SemiBold Italic', 'Barlow' }) },
     { id = 'rajdhani', name = 'Rajdhani', title = face('rajdhani-700', ';Weight=Bold', { 'Rajdhani', 'Rajdhani Bold' }),
       text = face('rajdhani-600', ';Weight=SemiBold', { 'Rajdhani', 'Rajdhani SemiBold' }), mono = MONO, files = true },
-    { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold',
-      text = 'Bahnschrift:@System;Weight=SemiBold', mono = 'Consolas:@System' },
+    { id = 'bahnschrift', name = 'Bahnschrift', title = 'Bahnschrift:@System;Weight=Bold;AnyFontSize',
+      text = 'Bahnschrift:@System;Weight=SemiBold;AnyFontSize', mono = 'Consolas:@System;AnyFontSize' },
   } }
   for _, f in ipairs(Desktop.text.sets) do
     f.ready = f.files == nil
@@ -12998,7 +12999,7 @@ function Desktop.fontCheck()
           if not absent(spec) then got = spec break end
         end
         if got then f[face] = got
-        elseif face == 'mono' then f.mono = 'Consolas'
+        elseif face == 'mono' then f.mono = 'Consolas;AnyFontSize'
         elseif face == 'italic' then f.italic = nil
         else missing[#missing + 1] = table.concat(f.names[face], ' / ') end
       end
