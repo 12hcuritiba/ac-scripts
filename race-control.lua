@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V343 - 2026.11.22'
+local RC_VERSION = 'V344 - 2026.11.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -19640,6 +19640,9 @@ float4 main(PS_IN pin) {
           local j = i % N + 1
           quad(V.A[i], V.A[j], V.FA[j], V.FA[i], CR.tkWall)
           quad(V.B[i], V.B[j], V.FB[j], V.FB[i], CR.tkWall)
+        end
+        for _, i in ipairs(V.order) do
+          local j = i % N + 1
           quad(V.A[i], V.A[j], V.B[j], V.B[i], CR.tkSurf)
           ui.drawLine(at(Q1, V.A[i]), at(Q2, V.A[j]), CR.tkEdge, k)
           ui.drawLine(at(Q1, V.B[i]), at(Q2, V.B[j]), CR.tkEdge, k)
@@ -19734,6 +19737,7 @@ float4 main(PS_IN pin) {
             drawText(Lang.letters.upper(T.tkLine), F.wtag, 13 * k, TMP.a:set(ax + V3.C[1][1] + 8 * k, ay + V3.C[1][2] - 14 * k), PAPER)
             for _, n in ipairs(V3.names) do CR.tkNameDraw(n, ax, ay, k) end
             if V3.arrow then CR.tkArrow(V3.arrow, ax, ay) end
+            ui.drawCircleFilled(TMP.a:set(ax + 508 * k, ay + 30 * k), 17 * k, CR.tkRoseBg, 32)
             CR.tkRose(ax + 508 * k, ay + 30 * k, V3.north[1], V3.north[2], k)
           end
           for n, c in ipairs(cells) do
@@ -19790,6 +19794,7 @@ float4 main(PS_IN pin) {
       end
     end
     CR.tkDark, CR.tkFill = rgbm(0x3a / 255, 0x42 / 255, 0x50 / 255, 1), rgbm(1, 1, 1, 0.08)
+    CR.tkRoseBg = rgbm(OPEN_BG.r, OPEN_BG.g, OPEN_BG.b, 1)
     CR.tkWall, CR.tkSurf, CR.tkEdge = rgbm(0x2c / 255, 0x32 / 255, 0x3d / 255, 1), rgbm(0x46 / 255, 0x4f / 255, 0x5f / 255, 1), rgbm(0x6a / 255, 0x75 / 255, 0x88 / 255, 1)
     CR.tkAcc, CR.tkAcc3 = rgbm(0x1f / 255, 0x68 / 255, 0xcf / 255, 1), rgbm(0x1f / 255, 0x68 / 255, 0xcf / 255, 0.45)
     ACCENT[#ACCENT + 1], ACCENT[#ACCENT + 2] = CR.tkAcc, CR.tkAcc3
