@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V345 - 2026.11.22'
+local RC_VERSION = 'V346 - 2026.11.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -20255,9 +20255,10 @@ float4 main(PS_IN pin) {
       local item = it or item
       local rh = (rhU or 42) * k
       local pins = math.min(BC.opt.pins or 3, #rows, pinMax or #rows)
+      local on = parts and parts[BC.shown] or rows
       local y = ly1
       for n = 1, pins do
-        if y + rh <= ly2 + 0.5 * k then item(x1, y, k, rows[n], rows, n, multi, false, phaseGap, ended, false, x2 - x1, byClass) end
+        if on[n] and y + rh <= ly2 + 0.5 * k then item(x1, y, k, on[n], on, n, multi, false, phaseGap, ended, false, x2 - x1, on ~= rows or byClass) end
         y = y + rh
       end
       if pins > 0 then
@@ -20265,7 +20266,14 @@ float4 main(PS_IN pin) {
         y = y + 2 * k
       end
       local keys = RaceTable.classKeys()
-      local rest, room = #rows - pins + (parts and parts.n or 0), ly2 - y
+      local extra = parts and parts.n or 0
+      if parts then
+        for _, kk in ipairs(keys) do
+          local c, m = #parts[kk], math.min(pins, #parts[kk])
+          if c > m then extra = extra - m end
+        end
+      end
+      local rest, room = #rows - pins + extra, ly2 - y
       if rest <= 0 or room <= 0 then CR.towerSealsDraw(x2, ly1, ly2, k) return end
       local height = rest * rh
       local run = height > room + 0.5 * k
@@ -20275,7 +20283,7 @@ float4 main(PS_IN pin) {
       local per = math.max(math.floor(room / rh), 1)
       M.part = parts and (M.part or 0) % (#keys + 1) or 0
       local pr = M.part > 0 and parts[keys[M.part]] or rows
-      local p0 = M.part > 0 and 0 or pins
+      local p0 = M.part > 0 and math.min(pins, #pr) or pins
       local np = math.max(math.ceil((#pr - p0) / per), 1)
       local was, wasPt = M.page, M.pt
       if run then CR.move(M, BC.opt.vw, BC.opt.vsp or 60, paged and BC.opt.vps or nil, np, nil, height) else M.left = nil end
@@ -20283,21 +20291,20 @@ float4 main(PS_IN pin) {
       if run and paged then
         local page, pkey = M.page, M.part > 0 and keys[M.part] or 'ALL'
         if parts and was == np and wasPt and M.pt < wasPt then page, M.part = was, (M.part + 1) % (#keys + 1) end
-        local first, last = p0 + (page - 1) * per, nil
+        local first = p0 + (page - 1) * per
         for j = 1, per do
           local n = first + j
           if n > #pr then break end
           item(x1, y + (j - 1) * rh, k, pr[n], pr, n, multi, false, phaseGap, ended, false, x2 - x1, pr ~= rows or byClass)
-          last = n
         end
-        if parts and last then BC.shown = pkey end
+        if parts then BC.shown = pkey end
       else
         local start = y - (run and M.off or 0)
         local turn, shown = 0, nil
         repeat
           local p = parts and turn % (#keys + 1) or 0
           local pt = p > 0 and parts[keys[p]] or rows
-          local q0 = p > 0 and 0 or pins
+          local q0 = p > 0 and math.min(pins, #pt) or pins
           for n = q0 + 1, #pt do
             local ry = math.floor(start + (n - q0 - 1) * rh + 0.5)
             if ry >= ly2 then break end
@@ -20308,7 +20315,9 @@ float4 main(PS_IN pin) {
               shown = p
             end
           end
-          start = start + (parts and (#pt - q0) * rh or height)
+          local gap = p > 0 and #pt == q0 and q0 * rh or 0
+          if gap > 0 and start < ly2 and start + gap > y then shown = p end
+          start = start + (parts and ((#pt - q0) * rh + gap) or height)
           turn = turn + 1
         until not run and turn > (parts and #keys or 0) or start >= ly2
         if parts and shown then BC.shown = shown > 0 and keys[shown] or 'ALL' end
