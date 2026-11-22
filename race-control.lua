@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V346 - 2026.11.22'
+local RC_VERSION = 'V347 - 2026.11.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -20268,10 +20268,7 @@ float4 main(PS_IN pin) {
       local keys = RaceTable.classKeys()
       local extra = parts and parts.n or 0
       if parts then
-        for _, kk in ipairs(keys) do
-          local c, m = #parts[kk], math.min(pins, #parts[kk])
-          if c > m then extra = extra - m end
-        end
+        for _, kk in ipairs(keys) do extra = extra - math.min(pins, #parts[kk]) end
       end
       local rest, room = #rows - pins + extra, ly2 - y
       if rest <= 0 or room <= 0 then CR.towerSealsDraw(x2, ly1, ly2, k) return end
@@ -20315,9 +20312,7 @@ float4 main(PS_IN pin) {
               shown = p
             end
           end
-          local gap = p > 0 and #pt == q0 and q0 * rh or 0
-          if gap > 0 and start < ly2 and start + gap > y then shown = p end
-          start = start + (parts and ((#pt - q0) * rh + gap) or height)
+          start = start + (parts and (#pt - q0) * rh or height)
           turn = turn + 1
         until not run and turn > (parts and #keys or 0) or start >= ly2
         if parts and shown then BC.shown = shown > 0 and keys[shown] or 'ALL' end
