@@ -137,7 +137,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V337 - 2026.11.21'
+local RC_VERSION = 'V343 - 2026.11.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1127,6 +1127,7 @@ local function build(src)
   local staffPits = theme('staffPits') or {}
   c.staffPits = { org = math.max(math.floor(tonumber(staffPits.org) or 0), 0), tv = math.max(math.floor(tonumber(staffPits.tv) or 0), 0) }
   c.broadcastSteamIDs = tostring(K('broadcastSteamIDs') or '')
+  c.classesText = tostring(src('classes') or '')
   c.themesOnServer = {}
   for k in pairs(THEMES) do if theme(k) then c.themesOnServer[#c.themesOnServer + 1] = k end end
   table.sort(c.themesOnServer)
@@ -1159,8 +1160,8 @@ do
   local function fieldsOf(text)
     local t, order = {}, {}
     for item in tostring(text or ''):gmatch('[^|]+') do
-      local k, v = item:match('^%s*([%w_]+)%s*:%s*(.-)%s*$')
-      if k then
+      local k, v = item:match('^%s*([^:|]-)%s*:%s*(.-)%s*$')
+      if k and k ~= '' then
         if t[k] == nil then order[#order + 1] = k end
         t[k] = v
       end
@@ -2755,6 +2756,10 @@ do
   end
   local SERVER_RETRY = 20
   B.server = { nextT = 0, busy = false, done = false, ask = 0, answerT = nil }
+  local function staffAgain()
+    CarRead.staffIndex, CarRead.staffLogged = nil, {}
+    CarsTick.driversAgain()
+  end
   function B.serverNew()
     local V = B.server
     V.nextT, V.done, V.ask = 0, false, V.ask + 1
@@ -2782,8 +2787,10 @@ do
       table.sort(parts)
       local joined = table.concat(parts, '\n')
       if joined ~= config.keysText then
+        local pitsWas = config.staffPits.org .. ':' .. config.staffPits.tv
         config.over(texts, joined)
         ac.log('race-control: keys of the script from the online tool: ' .. (#parts > 0 and table.concat(parts, '; ') or 'none'))
+        if config.staffPits.org .. ':' .. config.staffPits.tv ~= pitsWas then staffAgain() end
       end
       local hz = tonumber(body:match('sendHz=(%d+)'))
       if hz and hz > 0 and hz ~= config.sendHz then
@@ -2808,8 +2815,7 @@ do
         ac.log(string.format('race-control: staffPits from the tool of the organization: org:%d | tv:%d (key of the server: org:%d | tv:%d)', org, tv,
           config.staffPits.org, config.staffPits.tv))
         config.staffPits.org, config.staffPits.tv = org, tv
-        CarRead.staffIndex, CarRead.staffLogged = nil, {}
-        CarsTick.driversAgain()
+        staffAgain()
       end
       local bcId = body:match('bcId=([%w%+/=_%-]+)')
       if bcId and bcId ~= config.bcIdentityText then
@@ -10833,28 +10839,35 @@ sessionPart('raceTable', RaceTable, function()
 end, { 'losses' })
 do
   local MAX_LAPS = 600
-  local classes = {}
-  for item in tostring(cfg.classes or ''):gmatch('[^|]+') do
-    local name, models = item:match('^%s*([^:]+)%s*:%s*(.-)%s*$')
-    if name then
-      for m in models:gmatch('[^/]+') do classes[m:match('^%s*(.-)%s*$'):lower()] = name:match('^%s*(.-)%s*$') end
+  local classes, classesFrom = {}, nil
+  local function classesNow()
+    local text = config.classesText or ''
+    if text == classesFrom then return classes end
+    classesFrom, classes = text, {}
+    for item in text:gmatch('[^|]+') do
+      local name, models = item:match('^%s*([^:]+)%s*:%s*(.-)%s*$')
+      if name then
+        for m in models:gmatch('[^/]+') do classes[m:match('^%s*(.-)%s*$'):lower()] = name:match('^%s*(.-)%s*$') end
+      end
     end
+    return classes
   end
   function RaceTable.classOf(i) return RaceTable.classOfModel(ac.getCarID(i)) end
   function RaceTable.classOfModel(id)
     id = tostring(id or ''):lower()
-    return (config.carClasses or {})[id] or classes[id]
+    return (config.carClasses or {})[id] or classesNow()[id]
   end
   local eventKeys, eventFrom = {}, false
   function RaceTable.classKeys()
     local text = config.carClassesText or ''
-    if text == eventFrom then return eventKeys end
-    eventFrom = text
+    local from = text .. '\n' .. (config.classesText or '')
+    if from == eventFrom then return eventKeys end
+    eventFrom = from
     local keys, seen = {}, {}
     if text ~= '' then
       for _, c in text:gmatch('([^,:]+):([^,]+)') do if not seen[c] then seen[c] = true keys[#keys + 1] = c end end
     else
-      for _, c in pairs(classes) do if not seen[c] then seen[c] = true keys[#keys + 1] = c end end
+      for _, c in pairs(classesNow()) do if not seen[c] then seen[c] = true keys[#keys + 1] = c end end
       table.sort(keys)
     end
     eventKeys = keys
