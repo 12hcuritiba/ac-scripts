@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V348 - 2026.11.22'
+local RC_VERSION = 'V349 - 2026.11.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -19633,16 +19633,49 @@ float4 main(PS_IN pin) {
           ui.drawTriangleFilled(at(Q1, p), at(Q2, q), at(Q3, r), col)
         end
         local function quad(p, q, r, s, col) tri(p, q, r, col) tri(p, r, s, col) end
-        for _, i in ipairs(V.order) do
-          local j = i % N + 1
-          quad(V.A[i], V.A[j], V.FA[j], V.FA[i], CR.tkWall)
-          quad(V.B[i], V.B[j], V.FB[j], V.FB[i], CR.tkWall)
+        local H = 0.5
+        local function ext(a, b)
+          local dx, dy = b[1] - a[1], b[2] - a[2]
+          local l = math.sqrt(dx * dx + dy * dy)
+          if l < 1e-6 then return a, b end
+          dx, dy = dx / l * H, dy / l * H
+          return { a[1] - dx, a[2] - dy }, { b[1] + dx, b[2] + dy }
+        end
+        local function cross(o, p, q) return (p[1] - o[1]) * (q[2] - o[2]) - (p[2] - o[2]) * (q[1] - o[1]) end
+        local function piece(p, q, r, s, col)
+          p, q = ext(p, q)
+          s, r = ext(s, r)
+          local c1, c2, c3, c4 = cross(p, q, r), cross(q, r, s), cross(r, s, p), cross(s, p, q)
+          if c1 >= 0 and c2 >= 0 and c3 >= 0 and c4 >= 0 then
+            ui.drawQuadFilled(at(Q1, p), at(Q2, q), at(Q3, r), at(Q4, s), col)
+          elseif c1 <= 0 and c2 <= 0 and c3 <= 0 and c4 <= 0 then
+            ui.drawQuadFilled(at(Q1, p), at(Q2, s), at(Q3, r), at(Q4, q), col)
+          else
+            local dx, dy = r[1] - p[1], r[2] - p[2]
+            local l = math.sqrt(dx * dx + dy * dy)
+            if l < 1e-6 then return end
+            local nx, ny = -dy / l * H, dx / l * H
+            local sa = (q[1] - p[1]) * nx + (q[2] - p[2]) * ny > 0 and -1 or 1
+            tri({ p[1] + sa * nx, p[2] + sa * ny }, q, { r[1] + sa * nx, r[2] + sa * ny }, col)
+            local sb = (s[1] - p[1]) * nx + (s[2] - p[2]) * ny > 0 and -1 or 1
+            tri({ p[1] + sb * nx, p[2] + sb * ny }, { r[1] + sb * nx, r[2] + sb * ny }, s, col)
+          end
         end
         for _, i in ipairs(V.order) do
           local j = i % N + 1
-          quad(V.A[i], V.A[j], V.B[j], V.B[i], CR.tkSurf)
-          ui.drawLine(at(Q1, V.A[i]), at(Q2, V.A[j]), CR.tkEdge, k)
-          ui.drawLine(at(Q1, V.B[i]), at(Q2, V.B[j]), CR.tkEdge, k)
+          piece(V.A[i], V.A[j], V.FA[j], V.FA[i], CR.tkWall)
+          piece(V.B[i], V.B[j], V.FB[j], V.FB[i], CR.tkWall)
+        end
+        for _, i in ipairs(V.order) do
+          local j = i % N + 1
+          piece(V.A[i], V.A[j], V.B[j], V.B[i], CR.tkSurf)
+        end
+        for _, E in ipairs({ V.A, V.B }) do
+          for i = 1, N do ui.pathLineTo(at(Q1, E[i])) end
+          ui.pathStroke(CR.tkEdge, true, k)
+        end
+        for _, i in ipairs(V.order) do
+          local j = i % N + 1
           local ci, lw = (V.sec[i] - 1) % #CR.tkSec + 1, 3.2 * k * V.zr[i]
           local col = ci == 3 and s3 or CR.tkSec[ci]
           ui.drawLine(at(Q1, V.C[i]), at(Q2, V.C[j]), col, lw)
