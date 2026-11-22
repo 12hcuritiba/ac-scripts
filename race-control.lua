@@ -31,7 +31,7 @@
 -- ============================================================================================================
 local cfg = ac.configValues({
   control = '', cockpit = '', event = '', roles = '', staffPits = '', kmr = '', base = '', driverSwap = '', pitStops = '',
-  pitWindow = '', pitExit = '', pitSpeed = '', dsq = '', cutZone1 = '', cutZone2 = '', slowdown = '',
+  pitWindow = '', pitExit = '', pitSpeed = '', dsq = '', slowdown = '',
   announce = 0,
   penaltyMode = 'CSP',
   forceCockpit = 0,
@@ -108,36 +108,13 @@ local cfg = ac.configValues({
   repairFormula = '',
   damage = '',
   dsqBlackFlagLaps = 3,
-  cutZoneStart = 0.16,
-  cutZoneEnd = 0.24,
-  practiceCutPenalty = 'SLOW DOWN',
-  qualifyCutPenalty = 'SLOW DOWN',
-  raceCutPenalty = 'SLOW DOWN',
-  practiceCutPenaltyParam = 0,
-  qualifyCutPenaltyParam = 0,
-  raceCutPenaltyParam = 0,
-  cutSlowdownDeadline = 10,
-  cutMaxWheelsOut = 3,
-  cutSlowdownMaxGas = 0.2,
-  cutGainTolerance = 6,
-  cutZone2Start = 0.81,
-  cutZone2End = 0.91,
-  practiceCutZone2Penalty = 'SLOW DOWN',
-  qualifyCutZone2Penalty = 'SLOW DOWN',
-  raceCutZone2Penalty = 'SLOW DOWN',
-  practiceCutZone2PenaltyParam = 9,
-  qualifyCutZone2PenaltyParam = 9,
-  raceCutZone2PenaltyParam = 9,
-  cutZone2SlowdownDeadline = 18,
-  cutZone2MaxWheelsOut = 3,
-  cutZone2SlowdownMaxGas = 0.1,
-  cutZone2GainTolerance = 6,
+  cutZones = '',
   practiceSlowdownUnpaidPenalty = 'DT',
   qualifySlowdownUnpaidPenalty = 'DT',
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V347 - 2026.11.22'
+local RC_VERSION = 'V348 - 2026.11.22'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -352,9 +329,8 @@ local TEXTS = {
   dtServedWhy = '%s - served in the pit pass (deadline DT%d)', holdIncludes = 'includes %s', dsqVoided = 'pending when the DSQ came: %s',
   practiceClearedWhat = 'Practice - cleared at the pit place: %s',
   timeNotServed = '%d s added to your final time: %s not served',
+  cutZoneReason = 'Exclusion zone cut - zone %d',
   reason = {
-    SD1 = 'Exclusion zone cut - zone 1',
-    SD2 = 'Exclusion zone cut - zone 2',
     PSE = 'Pit lane speeding',
     RC = 'Racing Control decision',
     JS = 'Jump start at the standing restart',
@@ -863,25 +839,13 @@ local function build(src)
     pitSpeedDeadlineLaps = { 'pitSpeed', 'deadlineLaps', nil, 1 },
     holdShortSeconds = { 'stopAndGo', 'holdShort', nil, 45 }, holdLongSeconds = { 'stopAndGo', 'holdLong', nil, 90 },
     dsqBlackFlagLaps = { 'dsq', 'blackFlagLaps', nil, 3 },
-    cutZoneStart = { 'cutZone1', 'start', nil, 0.16 }, cutZoneEnd = { 'cutZone1', 'end', nil, 0.24 },
-    cutMaxWheelsOut = { 'cutZone1', 'maxWheelsOut', nil, 3 }, cutSlowdownMaxGas = { 'cutZone1', 'maxGas', nil, 0.2 },
-    cutGainTolerance = { 'cutZone1', 'gainTolerance', nil, 6 }, cutSlowdownDeadline = { 'cutZone1', 'deadline', nil, 10 },
-    practiceCutPenalty = { 'cutZone1', 'practice', 1, 'SLOW DOWN' }, practiceCutPenaltyParam = { 'cutZone1', 'practice', 2, 0 },
-    qualifyCutPenalty = { 'cutZone1', 'qualify', 1, 'SLOW DOWN' }, qualifyCutPenaltyParam = { 'cutZone1', 'qualify', 2, 0 },
-    raceCutPenalty = { 'cutZone1', 'race', 1, 'SLOW DOWN' }, raceCutPenaltyParam = { 'cutZone1', 'race', 2, 0 },
-    cutZone2Start = { 'cutZone2', 'start', nil, 0.81 }, cutZone2End = { 'cutZone2', 'end', nil, 0.91 },
-    cutZone2MaxWheelsOut = { 'cutZone2', 'maxWheelsOut', nil, 3 }, cutZone2SlowdownMaxGas = { 'cutZone2', 'maxGas', nil, 0.1 },
-    cutZone2GainTolerance = { 'cutZone2', 'gainTolerance', nil, 6 }, cutZone2SlowdownDeadline = { 'cutZone2', 'deadline', nil, 18 },
-    practiceCutZone2Penalty = { 'cutZone2', 'practice', 1, 'SLOW DOWN' }, practiceCutZone2PenaltyParam = { 'cutZone2', 'practice', 2, 9 },
-    qualifyCutZone2Penalty = { 'cutZone2', 'qualify', 1, 'SLOW DOWN' }, qualifyCutZone2PenaltyParam = { 'cutZone2', 'qualify', 2, 9 },
-    raceCutZone2Penalty = { 'cutZone2', 'race', 1, 'SLOW DOWN' }, raceCutZone2PenaltyParam = { 'cutZone2', 'race', 2, 9 },
     practiceSlowdownUnpaidPenalty = { 'slowdown', 'practiceUnpaid', nil, 'DT' },
     qualifySlowdownUnpaidPenalty = { 'slowdown', 'qualifyUnpaid', nil, 'DT' },
     raceSlowdownUnpaidPenalty = { 'slowdown', 'raceUnpaid', nil, 'DT' },
     cutSpinAngle = { 'slowdown', 'spinAngle', nil, 90 },
   }
   local THEMES = { control = 1, cockpit = 1, event = 1, roles = 1, staffPits = 1, kmr = 1, base = 1, driverSwap = 1, pitStops = 1,
-    pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, cutZone1 = 1, cutZone2 = 1, slowdown = 1, stopAndGo = 1 }
+    pitWindow = 1, pitExit = 1, pitSpeed = 1, dsq = 1, slowdown = 1, stopAndGo = 1 }
   local FIELDS = { kmr = { points = 1, ratingDsq = 1, pitSpeed = 1 }, base = { realName = 1, offline = 1, downMax = 1, downPractice = 1, persist = 1, read = 1 },
     control = { loop = 1 }, driverSwap = { unconfirmedSeconds = 1 }, roles = { watch = 1 }, staffPits = { org = 1, tv = 1 },
     stopAndGo = { mode = 1, secondsPerDT = 1, maxDT = 1, deadlineLaps = 1, returnSeconds = 1 } }
@@ -971,6 +935,46 @@ local function build(src)
       maxGas = tonumber(maxGas) or 0,
       gainTolerance = tonumber(gainTolerance) or 6,
     }
+  end
+  local function cutZonesOf(text)
+    local f = {}
+    for item in tostring(text or ''):gmatch('[^|]+') do
+      local k, n, v = item:match('^%s*(%a+)(%d+)%s*:%s*(.-)%s*$')
+      if k then
+        n = tonumber(n)
+        f[n] = f[n] or {}
+        f[n][k] = v
+      else
+        ac.log('race-control: key cutZones: field not known: ' .. item:match('^%s*(.-)%s*$'))
+      end
+    end
+    local function pen(i, session, v)
+      local p, s = tostring(v or ''):match('^([^/]*)/?(.*)$')
+      local r = rule(p, s)
+      if (r.penalty == 'SLOWDOWN' and r.param > 0) or r.penalty == 'DT' or r.penalty == 'DSQ' or r.penalty == 'NONE' then return r end
+      if tostring(v or ''):match('%S') then ac.log(string.format('race-control: key cutZones: zone %d %s: penalty not valid: %s', i, session, tostring(v))) end
+      return { penalty = 'NONE', param = -1 }
+    end
+    local zones = {}
+    for i = 1, 20 do
+      local z = f[i]
+      if not z then break end
+      local function num(k, lo, hi)
+        local x = tonumber(z[k])
+        return x and x >= lo and (not hi or x <= hi) and x or nil
+      end
+      local s, e, w, g, t, dl = num('start', 0, 1), num('end', 0, 1), num('wheels', 0, 4), num('maxGas', 0, 1), num('gain', 0), num('deadline', 0)
+      local zone = makeZone('SD' .. i, s, e, w, bySession(pen(i, 'practice', z.practice), pen(i, 'qualify', z.qualify), pen(i, 'race', z.race)), dl, g, t)
+      if not (s and e and w and g and t and dl and dl > 0) then
+        zone.enabled = false
+        ac.log(string.format('race-control: key cutZones: zone %d off: a field missing or not valid', i))
+      end
+      zones[i] = zone
+    end
+    for n in pairs(f) do
+      if n > #zones then ac.log(string.format('race-control: key cutZones: zone %d left out: the zones go from 1 with no number missing', n)) end
+    end
+    return zones
   end
   local STOP_AND_GO = structKey('stopAndGo', { mode = 'HOLD', secondsPerDT = 30, maxDT = 7, deadlineLaps = 1,
     returnSeconds = 0, holdShort = 45, holdLong = 90, unservedDT = 20 })
@@ -1105,20 +1109,7 @@ local function build(src)
         tonumber(K('raceClosedSeconds')) or 0),
       rules = bySession(rule(K('practicePenalty'), -1), rule(K('qualifyPenalty'), -1), rule(K('racePenalty'), -1)),
     },
-    cutZones = {
-      makeZone('SD1', K('cutZoneStart'), K('cutZoneEnd'), K('cutMaxWheelsOut'),
-        bySession(
-          rule(K('practiceCutPenalty'), K('practiceCutPenaltyParam')),
-          rule(K('qualifyCutPenalty'), K('qualifyCutPenaltyParam')),
-          rule(K('raceCutPenalty'), K('raceCutPenaltyParam'))),
-        K('cutSlowdownDeadline'), K('cutSlowdownMaxGas'), K('cutGainTolerance')),
-      makeZone('SD2', K('cutZone2Start'), K('cutZone2End'), K('cutZone2MaxWheelsOut'),
-        bySession(
-          rule(K('practiceCutZone2Penalty'), K('practiceCutZone2PenaltyParam')),
-          rule(K('qualifyCutZone2Penalty'), K('qualifyCutZone2PenaltyParam')),
-          rule(K('raceCutZone2Penalty'), K('raceCutZone2PenaltyParam'))),
-        K('cutZone2SlowdownDeadline'), K('cutZone2SlowdownMaxGas'), K('cutZone2GainTolerance')),
-    },
+    cutZones = cutZonesOf(src('cutZones')),
     unpaid = bySession(rule(K('practiceSlowdownUnpaidPenalty'), 0), rule(K('qualifySlowdownUnpaidPenalty'), 0),
       rule(K('raceSlowdownUnpaidPenalty'), 0)),
   }
@@ -1155,6 +1146,11 @@ local function build(src)
   return c
 end
 local config = build(function(key) return cfg[key] end)
+local function zoneReasons()
+  for _, z in ipairs(config.cutZones) do TEXTS.reason[z.category] = string.format(TEXTS.cutZoneReason, tonumber(z.category:match('%d+'))) end
+end
+zoneReasons()
+Lang.hooks[#Lang.hooks + 1] = zoneReasons
 config.keysText = ''
 do
   local function fieldsOf(text)
@@ -1188,6 +1184,7 @@ do
       return table.concat(out, ' | ')
     end)
     into(config, c)
+    zoneReasons()
     config.rolesNow()
   end
 end
