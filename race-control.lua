@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V349 - 2026.11.22'
+local RC_VERSION = 'V350 - 2026.11.23'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -507,6 +507,7 @@ local TEXTS = {
   replayLocalOff = 'LOCAL COPY OFF', replayAutoHint = 'Unlocked, saves at each incident', replayOrgOnHint = 'Locked on by the organization',
   replayOrgOffHint = 'Locked off by the organization', replaySaveHint = 'Unlocked, the last seconds', replayLocked = 'Locked by the organization',
   replayLocalHint = 'Keeps the clip on this PC too', replayLast = 'Last clip: %s, on the server', replayNone = 'No clip in this session', replayManualKind = 'Manual',
+  replaySent = 'Save replay command sent',
   replayCollision = 'Collision', replayInc_spin = 'Loss of control', replayInc_stopped = 'Car stopped', replayInc_broken = 'Car broken', replayInc_oil = 'Oil on track',
   ownOn = 'MY SCREENS SHOWN TO ME', ownOff = 'MY SCREENS HIDDEN FROM ME', ownHint = 'Hidden: less traffic and load; the others still see them',
   focusOn = 'FOCUS ON', focusOff = 'FOCUS OFF', focusWith = 'Talking to you: %s', focusNobody = 'Choose who talks to you', focusHint = 'Only one person talks to you',
@@ -3225,7 +3226,7 @@ do
     if #v == 2 then prefs.auto, prefs.localCopy = v:sub(1, 1) == '1', v:sub(2, 2) == '1' end
   end
   local function prefsSave() ac.storage[CLIP_PREFS] = (prefs.auto and '1' or '0') .. (prefs.localCopy and '1' or '0') end
-  sessionPart('clip', AppLink, function() return { clipUsed = 0, clipCut = SESSION_NONE, clipWin = SESSION_NONE, clipLast = SESSION_NONE } end)
+  sessionPart('clip', AppLink, function() return { clipUsed = 0, clipCut = SESSION_NONE, clipWin = SESSION_NONE, clipLast = SESSION_NONE, clipAsked = SESSION_NONE } end)
   local MODS = { CTRL = 17, CONTROL = 17, SHIFT = 16, ALT = 18 }
   local saveBtn = ac.ControlButton('__EXT_SAVE_CLIP')
   local function clipCodes()
@@ -3278,11 +3279,17 @@ do
       AppLink.clipCut, AppLink.clipWin = math.floor(now / (math.max(K.manualCutMinutes, 1) * 60000)), win
     end
     local t = serverTimeMs()
-    AppLink.clipLast = { t = os.date('!%H:%M:%S', math.floor(t / 1000)), kind = label or TEXTS.replayManualKind }
-    state.clipOut, state.clipSid = string.format('%s|%d|%d|%s', kind, manual and 1 or 0, math.floor(t), (tostring(AppLink.clipLast.kind):gsub('|', '/'))), Session.id
+    AppLink.clipAsked = { t = os.date('!%H:%M:%S', math.floor(t / 1000)), kind = label or TEXTS.replayManualKind, manual = manual }
+    state.clipOut, state.clipSid = string.format('%s|%d|%d|%s', kind, manual and 1 or 0, math.floor(t), (tostring(AppLink.clipAsked.kind):gsub('|', '/'))), Session.id
     ac.log(string.format('race-control: clip asked (%s, keys %s)', kind, codes))
     return true
   end
+  ac.onSharedEvent('amxracing.race-control.key.done', function()
+    local c = AppLink.clipAsked
+    if not c then return end
+    AppLink.clipAsked, AppLink.clipLast = nil, c
+    if c.manual then showNotice(TEXTS.scrReplay, TEXTS.replaySent) end
+  end)
   RcClip.want = AppLink.clipWant
   for _, w in ipairs({ TEXTS.rc.dsq, TEXTS.rc.dt, TEXTS.rc.dtAfterDsq, TEXTS.rc.reprimand, TEXTS.rc.timePenalty, TEXTS.rc.wrongWay }) do if w then RC_CLIP[w] = true end end
   for _, w in ipairs({ TEXTS.rc.sgSeconds, TEXTS.rc.hold }) do if w then RC_CLIP_PREFIX[#RC_CLIP_PREFIX + 1] = tostring(w):match('^([^%%]*)') end end
@@ -4029,7 +4036,7 @@ do
   end, { 'splits' })
   local P = {}
   sessionPart('lapWay', P, function()
-    return { sp = SESSION_NONE, t = SESSION_NONE, raw = SESSION_NONE, prog = 1, start = SESSION_NONE, open = false, secT = {}, secN = 0, broken = false, trace = {},
+    return { sp = SESSION_NONE, t = SESSION_NONE, raw = SESSION_NONE, prog = 1, start = SESSION_NONE, open = false, secT = {}, secN = 0, cutN = SESSION_NONE, broken = false, trace = {},
       lineT = -1e9, info = newInfo(), pit = { entered = false, left = false }, crashT = -1e9, spinning = false, calmT = SESSION_NONE, recDriver = SESSION_NONE }
   end)
   local function splits()
@@ -4197,7 +4204,7 @@ do
     ac.log(string.format('race-control: line - lap %d %s %d ms%s%s%s', L.lap, L.valid and 'valid' or ('invalid ' .. L.why), ms,
       #s > 0 and (' sectors ' .. table.concat(s, '/')) or '', L.out and ' out lap' or '', L.inLap and ' in lap' or ''))
     m.cut, m.overdue, m.fuel, m.form, m.closed = false, false, false, false, false
-    P.start, P.secT, P.secN, P.broken, P.trace, P.info = t, {}, 0, false, {}, newInfo()
+    P.start, P.secT, P.secN, P.cutN, P.broken, P.trace, P.info = t, {}, 0, nil, false, {}, newInfo()
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
     preMarks(car, true)
     P.lineT = state.ui.clock
@@ -4211,7 +4218,7 @@ do
     Lap.save()
   end
   local function open(car, t)
-    P.open, P.start, P.secT, P.secN, P.broken, P.trace, P.info = true, t, {}, 0, false, {}, newInfo()
+    P.open, P.start, P.secT, P.secN, P.cutN, P.broken, P.trace, P.info = true, t, {}, 0, nil, false, {}, newInfo()
     Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel, Lap.marks.form, Lap.marks.closed = false, false, false, false, false
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
     preMarks(car, true)
@@ -4440,7 +4447,7 @@ do
         if o.last > 0 and (not o.bl[key] or o.last < o.bl[key]) then o.bl[key] = o.last end
         local lv = o.lastS[nS - 1]
         if lv and lv > 0 and not o.barC[nS] then o.barC[nS] = barCode(key, nS, lv) end
-        o.lastBarC, o.lastAt = o.barC, state.ui.clock
+        o.lastBarC, o.at = o.barC, state.ui.clock
       else
         o.lastBarC = nil
       end
@@ -4449,7 +4456,9 @@ do
     if cur ~= nil and recent then
       local c, k = {}, 0
       for v in tostring(cur):gmatch('%d+') do c[k], k = tonumber(v), k + 1 end
+      local cutNow = not newLap and o.curOk == true and curOk == false
       o.curOk = curOk ~= false
+      if cutNow then o.at = state.ui.clock end
       local key = keyOf(i)
       for q0, v in pairs(c) do
         if not (o.cur and o.cur[q0]) then
@@ -4533,6 +4542,8 @@ do
     local best, n, s = all.ms or 0, Lap.number(), Lap.sentBest
     local cn = (P.open and not P.broken) and P.secN or 0
     local ok = Lap.valid(Lap.marks)
+    if not ok and P.cutN == nil and s and s.ok and s.n == n then P.cutN = cn end
+    if P.cutN then cn = math.min(cn, P.cutN) end
     if s and s.n == n and s.ms == best and s.lap == all.lap and s.cn == cn and s.ok == ok then return end
     local parts = {}
     for k = 0, 15 do
@@ -11656,7 +11667,7 @@ local function checkCutZone(zoneIndex, zone, lapCount)
   if not zone.enabled then return end
   local car = ac.getCar(0)
   if not car or car.isInPitlane or not isInZone(zone, car.splinePosition) then
-    state.cutPassPenalized[zoneIndex] = false
+    if not state.cutChecks[zoneIndex] then state.cutPassPenalized[zoneIndex] = false end
     return
   end
   if not state.cutPassPenalized[zoneIndex] and car.wheelsOutside > zone.maxWheelsOut then
@@ -16260,7 +16271,10 @@ float4 main(PS_IN pin) {
     ui.drawIcon(icon, vec2(a.x + 3 * s, a.y + 3 * s), vec2(b.x - 3 * s, b.y - 3 * s), on and COLOR_TITLE or COLOR_DIM)
     if lock == 'closed' then ui.drawIcon(ui.Icons.Padlock, vec2(b.x - 7 * s, a.y - 4 * s), vec2(b.x + 4 * s, a.y + 7 * s), YELLOW)
     elseif lock == 'open' then ui.drawIcon(ui.Icons.PadlockUnlocked, vec2(b.x - 7 * s, a.y - 4 * s), vec2(b.x + 4 * s, a.y + 7 * s), COLOR_DIM) end
-    if lock ~= 'closed' and fn then Drag.clickable(a, b, function() replay.row = i; fn() end) end
+    Drag.clickable(a, b, function()
+      replay.row = i
+      if lock ~= 'closed' and fn then fn() end
+    end)
     drawText(label, FONT_TITLE, 10 * s, TMP.a:set(b.x + 10 * s, y), on and GREEN or COLOR_DIM)
     drawText(fitText(hint, FONT_TEXT, 9 * s, p2.x - 14 * s - (b.x + 10 * s)), FONT_TEXT, 9 * s, TMP.a:set(b.x + 10 * s, y + 13 * s), lock == 'closed' and YELLOW or COLOR_DIM)
   end
@@ -17106,6 +17120,12 @@ float4 main(PS_IN pin) {
       local s = BC.cam.set and setOf(BC.cam.set)
       return s and BC.cam.cam and s.cams[BC.cam.cam + 1] or nil
     end
+    function BC.waitOrder(s)
+      local order = {}
+      for _, c in ipairs(s.cams) do order[#order + 1] = c end
+      table.sort(order, function(a, b) return a.inP < b.inP end)
+      return order
+    end
     local look = vec3()
     local function grabUpdate()
       if not grab then return end
@@ -17245,15 +17265,20 @@ float4 main(PS_IN pin) {
         if m == 'OFF' then
           BC.wait.on = false
           if BC.cam.mode == 'wait' or BC.cam.mode == 'waitset' then
-            local o = BC.opt
-            BC.command(o.cpm == 3 and 'FREE ON' or o.cpm == 2 and 'RANDOM' or (o.cpm == 1 and o.cps >= 0 and o.cpc >= 0) and string.format('CAM %d %d', o.cps, o.cpc)
-              or o.cps >= 0 and ('SET ' .. o.cps) or 'AUTO')
+            local s = BC.wait.set and setOf(BC.wait.set)
+            local first = s and BC.waitOrder(s)[1]
+            if not (first and putCam(s.index, first.idx, 'cam')) then
+              release()
+              trackMode(BC.cam.set)
+              BC.cam.mode = 'set'
+            end
           end
         elseif m == 'NAV' or m == 'FIX' then
+          local same = BC.wait.on and BC.wait.mode == m and BC.wait.set == tonumber(w[3])
           BC.wait.on, BC.wait.mode, BC.wait.set = true, m, tonumber(w[3])
-          BC.wait.cam = m == 'FIX' and tonumber(w[4]) or nil
+          if m == 'FIX' then BC.wait.cam = tonumber(w[4]) end
           BC.wait.secs = m == 'NAV' and math.max(tonumber(w[4]) or 8, 2) or BC.wait.secs
-          BC.wait.at, BC.wait.k = 0, 0
+          if not same then BC.wait.at, BC.wait.k = 0, 0 end
         else return false end
       elseif a == 'DEF' then
         BC.opt.defSet = tonumber(w[2])
@@ -17352,10 +17377,8 @@ float4 main(PS_IN pin) {
             elseif not W.cam and BC.cam.mode ~= 'waitset' then release(); trackMode(s.index); BC.cam.mode, BC.cam.set = 'waitset', s.index end
           elseif state.ui.clock >= W.at then
             W.at = state.ui.clock + W.secs
-            local order = {}
-            for _, c in ipairs(s.cams) do order[#order + 1] = c end
-            table.sort(order, function(a, b) return a.inP < b.inP end)
-            W.k = W.k % #order + 1
+            local order = BC.waitOrder(s)
+            W.k = W.k == 0 and #order or W.k % #order + 1
             putCam(s.index, order[W.k].idx, 'wait')
           end
         end
@@ -18053,18 +18076,21 @@ float4 main(PS_IN pin) {
       local hh, sw, sh, pad = (small and 7 or 10) * k, (small and 8 or 13) * k, (small and 2 or 3) * k, (small and 4 or 5) * k
       rect(x, cy - hh, x + bw, cy + hh, BOXBG)
       local inPit = not t or not t.c or t.c.isInPitlane
-      local held = o.lastBarC ~= nil and state.ui.clock - (o.lastAt or -1e9) < CR.LAST_SEC_S
+      local held = o.lastBarC ~= nil and serverTimeMs() - (o.ct or -1e9) < CR.LAST_SEC_S * 1000
       local bad = not held and not inPit and o.cur ~= nil and o.curOk == false
       local done = 0
       while o.cur and o.cur[done] do done = done + 1 end
+      local crossed = not held and not inPit and o.cur ~= nil and done == nS - 1 and t.sp < (sp[nS - 1] or 0)
       for q = 1, nS do
         local bx = x + pad + (q - 1) * (sw + 2 * k)
         rect(bx, cy - sh, bx + sw, cy + sh, CR.qOff)
         local c = held and o.lastBarC[q] or (not held and not inPit and o.barC[q])
         if bad then
-          rect(bx, cy - sh, bx + sw, cy + sh, RED)
+          if q <= done then rect(bx, cy - sh, bx + sw, cy + sh, RED) end
         elseif c then
           rect(bx, cy - sh, bx + sw, cy + sh, c == 'p' and PURPLE or c == 'g' and FLAGC.green or c == 'e' and YELLOW or c == 'r' and RED or CR.qOrange)
+        elseif crossed and q == nS then
+          rect(bx, cy - sh, bx + sw, cy + sh, PAPER)
         elseif not held and not inPit and o.cur ~= nil and q == done + 1 then
           local a, b = sp[q - 1] or 0, sp[q] or 1
           local f = math.min(math.max((t.sp - a) / math.max(b - a, 1e-6), 0), 1)
