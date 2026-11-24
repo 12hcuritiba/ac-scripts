@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V353 - 2026.11.24'
+local RC_VERSION = 'V354 - 2026.11.24'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -9004,13 +9004,17 @@ do
     if old and old.kind == INC.stopped and kind == INC.none then Flags.regained(i) end
     if kind ~= INC.none and Flags.formation then Flags.formation.detach(i) end
   end
+  local function gone(i)
+    local c = ac.getCar(i)
+    return not (c and c.isConnected) or c.isInPitlane == true
+  end
   function Flags.incidentOf(i)
     local kind, pos, t
     if i == 0 then
       kind = Flags.own
     else
       local inc = Flags.incidents[i]
-      if inc and state.ui.clock - inc.t <= INC_EXPIRE then kind, pos, t = inc.kind, inc.pos, inc.since or inc.t end
+      if inc and not inc.out and not gone(i) and state.ui.clock - inc.t <= INC_EXPIRE then kind, pos, t = inc.kind, inc.pos, inc.since or inc.t end
     end
     if not kind or kind == INC.none then return nil end
     return incNames[kind], FLAG_OF[kind], pos, t
@@ -9195,6 +9199,7 @@ do
         Flags.incidents[i] = nil
       else
         local c = ac.getCar(i)
+        if gone(i) then inc.out = true end
         local name, flag, pos = Flags.incidentOf(i)
         local d = ahead(car, pos or inc.pos)
         if flag == 'yellow' and d <= cfg.yellowMeters and not yellow then
@@ -16962,7 +16967,8 @@ float4 main(PS_IN pin) {
       'fxs', 'cpm', 'cps', 'cpc', 'fgt', 'fgts', 'fgx', 'fgxs', 'fgop',
       'tpl', 'tpi', 'tpg', 'tpv', 'tpp', 'tql', 'tqi', 'tqg', 'tqv', 'tqp', 'trl', 'tri', 'trg', 'trv', 'trp',
       'tpc', 'tqc', 'trc', 'tpf', 'tqf', 'trf',
-      'aad', 'aap', 'aai', 'aac', 'add', 'adp', 'adi', 'adc', 'apw', 'amp', 'ams', 'amc', 'amd' }
+      'aad', 'aap', 'aai', 'aac', 'add', 'adp', 'adi', 'adc', 'apw', 'amp', 'ams', 'amc', 'amd',
+      'aak', 'adk', 'ka', 'kr', 'wec' }
     local CR_KEYS = { hm = 'move', hps = 'page', hw = 'wait', vm = 'move', vps = 'page', vw = 'wait', rpn = 'pins', rw = 'wait', ipn = 'pins', iw = 'wait', fl = 'bool',
       fls = 'page', cl = 'bool', cls = 'page', fcop = 'op', tk = 'bool', tks = 'page', tkop = 'op', lc = 'bool', lcs = 'page', lcop = 'op', gr = 'bool', grs = 'page',
       grm = 'move', grps = 'page', grop = 'op', sg = 'bool', scl = 'bool', st = 'bool', sts = 'page', sx = 'bool', sxs = 'page', pm = 'bool', ptw = 'bool', ptws = 'page',
@@ -16974,7 +16980,7 @@ float4 main(PS_IN pin) {
       tpl = 'bool', tpi = 'bool', tpg = 'bool', tpv = 'bool', tpp = 'bool', tql = 'bool', tqi = 'bool', tqg = 'bool', tqv = 'bool', tqp = 'bool', trl = 'bool', tri = 'bool', trg = 'bool', trv = 'bool', trp = 'bool',
       tpc = 'bool', tqc = 'bool', trc = 'bool', tpf = 'ph', tqf = 'ph', trf = 'ph',
       aad = 'any', aap = 'any', aai = 'any', aac = 'any', add = 'page', adp = 'page', adi = 'page', adc = 'page', apw = 'bool', amp = 'dest', ams = 'set', amc = 'cam',
-      amd = 'page' }
+      amd = 'page', aak = 'any', adk = 'page', ka = 'scale', kr = 'scale', wec = 'cam' }
     local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 75,
       tk = true, tks = 10, tkop = 75, lc = true, lcs = 12, lcop = 75, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 75, sg = true, scl = true, st = true, sts = 5,
       sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 90, secop = 75, pitop = 75, grw = 5, im = 'ROLL', ips = 8, qb = 1, qbs = 0, rh = 5,
@@ -16984,7 +16990,8 @@ float4 main(PS_IN pin) {
       atd = true, ati = true, atp = true, ad = 8, of = false, ofs = 30, dm = 0,
       tpl = false, tpi = true, tpg = false, tpv = true, tpp = false, tql = false, tqi = true, tqg = false, tqv = true, tqp = false, trl = true, tri = false, trg = true, trv = false, trp = true,
       tpc = true, tqc = true, trc = true, tpf = 1, tqf = 1, trf = 0,
-      aad = 2, aap = 2, aai = 2, aac = 2, add = 8, adp = 8, adi = 8, adc = 8, apw = false, amp = 1, ams = 0, amc = -1, amd = 8 }
+      aad = 2, aap = 2, aai = 2, aac = 2, add = 8, adp = 8, adi = 8, adc = 8, apw = false, amp = 1, ams = 0, amc = -1, amd = 8,
+      aak = 0, adk = 8, ka = 88, kr = 90, wec = -1 }
     for k, v in pairs(CR_START) do
       BC.opt[k] = v
       if CR_KEYS[k] == 'bool' then BOOLS[k] = true elseif CR_KEYS[k] ~= 'move' then NUMS[k] = true end
@@ -17019,6 +17026,7 @@ float4 main(PS_IN pin) {
       if kind == 'dest' then return math.min(math.max(n, 0), 3) end
       if kind == 'any' then return math.min(math.max(n, 0), 4) end
       if kind == 'one' then return math.min(math.max(n, 0), 1) end
+      if kind == 'scale' then return math.min(math.max(n, 80), 100) end
       if kind == 'ph' then return math.min(math.max(n, 0), 4) end
       if kind == 'speed' then return speedOf(v, 210) end
       if kind == 'tri' then return v == true and 1 or v == false and 0 or math.min(math.max(n, 0), 2) end
@@ -17040,13 +17048,14 @@ float4 main(PS_IN pin) {
     do
       local kept = tostring(ac.storage[KEEP] or '')
       for k, v in kept:gmatch('(%w+)=([^;]*)') do
-        if BC.opt[k] ~= nil or k == 'defSet' then
+        if BC.opt[k] ~= nil or k == 'defSet' or k == 'ws' then
           if k == 'op' then BC.opt.op = tonumber(v) or 75
           elseif k == 'cycle' then BC.opt.cycle = tonumber(v) or 0
           elseif k == 'speed' then BC.opt.speed = speedOf(v)
           elseif k == 'pins' then BC.opt.pins = pinsOf(v)
           elseif k == 'bar' then BC.opt.bar = v ~= '0'
           elseif k == 'defSet' then BC.opt.defSet = tonumber(v)
+          elseif k == 'ws' then BC.opt.ws = v
           elseif CR_KEYS[k] then BC.opt[k] = crValue(k, v)
           elseif BOOLS[k] then BC.opt[k] = v == '1'
           elseif NUMS[k] then BC.opt[k] = tonumber(v) or BC.opt[k]
@@ -17065,6 +17074,7 @@ float4 main(PS_IN pin) {
         .. string.format(';pb=%d;pt=%d;pts=%d;px=%d;pxs=%d;rs=%d;rsg=%d;rc=%d;rcs=%d;re=%s;oe=%d;oes=%d;ot=%d;ots=%d;oi=%d;ois=%d;sv=%d;svs=%d;so=%d;sos=%d;sns=%d;org=%d;rop=%d;oop=%d;sop=%d',
           o.pb and 1 or 0, o.pt and 1 or 0, o.pts, o.px and 1 or 0, o.pxs, o.rs and 1 or 0, o.rsg, o.rc and 1 or 0, o.rcs, o.re, o.oe and 1 or 0, o.oes, o.ot and 1 or 0, o.ots,
           o.oi and 1 or 0, o.ois, o.sv and 1 or 0, o.svs, o.so and 1 or 0, o.sos, o.sns, o.org and 1 or 0, o.rop, o.oop, o.sop) .. crText('keep')
+        .. ';ws=' .. tostring(o.ws or '')
     end
     function BC.on() return CarRead.isTv(0) end
     function BC.setupApply()
@@ -17316,7 +17326,7 @@ float4 main(PS_IN pin) {
           BC.wait.on = false
           if BC.cam.mode == 'wait' or BC.cam.mode == 'waitset' then
             local s = BC.wait.set and setOf(BC.wait.set)
-            local first = s and BC.waitOrder(s)[1]
+            local first = s and ((BC.opt.wec or -1) >= 0 and s.cams[BC.opt.wec + 1] or BC.waitOrder(s)[1])
             if not (first and putCam(s.index, first.idx, 'cam')) then
               release()
               trackMode(BC.cam.set)
@@ -17326,9 +17336,10 @@ float4 main(PS_IN pin) {
         elseif m == 'NAV' or m == 'FIX' then
           local same = BC.wait.on and BC.wait.mode == m and BC.wait.set == tonumber(w[3])
           BC.wait.on, BC.wait.mode, BC.wait.set = true, m, tonumber(w[3])
-          if m == 'FIX' then BC.wait.cam = tonumber(w[4]) end
+          BC.wait.cam = tonumber(m == 'FIX' and w[4] or w[5])
           BC.wait.secs = m == 'NAV' and math.max(tonumber(w[4]) or 8, 2) or BC.wait.secs
           if not same then BC.wait.at, BC.wait.k = 0, 0 end
+          BC.opt.ws = string.format('%s,%d,%d,%d', m, BC.wait.set or -1, BC.wait.secs, BC.wait.cam or -1)
         else return false end
       elseif a == 'DEF' then
         BC.opt.defSet = tonumber(w[2])
@@ -17388,6 +17399,7 @@ float4 main(PS_IN pin) {
         if not CR_KEYS[key] then return false end
         BC.opt[key] = crValue(key, w[3] or '')
         if key:match('^t[pqr][ligvpcf]$') then BC.tSetsMake() end
+        if key == 'ka' or key == 'kr' then BC.scaleSet() end
       elseif a == 'ORG' then
         BC.opt.org = w[2] == '1'
       elseif a == 'IDENT' then
@@ -17414,8 +17426,15 @@ float4 main(PS_IN pin) {
       end
       if BC.cam.mode == 'start' then
         BC.cam.mode = 'set'
-        local s = BC.setByName('12hTV Fixed')
-        if s and #s.cams > 0 then BC.wait.set, BC.wait.cam = s.index, #s.cams - 1 end
+        local m, set, secs, cam = tostring(BC.opt.ws or ''):match('^(%u+),(%-?%d+),(%d+),(%-?%d+)$')
+        local ws = set and setOf(tonumber(set))
+        if ws and #ws.cams > 0 then
+          BC.wait.mode, BC.wait.set, BC.wait.secs = m == 'NAV' and 'NAV' or 'FIX', ws.index, math.max(tonumber(secs) or 8, 2)
+          BC.wait.cam = tonumber(cam) >= 0 and tonumber(cam) or nil
+        else
+          local s = BC.setByName('12hTV Fixed')
+          if s and #s.cams > 0 then BC.wait.set, BC.wait.cam = s.index, #s.cams - 1 end
+        end
         BC.stateDirty, BC.camsDirty = true, true
       end
       local W = BC.wait
@@ -17428,7 +17447,12 @@ float4 main(PS_IN pin) {
           elseif state.ui.clock >= W.at then
             W.at = state.ui.clock + W.secs
             local order = BC.waitOrder(s)
-            W.k = W.k == 0 and #order or W.k % #order + 1
+            if W.k == 0 then
+              W.k = #order
+              for q, c in ipairs(order) do if c.idx == W.cam then W.k = q end end
+            else
+              W.k = W.k % #order + 1
+            end
             putCam(s.index, order[W.k].idx, 'wait')
           end
         end
@@ -17912,7 +17936,9 @@ float4 main(PS_IN pin) {
     local SAY_BG = rgbm(10 / 255, 12 / 255, 16 / 255, 0.96)
     local ROLL = 0.45
     BC.ROLL = ROLL
-    BC.SCALE, BC.SCALE_R, BC.fk = 0.88, 0.90, {}
+    function BC.scaleSet() BC.SCALE, BC.SCALE_R = BC.opt.ka / 100, BC.opt.kr / 100 end
+    BC.fk = {}
+    BC.scaleSet()
     local BOX_TINT, BOX_SOFT, RES_PIN = rgbm(1, 1, 1, 0.04), rgbm(31 / 255, 104 / 255, 207 / 255, 0.30), rgbm(1, 1, 1, 0.22)
     ACCENT[#ACCENT + 1] = BOX_SOFT
     CR.va, CR.vb = vec2(0, 0), vec2(0, 0)
@@ -21759,7 +21785,8 @@ do
     return list
   end
   local aired, onAir = {}, {}
-  local KIND_OF = { duel = 'd', pit = 'p', crash = 'c' }
+  local KIND_OF = { duel = 'd', pit = 'p', crash = 'c', cut = 'k' }
+  local INSTANT = { crash = true, cut = true }
   local function keyOf(e) return string.format('%s:%d:%d:%d', e.k, e.a, e.b or -1, math.floor(e.at)) end
   local function auto(list, now)
     local o = Broadcast.opt
@@ -21769,7 +21796,7 @@ do
     for dest, a in pairs(onAir) do
       if (a.hold and not BroadcastPip.isOpen(a.id)) or (not a.hold and now >= a.till) then onAir[dest] = nil end
     end
-    if (o.aa or 0) == 0 or Broadcast.wait.on or onAir[1] then return end
+    local stop = (o.aa or 0) == 0 or Broadcast.wait.on or onAir[1] ~= nil
     for _, e in ipairs(list) do
       local key = keyOf(e)
       local x = KIND_OF[e.k] or 'i'
@@ -21781,7 +21808,9 @@ do
         dest = (not onAir[2] and not BroadcastPip.isOpen('S')) and 2 or (not onAir[3] and not BroadcastPip.isOpen('I')) and 3 or 0
       end
       local free = dest == 1 and next(onAir) == nil or dest >= 2 and not onAir[dest] and not Broadcast.barHid
-      if dest > 0 and free and not twice and not aired[key] then
+      local pc = e.k == 'pit' and ac.getCar(e.a)
+      local still = e.k ~= 'pit' or (pc and pc.isConnected and pc.isInPitlane == true)
+      if not stop and dest > 0 and free and not twice and still and not aired[key] then
         aired[key] = true
         local went, id = true, dest == 2 and 'S' or 'I'
         if dest == 1 then
@@ -21792,8 +21821,9 @@ do
         end
         local hold = dest >= 2 and x == 'p' and o.apw == true
         if went then onAir[dest] = { key = key, till = hold and math.huge or now + (o['ad' .. x] or 8), hold = hold, id = id, car = car } end
-        if went and dest == 1 then return end
+        if went and dest == 1 then stop = true end
       end
+      if INSTANT[e.k] then aired[key] = true end
     end
   end
   function BroadcastAlerts.beat()
