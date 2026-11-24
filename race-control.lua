@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V352 - 2026.11.23'
+local RC_VERSION = 'V353 - 2026.11.24'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -3447,7 +3447,7 @@ do
 end
 local PitRecord = { HOLD_MAX = 86400, HOLD_GRACE = 2000 }
 sessionPart('pitRecord', PitRecord, function() return { stops = 0, valid = 0, validOut = 0, last = '-', seq = 0, holdEnded = SESSION_NONE, lastPass = SESSION_NONE, pass = SESSION_NONE,
-  resume = SESSION_NONE } end, { 'HOLD_MAX', 'HOLD_GRACE' })
+  resume = SESSION_NONE, notOut = SESSION_NONE } end, { 'HOLD_MAX', 'HOLD_GRACE' })
 PitRecord.onService = nil
 local startHold
 function PitRecord.save()
@@ -3458,7 +3458,7 @@ function PitRecord.save()
   local rt = state.redTow
   local inv = state.swapInvalid
   local lp, cp = PitRecord.lastPass, PitRecord.pass
-  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s|%s|%d|%s|%d/%d/%d/%d/%d/%d|%d|%d', PitRecord.stops, PitRecord.last,
+  Record.save('pit', PitRecord.seq, string.format('%d|%s|%d|%s|%s|%d|%s|%d|%s|%s|%d|%s|%d/%d/%d/%d/%d/%d|%d|%d|%s', PitRecord.stops, PitRecord.last,
     h and math.floor(h.untilMs) or 0, text,
     sv and string.format('%d/%d/%s', math.floor(sv.startMs), math.floor(sv.untilMs), sv.plan) or '-',
     state.pitPassServiced and 1 or 0, rt and string.format('%d/%.4f/%.4f/%.2f', rt.tow, rt.damage.powertrain,
@@ -3467,7 +3467,7 @@ function PitRecord.save()
     h and tostring(h.cause or ''):gsub('[|]', '/') or '', state.pitPassReverse or 0,
     state.pitExitDriven == nil and '' or state.pitExitDriven and '1' or '0',
     lp and lp.entry or 0, lp and lp.lane or 0, lp and lp.park or 0, cp and cp.entry or 0, cp and cp.park or 0, cp and cp.since or 0, PitRecord.valid or 0,
-    PitRecord.validOut or 0))
+    PitRecord.validOut or 0, PitRecord.notOut == nil and '' or PitRecord.notOut and '1' or '0'))
   RecordSync.base.statSet(PitRecord.stops, state.list.dsq)
 end
 function PitRecord.apply(body, seq, newConnection)
@@ -3497,6 +3497,7 @@ function PitRecord.apply(body, seq, newConnection)
   PitRecord.stops = math.max(PitRecord.stops, tonumber(stops))
   PitRecord.valid = math.max(PitRecord.valid or 0, tonumber(f[14]) or 0)
   PitRecord.validOut = math.max(PitRecord.validOut or 0, tonumber(f[15]) or 0)
+  if f[16] == '1' or f[16] == '0' then PitRecord.notOut = f[16] == '1' end
   PitRecord.last = last
   local n = {}
   for v in tostring(f[13] or ''):gmatch('%d+') do n[#n + 1] = tonumber(v) end
@@ -7368,9 +7369,15 @@ do
       p.jumped and 'tow' or 'driven', p.raceFlag, p.driverFlag, tostring(ac.getDriverTeam(0) or '-'),
       tostring(ac.getUserSteamID() or '-'), p.valid and TEXTS.pitStopValid[p.valid] or '-'))
   end
+  local function notOut(on)
+    if PitRecord.notOut == on then return end
+    PitRecord.notOut = on
+    PitRecord.save()
+  end
+  local function beforeFormation() return PitStops.beforeFormation ~= nil and PitStops.beforeFormation() end
   function PitStops.countStop()
     local p = PitStops.pass
-    if not p or p.stop or p.held or Rules.dsqOn() or Lap.over then return end
+    if not p or p.stop or p.held or PitRecord.notOut or Rules.dsqOn() or Lap.over then return end
     if state.pitPassReverse then
       if not p.reverseLogged then
         p.reverseLogged = true
@@ -7506,6 +7513,12 @@ do
     if not inPit or car.speedKmh > 5 then PitStops.stopLogged = false end
     if PitStops.wasInPitlane == nil then
       PitStops.wasInPitlane = inPit
+      local turn = not Session.loading
+      if sim.raceSessionType == ac.SessionType.Race then
+        if inPit and (turn or beforeFormation()) then notOut(true) end
+      elseif PitRecord.notOut == nil then
+        notOut(turn or inPit == true)
+      end
       if inPit then openPass(state.list.jumped, nil) end
     end
     local function wrongWayNow()
@@ -7517,6 +7530,7 @@ do
       PitStops.passInWindow = PitStops.windowOpen()
       PitStops.passInStopWindow = PitStops.stopWindowOpen()
       RecordSync.base.exit.win = swapValidNow()
+      if beforeFormation() then notOut(true) end
       openPass(state.list.jumped, Clock.ms('raw'))
       if wrongWayNow() and not state.pitPassReverse then
         state.pitPassReverse = nameCode(ac.getDriverName(0))
@@ -7552,6 +7566,7 @@ do
       end
       sgBack('left the pit lane')
       closePass()
+      notOut(false)
       PitStops.passInWindow = false
       PitStops.passInStopWindow = false
       local sw = state.swap
@@ -9992,6 +10007,13 @@ do
     return (p == 'ROLLING' or p == 'STANDING') and sim.raceSessionType == ac.SessionType.Race
   end
   function Formation.running() return Formation.on() and (Formation.phase == 'lap' or Formation.phase == 'end') end
+  function Formation.before()
+    if sim.raceSessionType ~= ac.SessionType.Race then return false end
+    if Session.beforeStart() then return true end
+    local p, s = Formation.phase, Formation.saved
+    if not Formation.on() or not (p == nil or p == 'pre' or p == 'red') or Clock.greenMs ~= nil then return false end
+    return next(Formation.locked) == nil and not (s and s.o ~= '')
+  end
   function Formation.pitHeld()
     return Formation.on() and Formation.phase ~= nil and Formation.phase ~= 'pre' and Formation.phase ~= 'red' and not Formation.pitPass
   end
@@ -10756,6 +10778,7 @@ do
   state.formationRestartGreen = Formation.restartGreen
   state.formationPitHeld = Formation.pitHeld
   Lap.formRunning = Formation.running
+  PitStops.beforeFormation = Formation.before
   TrackList.formText = Formation.trackText
   TrackList.formRestore = Formation.trackRestore
   TrackList.stateText = Formation.stateText
