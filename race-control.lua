@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V351 - 2026.11.23'
+local RC_VERSION = 'V352 - 2026.11.23'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -4177,10 +4177,6 @@ do
     end
     if Lap.trackClosed and Lap.trackClosed() then m.closed = true end
   end
-  local function fresh(open, t)
-    P.open, P.start, P.secT, P.secN, P.cutN, P.broken, P.trace, P.info = open, t, {}, 0, nil, false, {}, newInfo()
-    Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel, Lap.marks.form, Lap.marks.closed = false, false, false, false, false
-  end
   local function close(car, t, viaPit)
     Lap.count = Lap.count + 1
     local ms = P.start and math.max(math.floor(t - P.start + 0.5), 0) or 0
@@ -4212,7 +4208,8 @@ do
     end
     ac.log(string.format('race-control: line - lap %d %s %d ms%s%s%s', L.lap, L.valid and 'valid' or ('invalid ' .. L.why), ms,
       #s > 0 and (' sectors ' .. table.concat(s, '/')) or '', L.out and ' out lap' or '', L.inLap and ' in lap' or ''))
-    fresh(true, t)
+    m.cut, m.overdue, m.fuel, m.form, m.closed = false, false, false, false, false
+    P.start, P.secT, P.secN, P.cutN, P.broken, P.trace, P.info = t, {}, 0, nil, false, {}, newInfo()
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
     preMarks(car, true)
     P.lineT = state.ui.clock
@@ -4225,14 +4222,9 @@ do
     ac.log('race-control: lap: chequered flag of this car: no lap counts from here (decision 953)')
     Lap.save()
   end
-  function Lap.annul()
-    if not P.open then return end
-    fresh(false, nil)
-    ac.log('race-control: lap: the lap open annulled (a teleport that is no tow put the car in the pit lane)')
-    Lap.save()
-  end
   local function open(car, t)
-    fresh(true, t)
+    P.open, P.start, P.secT, P.secN, P.cutN, P.broken, P.trace, P.info = true, t, {}, 0, nil, false, {}, newInfo()
+    Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel, Lap.marks.form, Lap.marks.closed = false, false, false, false, false
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
     preMarks(car, true)
     P.lineT = state.ui.clock
@@ -4472,7 +4464,6 @@ do
       local cutNow = not newLap and o.curOk == true and curOk == false
       o.curOk = curOk ~= false
       if cutNow then o.at = state.ui.clock end
-      if not newLap and next(c) == nil and o.cur and next(o.cur) ~= nil then o.barC = {} end
       local key = keyOf(i)
       for q0, v in pairs(c) do
         if not (o.cur and o.cur[q0]) then
@@ -7319,10 +7310,9 @@ do
 end
 PitStops = {}
 sessionPart('pitStops', PitStops, function()
-  return { passInWindow = false, passInStopWindow = false, wasInPitlane = SESSION_NONE, pass = SESSION_NONE, resetIn = false, line = 0, otherInPitlane = {},
+  return { passInWindow = false, passInStopWindow = false, wasInPitlane = SESSION_NONE, pass = SESSION_NONE, line = 0, otherInPitlane = {},
     endChecked = false, lastIsInPit = SESSION_NONE, stopLogged = false }
 end)
-state.onJumped[#state.onJumped + 1] = function(tow) if not tow then PitStops.resetIn = true end end
 do
   local function raceTime(ms)
     local s = math.max(math.floor((ms or 0) / 1000), 0)
@@ -7527,10 +7517,7 @@ do
       PitStops.passInWindow = PitStops.windowOpen()
       PitStops.passInStopWindow = PitStops.stopWindowOpen()
       RecordSync.base.exit.win = swapValidNow()
-      local reset = PitStops.resetIn
-      PitStops.resetIn = false
-      openPass(state.list.jumped, not reset and Clock.ms('raw') or nil)
-      if reset then Lap.annul() end
+      openPass(state.list.jumped, Clock.ms('raw'))
       if wrongWayNow() and not state.pitPassReverse then
         state.pitPassReverse = nameCode(ac.getDriverName(0))
         PitRecord.save()
@@ -7585,7 +7572,6 @@ do
       end
     end
     PitStops.wasInPitlane = inPit
-    if PitStops.resetIn and not PitControl.settling() then PitStops.resetIn = false end
     if not inPit and (state.pitPassServiced or state.pitPassSgPaid or state.swapInvalid) then
       state.pitPassServiced, state.pitPassSgPaid, state.swapInvalid = false, nil, nil
       PitRecord.save()
