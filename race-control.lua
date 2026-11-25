@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V356 - 2026.11.25'
+local RC_VERSION = 'V357 - 2026.11.25'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -18696,20 +18696,21 @@ float4 main(PS_IN pin) {
       end
       return ui.isImageReady(p) and ui.imageSize(p).x > 0 and p or nil
     end
-    function CR.flagW(code, size, gap) return CR.flagOf(code) and 0.945 * size + gap or 0 end
+    function CR.flagW(size, gap) return 0.945 * size + gap end
     function CR.flagAt(code, x, y, size, gap)
       local p = CR.flagOf(code)
-      if not p then return 0 end
-      local s, fy = ui.imageSize(p), y + 0.335 * size
-      local out = math.max((1 - s.x / (1.5 * s.y)) / 2, 0)
-      ui.drawImage(p, TMP.a:set(x, fy), TMP.b:set(x + 0.945 * size, fy + 0.63 * size), WHITE, CR.flagUv0:set(0, out), CR.flagUv1:set(1, 1 - out), ui.ImageFit.Stretch)
-      return 0.945 * size + gap
+      if p then
+        local s, fy = ui.imageSize(p), y + 0.335 * size
+        local out = math.max((1 - s.x / (1.5 * s.y)) / 2, 0)
+        ui.drawImage(p, TMP.a:set(x, fy), TMP.b:set(x + 0.945 * size, fy + 0.63 * size), WHITE, CR.flagUv0:set(0, out), CR.flagUv1:set(1, 1 - out), ui.ImageFit.Stretch)
+      end
+      return CR.flagW(size, gap)
     end
     function CR.names(list, x, y, wd, size, k, abbr)
       local gap, sep = 6 * k, textWidth(' / ', F.name, size)
       local room, total = wd - (#list - 1) * sep, 0
       for _, d in ipairs(list) do
-        room = room - CR.flagW(d.nation, size, gap)
+        room = room - CR.flagW(size, gap)
         total = total + textWidth(d.name, F.name, size)
       end
       local less = abbr and total > room
@@ -20828,7 +20829,7 @@ float4 main(PS_IN pin) {
       local y2 = h - 64 * k
       local y1 = y2 - 44 * k
       local nbw = math.max(46 * k, textWidth('#000', F.rb, 13 * k) + 12 * k)
-      local fw = CR.flagW(r.nation, 19 * k, 6 * k)
+      local fw = CR.flagW(19 * k, 6 * k)
       local Wc = 16 * k + 26 * k + 9 * k + nbw + 9 * k + fw + CW.name + 9 * k + 20 * k + 16 * k + 18 * k + CW.pages + 18 * k + 54 * k
       local W = CR.fixAt or 665.6 * k
       local pw = math.max(CW.pages + (W - Wc), 0)
