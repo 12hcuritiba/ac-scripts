@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V354 - 2026.11.24'
+local RC_VERSION = 'V355 - 2026.11.25'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1774,6 +1774,8 @@ do
     r.number = CarRead.number(i)
     r.team = tostring(ac.getDriverTeam(i) or '')
     r.staff = CarRead.isStaff(i)
+    r.nation = tostring(ac.getDriverNationCode and ac.getDriverNationCode(i) or ''):match('^%u%u%u$') or ''
+    if r.nation == 'PLA' then r.nation = '' end
   end
   function CarsTick.driversAgain()
     for i in pairs(CarsTick.byIndex) do stale[i] = true end
@@ -2428,7 +2430,10 @@ do
     if not src then return end
     local exitDue = src.now and B.exit.due
     local askRr, askName, askPush = src.now and B.rrDue(false), src.now and B.nameDue(false), src.now and B.pushDue(false)
-    local quiet = next(src.parts) == nil and not src.track and #src.rc == 0 and #src.laps == 0 and #src.traces == 0 and not exitDue and not (src.now and B.stat.due) and not B.plan.due
+    local me = CarsTick.byIndex[0]
+    local nat = src.now and me and me.nation or ''
+    local natDue = nat ~= '' and nat ~= B.natSent
+    local quiet = next(src.parts) == nil and not src.track and #src.rc == 0 and #src.laps == 0 and #src.traces == 0 and not exitDue and not (src.now and B.stat.due) and not natDue and not B.plan.due
       and not askRr and not askName and not askPush
     if quiet then
       if not src.now then table.remove(B.old, 1) return end
@@ -2464,6 +2469,8 @@ do
     local statDue = src.now and B.stat.due
     local statJson = statDue and (',"stat":' .. jsonStr(B.stat.x)) or ''
     if statDue then B.stat.due = false end
+    local natJson = natDue and (',"nation":' .. jsonStr(nat)) or ''
+    if natDue then B.natSent = nat end
     local planDone = src.now and B.plan.due or nil
     local asks = {}
     if askRr then B.rrDue(true); asks[#asks + 1] = '"rr":' .. jsonStr(askRr) end
@@ -2473,7 +2480,7 @@ do
     B.busy = true
     B.flight = { key = src.key, rc = lines, laps = lapLines, traces = traces }
     local body = '{"key":' .. jsonStr(src.key) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"car":' .. jsonStr(B.carKey()) .. ',"parts":{' .. table.concat(partTexts, ',') .. '}'
-      .. (track and (',"track":{"t":' .. track.t .. ',"x":' .. jsonStr(track.x) .. '}') or '') .. exitJson .. statJson
+      .. (track and (',"track":{"t":' .. track.t .. ',"x":' .. jsonStr(track.x) .. '}') or '') .. exitJson .. statJson .. natJson
       .. ',"lines":[' .. table.concat(lineParts, ',') .. '],"laps":[' .. table.concat(lapParts, ',') .. '],"traces":[' .. table.concat(traceParts, ',') .. ']'
       .. (planDone and (',"planDone":' .. jsonStr(planDone)) or '') .. (#asks > 0 and (',"ask":{' .. table.concat(asks, ',') .. '}') or '')
       .. (src.now and B.clockOut and B.clockOut() or '') .. '}'
@@ -2491,6 +2498,7 @@ do
           for i = #traces, 1, -1 do table.insert(src.traces, 1, traces[i]) end
           if exitDue then e.due = true end
           if statDue then B.stat.due = true end
+          if natDue then B.natSent = nil end
           if askRr then B.rrRead(false) end
           if askName then B.nameRead(false, nil, err or status) end
           if not B.failLogged then
@@ -11004,7 +11012,7 @@ do
             r = { index = c.index, class = RaceTable.classOf(c.index) }
             pool[c.index] = r
           end
-          r.number, r.name, r.team, r.laps, r.best = t.number, t.name, t.team, laps, best
+          r.number, r.name, r.team, r.nation, r.laps, r.best = t.number, t.name, t.team, t.nation, laps, best
           r.spline, r.inPit, r.connected, r.absent = CarRead.num(c.splinePosition), c.isInPitlane, c.isConnected, nil
           local st = stat[c.sessionID]
           r.stops, r.dsq = st and st.stops or 0, st ~= nil and st.dsq
@@ -17820,20 +17828,25 @@ float4 main(PS_IN pin) {
     local COLS = { name = 0, team = 0 }
     local function nameOf(r) return Lang.letters.upper(cut(short(r.name), 14)) end
     local function teamOf(r) return cut(r.team or '', 16) end
-    local crew = { ev = nil, by = {} }
-    local function crewOf(r, one)
+    local crew = { ev = nil, by = {}, one = { { name = '', nation = '' } } }
+    local function crewOf(r)
       local ev = BroadcastEvent.ev
       if crew.ev ~= ev then
         crew.ev, crew.by = ev, {}
         for _, c in ipairs(ev and ev.roster or {}) do
-          if type(c.drivers) == 'table' and #c.drivers > 1 then
-            local t = {}
-            for _, d in ipairs(c.drivers) do t[#t + 1] = Lang.letters.upper(cut(short(d), 14)) end
-            crew.by[tostring(c.number)] = table.concat(t, ' / ')
+          if type(c.drivers) == 'table' and #c.drivers > 0 then
+            local nat, t = type(c.nations) == 'table' and c.nations or {}, {}
+            for j, d in ipairs(c.drivers) do t[j] = { name = Lang.letters.upper(cut(short(d), 14)), nation = tostring(nat[j] or '') } end
+            crew.by[tostring(c.number)] = t
           end
         end
       end
-      return crew.by[tostring(r.number)] or one
+      local t = crew.by[tostring(r.number)]
+      if t and #t > 1 then return t end
+      local o, slot = crew.one[1], ev and type(ev.slots) == 'table' and ev.slots[tostring(r.slot)] or ''
+      o.name = Lang.letters.upper(short(r.name or ''))
+      o.nation = t and t[1].nation ~= '' and t[1].nation or slot ~= '' and slot or r.nation or ''
+      return crew.one
     end
     local function columns(list, extra, k)
       local nw, tw = 0, 0
@@ -18673,6 +18686,49 @@ float4 main(PS_IN pin) {
       ui.popClipRect()
       CR.say(dw, y1, hh, k, n, out)
     end
+    CR.flagPath, CR.flagUv0, CR.flagUv1 = {}, vec2(0, 0), vec2(1, 1)
+    function CR.flagOf(code)
+      if not code or code == '' then return nil end
+      local p = CR.flagPath[code]
+      if not p then
+        p = '/content/gui/NationFlags/' .. code .. '.png'
+        CR.flagPath[code] = p
+      end
+      return ui.isImageReady(p) and ui.imageSize(p).x > 0 and p or nil
+    end
+    function CR.flagW(code, size, gap) return CR.flagOf(code) and 0.945 * size + gap or 0 end
+    function CR.flagAt(code, x, y, size, gap)
+      local p = CR.flagOf(code)
+      if not p then return 0 end
+      local s, fy = ui.imageSize(p), y + 0.335 * size
+      local out = math.max((1 - s.x / (1.5 * s.y)) / 2, 0)
+      ui.drawImage(p, TMP.a:set(x, fy), TMP.b:set(x + 0.945 * size, fy + 0.63 * size), WHITE, CR.flagUv0:set(0, out), CR.flagUv1:set(1, 1 - out), ui.ImageFit.Stretch)
+      return 0.945 * size + gap
+    end
+    function CR.names(list, x, y, wd, size, k, abbr)
+      local gap, sep = 6 * k, textWidth(' / ', F.name, size)
+      local room, total = wd - (#list - 1) * sep, 0
+      for _, d in ipairs(list) do
+        room = room - CR.flagW(d.nation, size, gap)
+        total = total + textWidth(d.name, F.name, size)
+      end
+      local less = abbr and total > room
+      if less then
+        total = 0
+        for _, d in ipairs(list) do total = total + textWidth(short(d.name), F.name, size) end
+      end
+      for j, d in ipairs(list) do
+        if j > 1 then
+          drawText(' / ', F.name, size, TMP.a:set(x, y), PAPER)
+          x = x + sep
+        end
+        x = x + CR.flagAt(d.nation, x, y, size, gap)
+        local nm = less and short(d.name) or d.name
+        if total > room then nm = fitText(nm, F.name, size, math.max(room, 0) * textWidth(nm, F.name, size) / total, '.') end
+        drawText(nm, F.name, size, TMP.a:set(x, y), PAPER)
+        x = x + textWidth(nm, F.name, size)
+      end
+    end
     function CR.resTake()
       local T = TEXTS.bc
       local rows, leadAll, leadCls = {}, nil, {}
@@ -18693,7 +18749,7 @@ float4 main(PS_IN pin) {
           if isFirst then return '-' end
           return ((r.best or 0) > 0 and (lead.best or 0) > 0) and string.format('+%.3f', (r.best - lead.best) / 1000) or '-'
         end
-        rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = nameOf(r), team = teamOf(r), class = r.class, laps = r.laps or 0,
+        rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = nameOf(r), nation = r.nation, team = teamOf(r), class = r.class, laps = r.laps or 0,
           best = r.best or 0, tyre = BroadcastAlerts.tyreOf[r.index], fast = r.index == BC.fastIdx, gapAll = gapTo(leadAll, n == 1, false),
           gapCls = gapTo(leadCls[cl], first, true),
           slot = r.slot, stops = r.stops or 0, swaps = (RecordSync.base.dirPen.pit[r.slot] or {}).swaps or 0 }
@@ -18729,7 +18785,7 @@ float4 main(PS_IN pin) {
               local by = {}
               for _, x in ipairs(d.drivers) do
                 local slot = tonumber(x.slot)
-                if slot and (tonumber(x.laps) or 0) > 0 then by[slot] = by[slot] or {} by[slot][#by[slot] + 1] = { name = tostring(x.driver or ''), laps = tonumber(x.laps) } end
+                if slot and (tonumber(x.laps) or 0) > 0 then by[slot] = by[slot] or {} by[slot][#by[slot] + 1] = { name = tostring(x.driver or ''), nation = tostring(x.nation or ''), laps = tonumber(x.laps) } end
               end
               for _, list in pairs(by) do table.sort(list, function(a, b) return a.laps > b.laps end) end
               R.drv = by
@@ -18763,7 +18819,7 @@ float4 main(PS_IN pin) {
       local s = (d - BC.opt.rsg) % BC.opt.rcs
       return R.pages[i], s, roll(s, BC.opt.rcs)
     end
-    local RES_COLS = { 6, 40, 60, 0, 0, 30, 76, 56, 56, 132, 150 }
+    local RES_COLS = { 6, 40, 44, 0, 0, 30, 76, 56, 56, 75, 98 }
     function CR.resDraw(w, h, k, id, page, out)
       local T = TEXTS.bc
       local R = CR.res
@@ -18808,8 +18864,9 @@ float4 main(PS_IN pin) {
       end
       local fixedW, gap = 0, 12 * k
       for _, c in ipairs(RES_COLS) do fixedW = fixedW + c * k end
-      local fr = (rw - 26 * k - fixedW - 10 * gap) / 2.25
-      local cw = { 6 * k, 40 * k, 60 * k, fr * 1.25, fr, 30 * k, 76 * k, 56 * k, 56 * k, 132 * k, 150 * k }
+      local free = rw - 26 * k - fixedW - 10 * gap
+      local fr = (free - 125 * k) / 2.25
+      local cw = { 6 * k, 40 * k, 44 * k, free - fr, fr, 30 * k, 76 * k, 56 * k, 56 * k, 75 * k, 98 * k }
       local function cols(yy, cells, row)
         local xx = x1
         local hh = row and rh or th
@@ -18819,10 +18876,11 @@ float4 main(PS_IN pin) {
             if row and multi and row.class then local _, cc = classStyle(row.class) rect(xx, yy, xx + wd, yy + rh, cc) end
           elseif row and i == 6 then
             if row.tyre then ring(xx + wd / 2, yy + rh / 2, k, row.tyre) end
+          elseif row and i == 4 then
+            CR.names(cells.names, xx, yy + (hh - 20 * k) / 2 - 2 * k, wd, 20 * k, k, true)
           elseif v and v ~= '' then
             local font, size, col = cells.font or F.rb, cells.size or 18 * k, cells.col or PAPER
             if not row then font, size, col = F.lab, 12 * k, DIMW
-            elseif i == 4 then font, size = F.name, 20 * k
             elseif i == 5 then font, size, col = F.team, 16 * k, DIMW
             elseif i == 2 then size = 22 * k
             elseif i == 10 and row.fast then col = PURPLE end
@@ -18848,13 +18906,13 @@ float4 main(PS_IN pin) {
         yy = math.floor(yy + 0.5)
         rect(x1, yy, x2, yy + k, HAIR)
         local drv = R.drv and R.drv[r.slot]
-        local names = r.name
-        if drv and #drv > 1 then
-          local t = {}
-          for _, x in ipairs(drv) do t[#t + 1] = x.name end
-          names = table.concat(t, ' / ')
+        local names = drv and #drv > 1 and drv or r.one
+        if not names then
+          names = { { name = r.name, nation = r.nation or '' } }
+          r.one = names
         end
-        cols(yy, { nil, tostring(byCls and (r.classPos or '') or r.pos), '#' .. tostring(r.number or ''), names, r.team, '', tostring(r.laps),
+        if names == r.one and drv and drv[1] and drv[1].nation ~= '' then r.one[1].nation = drv[1].nation end
+        cols(yy, { names = names, nil, tostring(byCls and (r.classPos or '') or r.pos), '#' .. tostring(r.number or ''), '', r.team, '', tostring(r.laps),
           (r.stops or 0) > 0 and tostring(r.stops) or '-', (config.swapOn() and (r.swaps or 0) > 0) and tostring(r.swaps) or '-',
           r.best > 0 and lapTime(r.best) or '-', byCls and r.gapCls or r.gapAll }, r)
       end
@@ -19097,7 +19155,7 @@ float4 main(PS_IN pin) {
         yy = yy + 22 * k
         if draw then drawText(fitText(Lang.letters.upper(tostring((BroadcastEvent.ev or {}).name or '')), F.cbig, 54 * k, cw, '.'), F.cbig, 54 * k, TMP.a:set(x, yy), PAPER) end
         yy = yy + 66 * k
-        local cwid = { 70 * k, cw * 0.36, cw * 0.26, cw * 0.2, 0 }
+        local cwid = { 70 * k, cw * 0.36 + 45 * k, cw * 0.26 - 45 * k, cw * 0.2, 0 }
         cwid[5] = cw - cwid[1] - cwid[2] - cwid[3] - cwid[4]
         if draw then
           local hx = x
@@ -19117,7 +19175,7 @@ float4 main(PS_IN pin) {
           frame(cx, ry + 11 * k, cx + nw, ry + 29 * k, NUMB, k)
           drawText(num, F.rb, 13 * k, TMP.a:set(cx + nw / 2 - textWidth(num, F.rb, 13 * k) / 2, ry + 12 * k), PAPER)
           cx = x + cwid[1]
-          drawText(fitText(crewOf(e, Lang.letters.upper(short(e.name or ''))), F.name, 18 * k, cwid[2] - 12 * k, '.'), F.name, 18 * k, TMP.a:set(cx, ry + 9 * k), PAPER)
+          CR.names(crewOf(e), cx, ry + 9 * k, cwid[2] - 12 * k, 18 * k, k)
           cx = cx + cwid[2]
           drawText(fitText(tostring(e.team or ''), F.team, 15 * k, cwid[3] - 12 * k, '.'), F.team, 15 * k, TMP.a:set(cx, ry + 11 * k), DIMW)
           cx = cx + cwid[3]
@@ -19983,7 +20041,8 @@ float4 main(PS_IN pin) {
             frame(nx, sy + 16 * k, nx + nw, sy + 36 * k, NUMB, k)
             drawText(num, F.rb, 14 * k, TMP.a:set(nx + nw / 2 - textWidth(num, F.rb, 14 * k) / 2, sy + 17 * k), PAPER)
             local wx = nx + 66 * k
-            drawText(fitText(e.name, F.wnm, 20 * k, sx + colW - wx - 8 * k, '.'), F.wnm, 20 * k, TMP.a:set(wx, sy + 5 * k), PAPER)
+            local fw = CR.flagAt(e.nation, wx, sy + 5 * k, 20 * k, 6 * k)
+          drawText(fitText(e.name, F.wnm, 20 * k, sx + colW - wx - fw - 8 * k, '.'), F.wnm, 20 * k, TMP.a:set(wx + fw, sy + 5 * k), PAPER)
             if e.team ~= '' then drawText(fitText(e.team, F.wtm, 15 * k, sx + colW - wx - 8 * k, '.'), F.wtm, 15 * k, TMP.a:set(wx, sy + 28 * k), DIMW) end
           end
           ui.pushClipRect(CR.va:set(x, yy), CR.vb:set(x + cw, yy + winH), true)
@@ -20025,7 +20084,7 @@ float4 main(PS_IN pin) {
         if BC.opt.gr then
           local rows = {}
           for _, r in ipairs(RaceTable.rows or {}) do
-            if not r.absent then rows[#rows + 1] = { pos = r.pos or (#rows + 1), number = r.number, name = nameOf(r), team = teamOf(r), class = r.class } end
+            if not r.absent then rows[#rows + 1] = { pos = r.pos or (#rows + 1), number = r.number, name = nameOf(r), nation = r.nation, team = teamOf(r), class = r.class } end
           end
           G.at, G.rows, G.move, G.name = state.ui.clock, rows, {}, select(4, sessionLine())
         end
@@ -20767,10 +20826,11 @@ float4 main(PS_IN pin) {
       local y2 = h - 64 * k
       local y1 = y2 - 44 * k
       local nbw = math.max(46 * k, textWidth('#000', F.rb, 13 * k) + 12 * k)
-      local Wc = 16 * k + 26 * k + 9 * k + nbw + 9 * k + CW.name + 9 * k + 20 * k + 16 * k + 18 * k + CW.pages + 18 * k + 54 * k
+      local fw = CR.flagW(r.nation, 19 * k, 6 * k)
+      local Wc = 16 * k + 26 * k + 9 * k + nbw + 9 * k + fw + CW.name + 9 * k + 20 * k + 16 * k + 18 * k + CW.pages + 18 * k + 54 * k
       local W = CR.fixAt or 665.6 * k
       local pw = math.max(CW.pages + (W - Wc), 0)
-      local xv = 16 * k + 35 * k + nbw + 9 * k + CW.name + 9 * k + 36 * k
+      local xv = 16 * k + 35 * k + nbw + 9 * k + fw + CW.name + 9 * k + 36 * k
       rect(0, y1, W, y2, BAR)
       rect(0, y1, W, y1 + k, HAIR)
       ui.drawRectFilledMultiColor(TMP.a:set(0, y1 + k), TMP.b:set(xv, y2), SEL_TOP, SEL_BOT, SEL_BOT, SEL_TOP)
@@ -20783,6 +20843,7 @@ float4 main(PS_IN pin) {
       frame(x, y1 + 12.5 * k, x + nbw, y1 + 32.5 * k, NUMB, k)
       drawText(num, F.rb, 13 * k, TMP.a:set(x + nbw / 2 - textWidth(num, F.rb, 13 * k) / 2, y1 + 14 * k), PAPER)
       x = x + nbw + 9 * k
+      x = x + CR.flagAt(r.nation, x, y1 + 4 * k, 19 * k, 6 * k)
       drawText(nameOf(r), F.name, 19 * k, TMP.a:set(x, y1 + 4 * k), PAPER)
       local tm = teamOf(r)
       if tm ~= '' then drawText(tm, F.team, 14 * k, TMP.a:set(x, y1 + 24 * k), DIMW) end
@@ -20833,6 +20894,7 @@ float4 main(PS_IN pin) {
       frame(x, iy1 + 18 * k, x + nbw, iy1 + 38 * k, NUMB, k)
       drawText(num, F.rb, 13 * k, TMP.a:set(x + nbw / 2 - textWidth(num, F.rb, 13 * k) / 2, iy1 + 19.5 * k), PAPER)
       x = x + nbw + 10 * k
+      x = x + CR.flagAt(r.nation, x, iy1 + 8 * k, 19 * k, 6 * k)
       local nameW = x2 - 48 * k - x
       drawText(fitText(nameOf(r), F.name, 19 * k, nameW, '...'), F.name, 19 * k, TMP.a:set(x, iy1 + 8 * k), PAPER)
       local tm = teamOf(r)
@@ -21233,7 +21295,7 @@ float4 main(PS_IN pin) {
         local pw = 0
         for _, s in ipairs({ T.thTimes, T.thFight, T.thClass }) do pw = math.max(pw, textWidth(Lang.letters.upper(s), F.thn, 10 * k)) end
         local colW = math.max(lt, textWidth(Lang.letters.upper(T.lastLap), F.lab, 9 * k), textWidth(Lang.letters.upper(T.bestLap), F.lab, 9 * k))
-        local xv = 12 * k + 16 * k + G + slotW(k) + G + RS.n3w + G + RS.t3w + G + 14 * k + 12 * k
+        local xv = 190 * k
         local Wc = xv + 14 * k + pw + 12 * k + colW + 12 * k + colW + 14 * k + 10 * k + 3 * 8 * k + 10 * k
         local W = CR.fixAtR or 462.3 * k
         colW = math.max(colW + (W - Wc) / 2, 0)
@@ -21246,6 +21308,7 @@ float4 main(PS_IN pin) {
         drawText(p, F.rb, 16 * k, TMP.a:set(x + 16 * k - textWidth(p, F.rb, 16 * k), CR.midTop(cy, 16 * k, CR.MID_R)), PAPER)
         x = x + 16 * k + G
         x = x + slotR(x, cy, k, r) + G
+        x = x + CR.flagAt(r.nation, x, CR.midTop(cy, 14 * k, CR.MID_B), 14 * k, G)
         drawText(n3Of(r), F.name, 14 * k, TMP.a:set(x, CR.midTop(cy, 14 * k, CR.MID_B)), PAPER)
         x = x + RS.n3w + G
         drawText(t3Of(r), F.team, 10 * k, TMP.a:set(x, CR.midTop(cy, 10 * k, CR.MID_B)), DIMW)
@@ -21282,14 +21345,17 @@ float4 main(PS_IN pin) {
         rect(x1, y1, x2, y2, BAR)
         rect(x1, y1, x2, y1 + k, HAIR)
         ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 - k), TMP.b:set(x2, y1 + k), TWELVE, NOCOLOR, NOCOLOR, TWELVE)
-        ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 + k), TMP.b:set(x2, y2), SEL_TOP, ID_END, ID_END, SEL_TOP)
-        rect(x1, y1 + k, x1 + 3 * k, y2, TWELVE)
-        local c1, c2 = y1 + hh * 0.3, y1 + hh * 0.73
+        local ym = y1 + math.floor(hh / k * 0.515 + 0.5) * k
+        ui.drawRectFilledMultiColor(TMP.a:set(x1, y1 + k), TMP.b:set(x2, ym), SEL_TOP, ID_END, ID_END, SEL_TOP)
+        rect(x1, y1 + k, x1 + 3 * k, ym, TWELVE)
+        rect(x1, ym, x2, ym + k, HAIR)
+        local c1, c2 = y1 + hh * 0.3, (ym + k + y2) / 2
         local x = x1 + 12 * k
         local p = tostring(r.pos or '')
         drawText(p, F.rb, 16 * k, TMP.a:set(x + 16 * k - textWidth(p, F.rb, 16 * k), CR.midTop(c1, 16 * k, CR.MID_R)), PAPER)
         x = x + 16 * k + G
         x = x + slotR(x, c1, k, r) + G
+        x = x + CR.flagAt(r.nation, x, CR.midTop(c1, 14 * k, CR.MID_B), 14 * k, G)
         local n3 = n3Of(r)
         drawText(n3, F.name, 14 * k, TMP.a:set(x, CR.midTop(c1, 14 * k, CR.MID_B)), PAPER)
         drawText(t3Of(r), F.team, 10 * k, TMP.a:set(x + textWidth(n3, F.name, 14 * k) + G, CR.midTop(c1, 10 * k, CR.MID_B)), DIMW)
