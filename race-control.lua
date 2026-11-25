@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V357 - 2026.11.25'
+local RC_VERSION = 'V358 - 2026.11.25'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -19357,7 +19357,18 @@ float4 main(PS_IN pin) {
           end
         end
       end
-      CR.tkL = { P = P, Y = Y, W = G.W, lo = lo, hi = hi, turns = turns, cut = cut, secs = secs }
+      local V2 = {}
+      for i = 1, N do V2[i] = { G.W[i][2], G.W[i][1] } end
+      local Ls, Rs = Radar.sides(P, V2)
+      local D = { P = {}, Y = {}, W = {}, lo = math.huge, hi = -math.huge }
+      for i = 1, N do
+        local a, b, h = Ls[i], Rs[i], 0
+        for j = -2, 2 do h = h + Y[(i - 1 + j) % N + 1] / 5 end
+        local w = math.sqrt((a[1] - b[1]) ^ 2 + (a[2] - b[2]) ^ 2) / 2
+        D.P[i], D.Y[i], D.W[i] = { (a[1] + b[1]) / 2, (a[2] + b[2]) / 2 }, h, { w, w }
+        D.lo, D.hi = math.min(D.lo, h), math.max(D.hi, h)
+      end
+      CR.tkL = { P = P, Y = Y, d3 = D, lo = lo, hi = hi, turns = turns, cut = cut, secs = secs }
       return CR.tkL
     end
     function CR.tkName(t)
@@ -19641,7 +19652,8 @@ float4 main(PS_IN pin) {
       local key = k .. '|' .. finW .. '|' .. tostring(M.a3) .. '|' .. tostring(M.names)
       if L.v3 and L.v3.key == key then return L.v3 end
       local AW, AH, FB = 560 * k, 500 * k, 448 * k
-      local N, lo, hi = #L.P, L.lo, L.hi
+      local D = L.d3
+      local N, lo, hi = #D.P, D.lo, D.hi
       local th = math.rad(65)
       local fy, fz, uy, uz = -math.sin(th), -math.cos(th), math.cos(th), -math.sin(th)
       local function box(Q)
@@ -19649,10 +19661,10 @@ float4 main(PS_IN pin) {
         for _, p in ipairs(Q) do x0, x1, z0, z1 = math.min(x0, p[1]), math.max(x1, p[1]), math.min(z0, p[2]), math.max(z1, p[2]) end
         return x0, x1, z0, z1
       end
-      local gx0, gx1, gz0, gz1 = box(L.P)
+      local gx0, gx1, gz0, gz1 = box(D.P)
       local ex = 0.05 * math.max(gx1 - gx0, gz1 - gz0, 1) / math.max(hi - lo, 1e-3)
       local function view(Q)
-        local Lp, Rp = Radar.sides(Q, L.W)
+        local Lp, Rp = Radar.sides(Q, D.W)
         local x0, x1, z0, z1 = box(Q)
         local size = math.max(x1 - x0, z1 - z0, 1)
         local mx, mz = (x0 + x1) / 2, (z0 + z1) / 2
@@ -19668,14 +19680,14 @@ float4 main(PS_IN pin) {
         local Lp, Rp, ex, pr = view(Q)
         local u0, u1, v0, v1 = math.huge, -math.huge, math.huge, -math.huge
         for i = 1, N do
-          local hh = (L.Y[i] - lo) * ex
+          local hh = (D.Y[i] - lo) * ex
           for _, q in ipairs({ pr(Lp[i][1], hh, Lp[i][2]), pr(Rp[i][1], hh, Rp[i][2]), pr(Lp[i][1], 0, Lp[i][2]), pr(Rp[i][1], 0, Rp[i][2]) }) do
             u0, u1, v0, v1 = math.min(u0, q[1]), math.max(u1, q[1]), math.min(v0, q[2]), math.max(v1, q[2])
           end
         end
         return math.min((AW - 12 * k) / math.max(u1 - u0, 1e-9), (FB - 6 * k) / math.max(v1 - v0, 1e-9)), u0, u1, v0, v1
       end
-      local P, deg = CR.tkTurn(L.P, M.a3, fitOf)
+      local P, deg = CR.tkTurn(D.P, M.a3, fitOf)
       local Lp, Rp, ex, pr, mx, mz = view(P)
       local s, u0, u1, v0, v1 = fitOf(P)
       local ou = (AW - (u1 - u0) * s) / 2
@@ -19683,7 +19695,7 @@ float4 main(PS_IN pin) {
       local function sc(q) q[1], q[2] = ou + (q[1] - u0) * s, ov + (q[2] - v0) * s return q end
       local A, B, FA, FB2, C, W3 = {}, {}, {}, {}, {}, {}
       for i = 1, N do
-        local hh = (L.Y[i] - lo) * ex
+        local hh = (D.Y[i] - lo) * ex
         A[i], B[i] = sc(pr(Lp[i][1], hh, Lp[i][2])), sc(pr(Rp[i][1], hh, Rp[i][2]))
         FA[i], FB2[i] = sc(pr(Lp[i][1], 0, Lp[i][2])), sc(pr(Rp[i][1], 0, Rp[i][2]))
         C[i] = sc(pr(P[i][1], hh, P[i][2]))
@@ -19859,7 +19871,7 @@ float4 main(PS_IN pin) {
           local ci, lw = (V.sec[i] - 1) % #CR.tkSec + 1, 3.2 * k * V.zr[i]
           local col = ci == 3 and s3 or CR.tkSec[ci]
           ui.drawLine(at(Q1, V.C[i]), at(Q2, V.C[j]), col, lw)
-          ui.drawCircleFilled(at(Q1, V.C[j]), lw / 2, col, 8)
+          ui.drawCircleFilled(Q1:set(V.C[j][1] + 0.5, V.C[j][2] + 0.5), lw / 2, col, 8)
         end
         for _, c in ipairs(V.chk) do quad(c[1], c[2], c[3], c[4], c[5] and CHK_LIGHT or CHK_DARK) end
       end)
