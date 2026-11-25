@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V355 - 2026.11.25'
+local RC_VERSION = 'V356 - 2026.11.25'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -19277,7 +19277,9 @@ float4 main(PS_IN pin) {
             local sx = {}
             for v in tostring(b.sectors or ''):gmatch('[^/]+') do sx[#sx + 1] = secs(tonumber(v)) end
             if #sx > 0 then drawText(table.concat(sx, ' · '), F.rb, 14 * k, TMP.a:set(cx[2] + 14 * k, yy + 38 * k), DIMW) end
-            drawText(fitText(Lang.letters.upper(short(b.driver or '')), F.name, 19 * k, free - 28 * k, '.'), F.name, 19 * k, TMP.a:set(cx[3] + 14 * k, yy + 19 * k), PAPER)
+            local nx = cx[3] + 14 * k
+            local fw = CR.flagAt(b.nation, nx, yy + 19 * k, 19 * k, 6 * k)
+            drawText(fitText(Lang.letters.upper(short(b.driver or '')), F.name, 19 * k, free - 28 * k - fw, '.'), F.name, 19 * k, TMP.a:set(nx + fw, yy + 19 * k), PAPER)
             local ci = CR.laps and CR.laps.car[r.e.model]
             local car = ci and ac.getCarName(ci) or r.e.model
             drawText(fitText(tostring(car or ''), F.wtm, 16 * k, free - 28 * k, '.'), F.wtm, 16 * k, TMP.a:set(cx[4] + 14 * k, yy + 21 * k), DIMW)
