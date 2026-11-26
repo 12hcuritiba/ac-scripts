@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V358 - 2026.11.25'
+local RC_VERSION = 'V359 - 2026.11.26'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -542,7 +542,11 @@ local TEXTS = {
   rep = { all = 'ALL', me = 'Me', types = { 'Practice', 'Qualifying', 'Race' }, driver = 'Driver', car = 'Car', track = 'Track', type = 'Type', lap = 'Lap',
     pages = { search = 'SESSIONS', session = 'DRIVERS', laps = 'LAPS', lap = 'LAP' }, mark = 'MARK REF', ref = 'REF', lapS = 'L', lapK = 'LAP', play = 'PLAY', pause = 'PAUSE', start = 'START',
     hdrDate = 'DATE', hdrType = 'TYPE', hdrDrivers = 'DRV', hdrLaps = 'LAPS', hdrBest = 'BEST', hdrTime = 'TIME', hdrValid = 'V', hdrPit = 'PIT', hdrFuel = 'FUEL',
-    hdrTyre = 'TYRE', hdrTel = 'TEL', bestSess = 'Best of the session', bestAll = 'Best of all times', delta = 'A-B', airRoad = 'AIR/TRACK', grip = 'GRIP', life = 'LIFE %',
+    hdrTyre = 'TYRE', hdrTel = 'TEL', bestSess = 'Best of the session', bestAll = 'Best of all times', bestServer = 'Best of the server', idealSess = 'Ideal of the session',
+    stint = 'STINT', nLaps = '%d laps', ideal = 'Ideal', best = 'Best', hdrLife = 'TYRES %', hdrStop = 'STOP', hdrCuts = 'CUTS', hdrCrash = 'CONT.',
+    legend = { 'V valid lap · PIT, P through the pit lane · FUEL litres · TYRE compound · TYRES % life: FL FR RL RR', 'STOP stop at the pits · CUTS track cuts · CONT. contacts · PEN. penalty · TEL, T telemetry · M marks the reference' },
+    penName = { SG = 'Stop & go', DSQ = 'Disqualified' }, hdrPen = 'PEN.',
+    wxAir = 'Air', wxRoad = 'Track', wxHum = 'Humidity', wxRain = 'Rain', wxGrip = 'Grip', delta = 'A-B', airRoad = 'AIR/TRACK', grip = 'GRIP', life = 'LIFE %',
     km = 'AGE L/KM', press = 'PRESSURE', noTrace = 'This lap has no telemetry in the base', loading = 'Reading the base...',
     down = 'The base did not answer - click to ask again', none = 'Nothing in the base with these filters' },
   teleChannels = { thr = 'THR', brk = 'BRK', clu = 'CLU', str = 'STR', spd = 'SPD', gear = 'GEAR', glat = 'G LAT', glon = 'G LON' },
@@ -690,7 +694,7 @@ local TEXTS = {
   flagChequeredLine = 'Session finished',
   relPit = '  PIT',
   hdr = { pos = 'P', classPos = 'CL', driver = 'DRIVER', class = 'CLASS', laps = 'LAPS', gap = 'GAP', int = 'INT', best = 'BEST', pit = 'PIT',
-    sr = 'SR', pts = 'PTS', time = 'TIME', sky = 'SKY', air = 'AIR', track = 'TRACK', hum = 'HUM.', avg = 'AVG', lap = 'LAP', delta = 'DELTA', precip = 'PRECIP.' },
+    sr = 'SR', pts = 'PTS', time = 'TIME', sky = 'SKY', air = 'AIR', track = 'TRACK', hum = 'HUM.', avg = 'AVG', lap = 'LAP', delta = 'DELTA', precip = 'PRECIP.', stop = 'STP', pen = 'PEN' },
   wxProb = '%d%%',
   plusExtraLap = ' + extra lap', flagLastLapExtra = 'LAST LAP (EXTRA LAP)', flagLastLapOver = 'LAST LAP (TIME OVER)',
   lapsShort = '%d L', lapTag = { cut = 'invalid', pit = 'pit', best = 'best' },
@@ -808,6 +812,16 @@ local BLACK_FLAG = ac.PenaltyType.BlackFlag
 local TELEPORT_TO_PITS = ac.PenaltyType.TeleportToPits
 local NONE = ac.PenaltyType.None
 local GAME_DT = 2
+local function posList(v)
+  local out = {}
+  for n in tostring(v or ''):gmatch('[^/]+') do
+    local p = math.floor(tonumber(n) or 0)
+    if p > 0 then out[#out + 1] = p end
+  end
+  return out
+end
+local function pitsOf(l) return #l > 0 and table.concat(l, '/') or '0' end
+local function staffPitsText(p) return 'org:' .. pitsOf(p.org) .. ' | tv:' .. pitsOf(p.tv) end
 local function build(src)
   local OLD = {
     penaltyMode = { 'control', 'mode', nil, 'CSP' }, announce = { 'control', 'announce', nil, 0 },
@@ -1119,7 +1133,7 @@ local function build(src)
   c.raceProcedure.procedure = c.raceProcedure.procedure1
   c.staffSteamIDs = tostring(K('staffSteamIDs') or '')
   local staffPits = theme('staffPits') or {}
-  c.staffPits = { org = math.max(math.floor(tonumber(staffPits.org) or 0), 0), tv = math.max(math.floor(tonumber(staffPits.tv) or 0), 0) }
+  c.staffPits = { org = posList(staffPits.org), tv = posList(staffPits.tv) }
   c.broadcastSteamIDs = tostring(K('broadcastSteamIDs') or '')
   c.classesText = tostring(src('classes') or '')
   c.themesOnServer = {}
@@ -1143,12 +1157,13 @@ local function build(src)
     lines[#lines + 1] = string.format('kmr: points=%s ratingDsq=%s', tostring(kmrPoints.limit), kmrRating.on and tostring(kmrRating.dsqAt) or '-')
     lines[#lines + 1] = 'base: realName=' .. (c.realName and 1 or 0) .. ' offline=' .. c.realNameOffline .. ' downMax=' .. c.baseDownMax
       .. ' downPractice=' .. c.baseDownPractice
-    lines[#lines + 1] = string.format('staffPits: org=%d tv=%d', c.staffPits.org, c.staffPits.tv)
+    lines[#lines + 1] = 'staffPits: org=' .. pitsOf(c.staffPits.org) .. ' tv=' .. pitsOf(c.staffPits.tv)
     return lines
   end
   return c
 end
 local config = build(function(key) return cfg[key] end)
+config.posList, config.staffPitsText = posList, staffPitsText
 local function zoneReasons()
   for _, z in ipairs(config.cutZones) do TEXTS.reason[z.category] = string.format(TEXTS.cutZoneReason, tonumber(z.category:match('%d+'))) end
 end
@@ -1187,6 +1202,7 @@ do
       return table.concat(out, ' | ')
     end)
     into(config, c)
+    config.staffPits.org, config.staffPits.tv = c.staffPits.org, c.staffPits.tv
     zoneReasons()
     config.rolesNow()
   end
@@ -1454,9 +1470,11 @@ function CarRead.isStaff(i)
     idx = {}
     local slotOf = ac.getCar.serverSlot
     if slotOf then
-      for what, n in pairs(config.staffPits) do
-        local c = n > 0 and slotOf(n - 1) or nil
-        if c then idx[c.index] = { what = what, n = n } end
+      for what, list in pairs(config.staffPits) do
+        for _, n in ipairs(list) do
+          local c = slotOf(n - 1)
+          if c then idx[c.index] = { what = what, n = n } end
+        end
       end
     end
     CarRead.staffIndex = idx
@@ -1513,6 +1531,13 @@ function CarRead.gridPlace(i)
   return idx[i]
 end
 function CarRead.num(v) return tonumber(v) or 0 end
+function CarRead.secText(sec, dec, sign)
+  local p = 10 ^ dec
+  local v = math.floor(math.abs(sec) * p + 0.5) / p
+  local t = v < 60 and string.format('%.' .. dec .. 'f', v) or string.format('%d:%0' .. (dec + 3) .. '.' .. dec .. 'f', math.floor(v / 60), v % 60)
+  if sign == true then return (sec < 0 and '-' or '+') .. t end
+  return sign and (sign .. t) or t
+end
 function CarRead.flagOn(v)
   return v == true or (type(v) == 'number' and v ~= 0)
     or (type(v) == 'string' and v ~= '' and v ~= '0' and v:lower() ~= 'false')
@@ -2569,7 +2594,7 @@ do
   }
   function B.ownNew()
     B.own = { record = false, track = false, busy = {}, nextT = {}, answerT = nil }
-    B.swapLine, B.lapsBase = nil, nil
+    B.swapLine, B.lapsBase, B.stintBase = nil, nil, nil
   end
   function B.ownDone() return B.own.record and B.own.track end
   function B.ownUpdate()
@@ -2590,8 +2615,11 @@ do
           for line in tostring(res.body or ''):gmatch('[^\r\n]+') do
             local steam, since, parked, written, win = line:match('^SWAP|(%d*)|(%d+)|(%d)|(%d)|?(%d?)$')
             local lapsBody = line:match('^LAPS|(.*)$')
+            local stintBody = line:match('^STINT|(.*)$')
             local clockText = line:match('^CLOCK|(.*)$')
-            if lapsBody then
+            if stintBody then
+              B.stintBase = stintBody
+            elseif lapsBody then
               B.lapsBase = lapsBody
             elseif clockText then
               if B.clockRead then B.clockRead(clockText) end
@@ -2795,10 +2823,10 @@ do
       table.sort(parts)
       local joined = table.concat(parts, '\n')
       if joined ~= config.keysText then
-        local pitsWas = config.staffPits.org .. ':' .. config.staffPits.tv
+        local pitsWas = config.staffPitsText(config.staffPits)
         config.over(texts, joined)
         ac.log('race-control: keys of the script from the online tool: ' .. (#parts > 0 and table.concat(parts, '; ') or 'none'))
-        if config.staffPits.org .. ':' .. config.staffPits.tv ~= pitsWas then staffAgain() end
+        if config.staffPitsText(config.staffPits) ~= pitsWas then staffAgain() end
       end
       local hz = tonumber(body:match('sendHz=(%d+)'))
       if hz and hz > 0 and hz ~= config.sendHz then
@@ -2818,11 +2846,11 @@ do
           config[field] = v
         end
       end
-      local org, tv = tonumber(body:match('staffOrg=(%d+)')), tonumber(body:match('staffTv=(%d+)'))
-      if org and tv and (org ~= config.staffPits.org or tv ~= config.staffPits.tv) then
-        ac.log(string.format('race-control: staffPits from the tool of the organization: org:%d | tv:%d (key of the server: org:%d | tv:%d)', org, tv,
-          config.staffPits.org, config.staffPits.tv))
-        config.staffPits.org, config.staffPits.tv = org, tv
+      local org, tv = body:match('staffOrg=([%d/]+)'), body:match('staffTv=([%d/]+)')
+      local pits = org and tv and { org = config.posList(org), tv = config.posList(tv) }
+      if pits and config.staffPitsText(pits) ~= config.staffPitsText(config.staffPits) then
+        ac.log(string.format('race-control: staffPits from the tool of the organization: %s (key of the server: %s)', config.staffPitsText(pits), config.staffPitsText(config.staffPits)))
+        config.staffPits.org, config.staffPits.tv = pits.org, pits.tv
         staffAgain()
       end
       local bcId = body:match('bcId=([%w%+/=_%-]+)')
@@ -4039,7 +4067,7 @@ do
   local BINS = 200
   local CRASH_GAP = 1
   local SPIN_SETTLE = 1
-  local function newInfo() return { crash = 0, cut = 0, spin = 0, pen = {} } end
+  local function newInfo() return { crash = 0, cut = 0, cutS = '', spin = 0, pen = {} } end
   sessionPart('lap', Lap, function()
     return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false, form = false, closed = false }, last = SESSION_NONE, others = {},
       best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false, baseDone = false, baseBusy = false, baseTries = 0,
@@ -4083,6 +4111,8 @@ do
     if Lap.marks[kind] == nil then return end
     if kind == 'cut' then
       P.info.cut = P.info.cut + 1
+      local q = tostring(P.secN + 1)
+      if not P.info.cutS:find(q, 1, true) then P.info.cutS = P.info.cutS .. q end
       if Lap.onCut then Lap.onCut() end
     end
     if Lap.marks[kind] then return end
@@ -4204,7 +4234,8 @@ do
     end
     local m = Lap.marks
     Lap.last = { lap = Lap.number(), ms = ms, s = s, valid = Lap.valid(m), why = why(m), pit = viaPit == true,
-      out = P.pit.started or P.pit.left, inLap = P.pit.entered or viaPit == true, outside = m.form or m.closed, crash = P.info.crash, cut = P.info.cut, spin = P.info.spin,
+      out = P.pit.started or P.pit.left, inLap = P.pit.entered or viaPit == true, outside = m.form or m.closed, crash = P.info.crash, cut = P.info.cut, cutS = P.info.cutS,
+      spin = P.info.spin,
       pen = table.concat(P.info.pen, '/'), fuel = CarRead.num(car.fuel), t = t }
     local L = Lap.last
     if L.valid and ms > 0 and not P.broken and (Lap.best.ms == 0 or ms < Lap.best.ms) then
@@ -4420,6 +4451,8 @@ do
     local c, d = R.cls[R.clsOf[i] or ''], R.drv[key]
     return Lap.codeOf(ms, c and c[q], d and d[q], valid)
   end
+  function Lap.cutCode(l, q) return tostring(l.cutS or ''):find(tostring(q), 1, true) and 'r' or 'w' end
+  function Lap.lapSecCode(i, key, l, q, ms) return l.valid and Lap.secCode(i, key, q, ms, true) or Lap.cutCode(l, q) end
   function Lap.lapCode(i, key, ms, valid)
     local R = Lap.rec
     return Lap.codeOf(ms, R.lapCls[R.clsOf[i] or ''], R.lapDrv[key], valid)
@@ -7317,6 +7350,72 @@ do
     decide(car)
   end
 end
+Stint = {}
+sessionPart('stint', Stint, function() return { ends = {}, stops = {}, startMs = -1, v = 0 } end)
+do
+  function Stint.ended(p)
+    if PitRecord.notOut or state.pitPassReverse or p.reverseLogged then return false end
+    if #(p.paid or {}) > 0 and not p.service and not p.jumped then return false end
+    if p.stop or p.service then return true end
+    if p.entryMs == nil or p.restored then return true end
+    if p.redParked or p.held then return p.repair == true end
+    return p.jumped == true
+  end
+  local function keep(lap, stop)
+    local k = math.max(lap, 1)
+    Stint.stops[k] = (Stint.stops[k] and Stint.stops[k] .. ' ' or '') .. tostring(stop)
+  end
+  function Stint.close(p)
+    local n, on = Lap.number(), Stint.ended(p)
+    if p.stop then keep(n, p.stop) end
+    if on then
+      Stint.ends[n] = true
+      Stint.startMs = serverTimeMs()
+    end
+    Stint.v = Stint.v + 1
+    return on
+  end
+  function Stint.take(body)
+    local start, ends, stops = tostring(body or ''):match('^(%-?%d+)|([%d,]*)|(.*)$')
+    if not start then return end
+    for v in ends:gmatch('%d+') do Stint.ends[tonumber(v)] = true end
+    for lap, v in stops:gmatch('(%d+):([%d ]+)') do Stint.stops[tonumber(lap)] = Stint.stops[tonumber(lap)] or v end
+    Stint.startMs = math.max(Stint.startMs, tonumber(start))
+    Stint.v = Stint.v + 1
+  end
+  local function broke(a, b)
+    for k = a.lap, b.lap - 1 do if Stint.ends[k] then return true end end
+    return false
+  end
+  function Stint.list(laps, cut)
+    local out = {}
+    for i, l in ipairs(laps) do
+      local cur = out[#out]
+      if not cut then l.stop = Stint.stops[l.lap] end
+      if not cur or cur.driver ~= l.driver or (cut or broke)(laps[i - 1], l) then
+        cur = { n = #out + 1, driver = l.driver, laps = {}, total = 0, stops = 0, cuts = 0, crashes = 0, pens = 0 }
+        out[#out + 1] = cur
+      end
+      cur.laps[#cur.laps + 1] = l
+      cur.total = cur.total + l.ms
+      for _ in tostring(l.stop or ''):gmatch('%d+') do cur.stops = cur.stops + 1 end
+      cur.cuts, cur.crashes = cur.cuts + (tonumber(l.cut) or 0), cur.crashes + (tonumber(l.crash) or 0)
+      for _ in tostring(l.pen or ''):gmatch('[^/]+') do cur.pens = cur.pens + 1 end
+    end
+    for _, st in ipairs(out) do
+      st.b = Lap.bestOf(st.laps)
+      st.best, st.ideal = st.b.ms, Stint.ideal(st.b)
+    end
+    return out
+  end
+  function Stint.ideal(b)
+    local sum, q = 0, 0
+    while b.s[q] do sum, q = sum + b.s[q], q + 1 end
+    return q > 0 and sum or nil
+  end
+  function Stint.fresh(last) return last ~= nil and Stint.ends[last.lap] == true end
+  function Stint.ms() return Stint.startMs >= 0 and math.max(serverTimeMs() - Stint.startMs, 0) or nil end
+end
 PitStops = {}
 sessionPart('pitStops', PitStops, function()
   return { passInWindow = false, passInStopWindow = false, wasInPitlane = SESSION_NONE, pass = SESSION_NONE, line = 0, otherInPitlane = {},
@@ -7365,12 +7464,14 @@ do
   local function openPass(jumped, entryMs)
     PitStops.line = PitStops.line + 1
     PitStops.pass = { id = PitStops.line, entryMs = entryMs, jumped = jumped, service = nil, paid = {}, stop = nil,
-      raceFlag = raceFlag(), driverFlag = driverFlag(), snap = nil, held = state.hold ~= nil }
+      raceFlag = raceFlag(), driverFlag = driverFlag(), snap = nil, held = state.hold ~= nil,
+      repair = jumped and repairSeconds(state.tow.damage) > 0 or nil }
   end
   local function closePass()
     local p = PitStops.pass
     PitStops.pass = nil
     if not p then return end
+    Stint.close(p)
     rcLog(TEXTS.rc.pit, string.format(TEXTS.pitStopRowText, p.id, p.stop and tostring(p.stop) or '-',
       p.entryMs and raceTime(p.entryMs) or TEXTS.pitStopRowInPits, raceTime(Clock.ms('raw')),
       p.service or TEXTS.pitStopRowNoService, #p.paid > 0 and table.concat(p.paid, ', ') or TEXTS.pitStopRowNoPenalty,
@@ -11068,16 +11169,18 @@ do
     RaceTable.rows, RaceTable.byIndex = rows, byIndex
   end
   function RaceTable.progress(r) return r.laps + r.spline end
-  local function infoText(l)
-    return string.format('o%d:i%d:x%d:c%d:s%d:w%s:p%s:f%.1f:l%s', l.out and 1 or 0, l.inLap and 1 or 0, l.crash or 0, l.cut or 0,
-      l.spin or 0, l.why or '', (tostring(l.pen or ''):gsub('[,;|:]', ' ')), l.fuel or 0, (tostring(l.life or ''):gsub(',', '/')))
+  local function infoText(l, base)
+    return string.format('o%d:i%d:x%d:c%d:s%d:w%s:p%s:f%.1f:l%s:k%s', l.out and 1 or 0, l.inLap and 1 or 0, l.crash or 0, l.cut or 0,
+      l.spin or 0, l.why or '', (tostring(l.pen or ''):gsub('[,;|:]', ' ')), l.fuel or 0, (tostring(l.life or ''):gsub(',', '/')), l.cutS or '')
+      .. (base and string.format(':u%s:r%s:d%s:v%s', l.hum and string.format('%.0f', l.hum) or '', l.rain and string.format('%.0f', l.rain) or '', l.wdir or '', l.wind or '') or '')
   end
   RaceTable.infoText = infoText
   local function infoApply(l, text)
     for k, v in tostring(text or ''):gmatch('(%a)([^:]*)') do
       if k == 'o' then l.out = v == '1' elseif k == 'i' then l.inLap = v == '1' elseif k == 'x' then l.crash = tonumber(v) or 0
       elseif k == 'c' then l.cut = tonumber(v) or 0 elseif k == 's' then l.spin = tonumber(v) or 0 elseif k == 'w' then l.why = v
-      elseif k == 'p' then l.pen = v elseif k == 'f' then l.fuel = tonumber(v) elseif k == 'l' then l.life = v end
+      elseif k == 'p' then l.pen = v elseif k == 'f' then l.fuel = tonumber(v) elseif k == 'l' then l.life = v elseif k == 'k' then l.cutS = v
+      elseif k == 'u' then l.hum = tonumber(v) elseif k == 'r' then l.rain = tonumber(v) end
     end
   end
   local function lapsSave()
@@ -11321,15 +11424,23 @@ do
       RecordSync.base.lapsBase = nil
       lapsJoin(fromBase)
     end
+    local stintBase = RecordSync.base.stintBase
+    if stintBase and loaded then
+      RecordSync.base.stintBase = nil
+      Stint.take(stintBase)
+    end
     if car.isInPitlane then touched = true end
     local L = Lap.last
     if lineFrame and L and L.ms > 0 and L.lap ~= RaceTable.lastLap then
       RaceTable.lastLap = L.lap
       local laps = RaceTable.laps
       laps[#laps + 1] = { lap = L.lap, ms = L.ms, valid = L.valid, pit = L.pit, s = L.s, why = L.why, out = L.out, inLap = L.inLap,
-        crash = L.crash, cut = L.cut, spin = L.spin, pen = L.pen, fuel = L.fuel, life = L.life,
+        crash = L.crash, cut = L.cut, cutS = L.cutS, spin = L.spin, pen = L.pen, fuel = L.fuel, life = L.life,
         driver = tostring(ac.getDriverName(0) or ''):gsub('[,;|]', ' ') }
       laps[#laps].touched = touched
+      local wx = RecordSync.base.wxNow and RecordSync.base.wxNow()
+      laps[#laps].hum, laps[#laps].rain = wx and wx.hum or nil, CarRead.num(sim.rainIntensity) * 100
+      if wx then laps[#laps].wdir, laps[#laps].wind = string.format('%.0f', wx.dir % 360), string.format('%.0f-%.0f', wx.vmin * 3.6, wx.vmax * 3.6) end
       local wl = {}
       for w = 0, 3 do
         local lf = CarRead.tyreLife(car, w, state.tyreLineKm[w] or 0)
@@ -11356,7 +11467,7 @@ do
         state.lapOut[#state.lapOut + 1] = string.format('L7|%d|%d|%d|%d|%s|%.2f|%.3f|%s|%s|%.1f|%.1f|%.0f|%s|%s|%s|%s|%s|%d|%.2f|%s|%s', l.lap, l.ms,
           l.valid and 1 or 0, l.pit and 1 or 0, table.concat(l.s, '/'), CarRead.num(car.fuel), CarRead.num(car.fuelPerLap),
           table.concat(life, ','), table.concat(vkm, ','), CarRead.num(sim.ambientTemperature), CarRead.num(sim.roadTemperature),
-          CarRead.num(sim.roadGrip) * 100, RecordSync.base.trackKey(), RecordSync.base.carKey(), infoText(l), compound, table.concat(press, ','),
+          CarRead.num(sim.roadGrip) * 100, RecordSync.base.trackKey(), RecordSync.base.carKey(), infoText(l, true), compound, table.concat(press, ','),
           math.floor(L and L.t or 0), CarRead.num(sim.rainWetness), table.concat(tl, ','), l.driver)
         local data, n, dt = LapTrace.close(l.ms)
         if data then RecordSync.base.traceAdd(l.lap, data, n, dt) end
@@ -12126,7 +12237,7 @@ do
   Desktop.NAV = NAV
   local function trackDefault()
     return { standings = { x = -697, y = -450, mode = 'visible' }, laptime = { x = -1564, y = 30, mode = 'visible' },
-      relative = { x = -1174, y = 290, mode = 'visible' }, telemetry = { x = 350, y = -78, mode = 'visible' },
+      relative = { x = -1156, y = 290, mode = 'visible' }, telemetry = { x = 350, y = -78, mode = 'visible' },
       delta = { x = 466, y = -237, mode = 'visible' }, pitbox = { x = 0, y = 0, mode = 'visible' },
       race = { x = 1524, y = 0, mode = 'visible' },
       carradar = { x = 0, y = 0, mode = 'auto' } }
@@ -14339,8 +14450,8 @@ local drawRaceScreens = (function()
   local ORANGE = rgbm(1, 0.54, 0.11, 1)
   local ROW = 13
   local FS = 10
-  local PLACE = { relative = { 1572, 380, 330 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 210 },
-    race = { 48, 110, 300 }, laps = { 48, 420, 330 }, standings = { 745, 560, 516 }, event = { 770, 200, 380 },
+  local PLACE = { relative = { 1554, 380, 348 }, laptime = { 1612, 640, 260 }, delta = { 860, 880, 230 },
+    race = { 48, 110, 300 }, laps = { 48, 420, 370 }, standings = { 745, 560, 532 }, event = { 770, 200, 380 },
     weather = { 48, 620, 300 }, map = { 1572, 110, 300 }, telemetry = { 48, 890, 616 }, share = { 1300, 30, 250 }, cockpit = { 1300, 110, 260 }, perf = { 1300, 400, 130 }, replay = { 1300, 640, 250 },
     calc = { 380, 110, 380 } }
   local filter = Desktop.filter
@@ -14349,16 +14460,16 @@ local drawRaceScreens = (function()
     local s = ms / 1000
     return string.format('%d:%06.3f', math.floor(s / 60), s % 60)
   end
-  local function gapText(sec, laps, secFmt, lapsFmt, dash)
+  local function gapText(sec, laps, sign, dec, lapsFmt, dash)
     if laps and laps >= 1 then return string.format(lapsFmt, laps) end
-    if sec then return string.format(secFmt, sec) end
+    if sec then return CarRead.secText(sec, dec, sign) end
     return dash
   end
   local function hms(ms)
     local t = math.max(math.floor((ms or 0) / 1000), 0)
     return string.format('%d:%02d:%02d', math.floor(t / 3600), math.floor(t / 60) % 60, t % 60)
   end
-  local function secs(ms) return (ms and ms > 0) and string.format('%.3f', ms / 1000) or '-' end
+  local function secs(ms) return (ms and ms > 0) and CarRead.secText(ms / 1000, 3) or '-' end
   local function shown(g, auto)
     local m = Drag.mode(g)
     return m == 'visible' or (m == 'auto' and auto)
@@ -14426,8 +14537,8 @@ local drawRaceScreens = (function()
     for _, c in ipairs(cells) do
       local font = c[5] or FONT_MONO
       local col = c[1] == '-' and COLOR_OFF or (c[3] or COLOR_TITLE)
-      if c[4] then drawTextRight(c[1], font, FS * s, p1.x + c[2] * s, y, col)
-      else drawText(c[1], font, FS * s, TMP.a:set(p1.x + c[2] * s, y), col) end
+      if c[4] then drawTextRight(c[1], font, FS * s, p1.x + c[2] * s, y + (c[6] or 0), col)
+      else drawText(c[1], font, FS * s, TMP.a:set(p1.x + c[2] * s, y + (c[6] or 0)), col) end
     end
   end
   local function carClick(index, a, b)
@@ -14468,7 +14579,7 @@ local drawRaceScreens = (function()
       local pos = filter.relative == 'ALL' and ('P' .. r.pos) or ('C' .. tostring(r.classPos or '-'))
       local gap, laps = '+0.0', ''
       if not mine then
-        gap = e.sec and string.format('%+.1f', e.d > 0 and -e.sec or e.sec) or ''
+        gap = e.sec and CarRead.secText(e.sec, 1, e.d > 0 and '-' or '+') or ''
         laps = e.laps == nil and '-' or (e.laps ~= 0 and ((e.laps > 0 and '+' or '') .. string.format(TEXTS.lapsShort, e.laps))) or ''
       end
       carClick(r.index, vec2(p1.x + 40 * s, y), vec2(p1.x + 248 * s, y + ROW * s))
@@ -14478,7 +14589,7 @@ local drawRaceScreens = (function()
         { r.name .. (r.inPit and TEXTS.relPit or ''), 76, col, false, mine and FONT_TITLE or FONT_TEXT },
         { r.class or '', 250, COLOR_OFF, true },
         { laps, 282, col, true },
-        { gap, 316, col, true },
+        { gap, 334, col, true },
       })
       y = y + ROW * s
     end
@@ -14504,8 +14615,8 @@ local drawRaceScreens = (function()
     local H = TEXTS.hdr
     row(p1, y, s, { { H.pos, 32, COLOR_AXIS, true }, { H.classPos, 52, COLOR_AXIS, true }, { '#', 58, COLOR_AXIS },
       { H.driver, 88, COLOR_AXIS }, { H.class, 214, COLOR_AXIS }, { H.laps, 270, COLOR_AXIS, true },
-      { H.gap, 306, COLOR_AXIS, true }, { H.int, 346, COLOR_AXIS, true }, { H.best, 404, COLOR_AXIS, true },
-      { H.pit, 430, COLOR_AXIS, true }, { H.sr, 462, COLOR_AXIS, true }, { H.pts, 498, COLOR_AXIS, true } })
+      { H.gap, 316, COLOR_AXIS, true }, { H.int, 362, COLOR_AXIS, true }, { H.best, 420, COLOR_AXIS, true },
+      { H.pit, 446, COLOR_AXIS, true }, { H.sr, 478, COLOR_AXIS, true }, { H.pts, 514, COLOR_AXIS, true } })
     y = y + ROW * s
     local leader = list[1]
     local sessionBest = Lap.sessionBest()
@@ -14513,10 +14624,10 @@ local drawRaceScreens = (function()
     local function gapTo(r, front, lead)
       if not front or r == front then return '-' end
       if sim.raceSessionType == ac.SessionType.Race then
-        if lead then return gapText(byClass and r.cLeadS or r.leadS, byClass and r.cLeadL or r.leadL, '%.1f', TEXTS.lapsShort, '-') end
-        return gapText(byClass and r.cGapS or r.gapS, byClass and r.cGapL or r.gapL, '%.1f', TEXTS.lapsShort, '-')
+        if lead then return gapText(byClass and r.cLeadS or r.leadS, byClass and r.cLeadL or r.leadL, nil, 1, TEXTS.lapsShort, '-') end
+        return gapText(byClass and r.cGapS or r.gapS, byClass and r.cGapL or r.gapL, nil, 1, TEXTS.lapsShort, '-')
       end
-      return string.format('%.1f', math.abs(ac.getGapBetweenCars(r.index, front.index)))
+      return CarRead.secText(ac.getGapBetweenCars(r.index, front.index), 1)
     end
     for i = first, last do
       local r = list[i]
@@ -14537,12 +14648,12 @@ local drawRaceScreens = (function()
       row(p1, y, s, {
         { tostring(r.pos), 32, col, true }, { tostring(r.classPos or '-'), 52, COLOR_DIM, true },
         { '#' .. r.number, 58, col }, { fitText(r.name, me and FONT_TITLE or FONT_TEXT, FS * s, seal and (120 * s - seal.w - 4 * s) or 120 * s), 88, col, false, me and FONT_TITLE or FONT_TEXT },
-        { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 270, col, true }, { gapTo(r, leader, true), 306, col, true },
-        { gapTo(r, list[i - 1]), 346, col, true },
-        { lapTime(r.best), 404, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
-        { tostring(r.stops or 0), 430, col, true },
-        { (function() local _, sr = kmrOf(r); return sr and Audit.num(sr) or '-' end)(), 462, col, true },
-        { (function() local pts = kmrOf(r); return pts and tostring(pts) or '-' end)(), 498, col, true },
+        { r.class or '', 214, COLOR_OFF }, { tostring(r.laps), 270, col, true }, { gapTo(r, leader, true), 316, col, true },
+        { gapTo(r, list[i - 1]), 362, col, true },
+        { lapTime(r.best), 420, (r.best > 0 and r.best == sessionBest) and PURPLE or col, true },
+        { tostring(r.stops or 0), 446, col, true },
+        { (function() local _, sr = kmrOf(r); return sr and Audit.num(sr) or '-' end)(), 478, col, true },
+        { (function() local pts = kmrOf(r); return pts and tostring(pts) or '-' end)(), 514, col, true },
       })
       if seal then
         local x2, y1 = p1.x + 208 * s, y + (ROW * s - seal.h) / 2
@@ -14648,7 +14759,7 @@ local drawRaceScreens = (function()
     ui.drawSimpleLine(vec2(mid, y - 2 * s), vec2(mid, y + 9 * s), COLOR_TITLE, 1)
     y = y + 10 * s
     if Lap.invalidNow() then drawText(TEXTS.scrInvalid, FONT_MONO, 9 * s, TMP.a:set(bx1, y + 2 * s), RED) end
-    drawTextRight(d and string.format('%+.3f', d) or '-', FONT_MONO, 13 * s, bx2, y, not d and COLOR_OFF or d > 0 and RED or GREEN)
+    drawTextRight(d and CarRead.secText(d, 3, true) or '-', FONT_MONO, 13 * s, bx2, y, not d and COLOR_OFF or d > 0 and RED or GREEN)
     y = y + 15 * s
     local cells = { { TEXTS.scrDeltaSectors, 14, COLOR_DIM } }
     local ds = Delta.sectors(ref)
@@ -14656,7 +14767,7 @@ local drawRaceScreens = (function()
     local bad = Lap.invalidNow()
     for k = 0, 2 do
       local v = ds[k]
-      cells[#cells + 1] = { v and string.format('%+.2f', v) or '-', 104 + k * 46, v and cur[k] and secColor(Lap.secCode(0, Lap.keyOf(0), k + 1, cur[k], not bad)) or nil, true }
+      cells[#cells + 1] = { v and CarRead.secText(v, 2, true) or '-', 104 + k * 56, v and cur[k] and secColor(Lap.secCode(0, Lap.keyOf(0), k + 1, cur[k], not bad)) or nil, true }
     end
     row(p1, y, s, cells)
     Drag.icons('delta', p1, p2, s)
@@ -15142,6 +15253,7 @@ local drawRaceScreens = (function()
     return segs[2] or segs[1]
   end
   Desktop.wxNow = Radar.now
+  RecordSync.base.wxNow = Radar.now
   local RADAR_BACK, RADAR_STEPS = 24, 60
   local function radarShader()
     local w, d = {}, {}
@@ -15589,28 +15701,14 @@ float4 main(PS_IN pin) {
     return p2.y
   end
   local LapsView = { big = false, sel = nil, cmp = nil, comparing = false, driver = 'ALL', rows = 10 }
-  local function stintsOf(laps)
-    local stints = {}
-    for _, l in ipairs(laps) do
-      local cur = stints[#stints]
-      if not cur or cur.driver ~= l.driver then cur = { driver = l.driver, laps = {} }; stints[#stints + 1] = cur end
-      cur.laps[#cur.laps + 1] = l
-    end
-    for i, st in ipairs(stints) do
-      st.n, st.total = i, 0
-      for _, l in ipairs(st.laps) do st.total = st.total + l.ms end
-      st.best = Lap.bestOf(st.laps).ms
-    end
-    return stints
-  end
   local stCache = { n = -1 }
   local function stintsNow()
     local laps = RaceTable.laps
     local last = laps[#laps]
     local c = stCache
-    if c.list ~= laps or c.n ~= #laps or c.last ~= last then
-      c.list, c.n, c.last = laps, #laps, last
-      c.stints, c.carBest = stintsOf(laps), Lap.bestOf(laps)
+    if c.list ~= laps or c.n ~= #laps or c.last ~= last or c.v ~= Stint.v then
+      c.list, c.n, c.last, c.v = laps, #laps, last, Stint.v
+      c.stints, c.carBest = Stint.list(laps), Lap.bestOf(laps)
     end
     return c.stints, c.carBest
   end
@@ -15643,7 +15741,7 @@ float4 main(PS_IN pin) {
       LapsView.sel = sel.n
     end
     local cmp = LapsView.cmp and all[LapsView.cmp] or nil
-    local width = cmp and 760 or 600
+    local width = cmp and 848 or 674
     local n = LapsView.rows
     local p1, p2, y = frame('laps', w, h, s, n + 1.4, string.format(TEXTS.scrLapsCar, tostring(CarRead.number(0))), nil, width)
     local x = p2.x - 14 * s
@@ -15664,7 +15762,7 @@ float4 main(PS_IN pin) {
     end)
     button(string.format(TEXTS.scrDriverSel, LapsView.driver), true, function() Desktop.lapsStep(1) end)
     row(p1, y, s, { { '#', 14, COLOR_AXIS }, { TEXTS.hdr.driver, 30, COLOR_AXIS }, { TEXTS.hdr.laps, 128, COLOR_AXIS, true },
-      { TEXTS.hdr.best, 180, COLOR_AXIS, true }, { TEXTS.hdr.avg, 228, COLOR_AXIS, true } })
+      { TEXTS.hdr.best, 180, COLOR_AXIS, true }, { TEXTS.hdr.avg, 238, COLOR_AXIS, true } })
     local yl = y + ROW * s
     local shown = 0
     for i = #stints, 1, -1 do
@@ -15673,8 +15771,8 @@ float4 main(PS_IN pin) {
       local on = st == sel
       local col = on and YELLOW or (st == cmp and BLUE or COLOR_TITLE)
       row(p1, yl, s, { { tostring(st.n), 14, col }, { st.driver, 30, col, false, FONT_TEXT }, { tostring(#st.laps), 128, col, true },
-        { lapTime(st.best), 180, col, true }, { lapTime(#st.laps > 0 and st.total / #st.laps or 0), 228, col, true } })
-      Drag.clickable(vec2(p1.x + 10 * s, yl), vec2(p1.x + 232 * s, yl + ROW * s), function()
+        { lapTime(st.best), 180, col, true }, { lapTime(#st.laps > 0 and st.total / #st.laps or 0), 238, col, true } })
+      Drag.clickable(vec2(p1.x + 10 * s, yl), vec2(p1.x + 242 * s, yl + ROW * s), function()
         if LapsView.comparing and st ~= sel then LapsView.cmp = st.n else LapsView.sel = st.n end
       end)
       yl = yl + ROW * s
@@ -15685,13 +15783,14 @@ float4 main(PS_IN pin) {
     local function lapCells(l, x0)
       local col = secColor(Lap.lapCode(0, Lap.keyOf(0, l.driver), l.ms, l.valid))
       return { lapTime(l.ms), x0, col, true }, { not l.valid and TEXTS.lapTag.cut or l.pit and TEXTS.lapTag.pit or (l.ms == best and TEXTS.lapTag.best)
-        or string.format('%+.3f', (l.ms - best) / 1000), x0 + 50, not l.valid and RED or (l.ms == best and GREEN) or RED, true }
+        or CarRead.secText((l.ms - best) / 1000, 3, true), x0 + 64, not l.valid and RED or (l.ms == best and GREEN) or RED, true }
     end
-    local head = { { TEXTS.hdr.lap, 246, COLOR_AXIS }, { TEXTS.hdr.time, 336, COLOR_AXIS, true }, { TEXTS.hdr.delta, 386, COLOR_AXIS, true },
-      { 'S1', 434, COLOR_AXIS, true }, { 'S2', 482, COLOR_AXIS, true }, { 'S3', 530, COLOR_AXIS, true } }
+    local head = { { TEXTS.hdr.lap, 256, COLOR_AXIS }, { TEXTS.hdr.time, 346, COLOR_AXIS, true }, { TEXTS.hdr.delta, 410, COLOR_AXIS, true },
+      { 'S1', 468, COLOR_AXIS, true }, { 'S2', 526, COLOR_AXIS, true }, { 'S3', 584, COLOR_AXIS, true },
+      { TEXTS.hdr.stop, 612, COLOR_AXIS, true }, { TEXTS.hdr.pen, 660, COLOR_AXIS, true } }
     if cmp then
-      head[#head + 1] = { string.format(TEXTS.scrStintShort, cmp.n), 640, BLUE, true }
-      head[#head + 1] = { TEXTS.hdr.delta, 690, COLOR_AXIS, true }
+      head[#head + 1] = { string.format(TEXTS.scrStintShort, cmp.n), 714, BLUE, true }
+      head[#head + 1] = { TEXTS.hdr.delta, 778, COLOR_AXIS, true }
     end
     row(p1, y, s, head)
     local yr = y + ROW * s
@@ -15699,15 +15798,18 @@ float4 main(PS_IN pin) {
       local first = math.max(#sel.laps - n + 1, 1)
       for k = #sel.laps, first, -1 do
         local l = sel.laps[k]
-        local t, d = lapCells(l, 336)
-        local cells = { { tostring(l.lap) .. (l.pit and ' P' or ''), 246, l.pit and YELLOW or COLOR_TITLE }, t, d }
+        local t, d = lapCells(l, 346)
+        local cells = { { tostring(l.lap) .. (l.pit and ' P' or ''), 256, l.pit and YELLOW or COLOR_TITLE }, t, d }
         for q = 1, 3 do
           local v = l.s and l.s[q]
-          cells[#cells + 1] = { secs(v), 386 + q * 48, (v and v > 0) and secColor(Lap.secCode(0, Lap.keyOf(0, l.driver), q, v, l.valid)) or COLOR_TITLE, true }
+          cells[#cells + 1] = { secs(v), 410 + q * 58, (v and v > 0) and secColor(Lap.lapSecCode(0, Lap.keyOf(0, l.driver), l, q, v)) or COLOR_TITLE, true }
         end
+        cells[#cells + 1] = { l.stop or '-', 612, l.stop and COLOR_TITLE or COLOR_DIM, true }
+        local pen = (l.pen or '') ~= '' and l.pen or nil
+        cells[#cells + 1] = { pen and fitText(pen, FONT_MONO, FS * s, 42 * s, '+') or '-', 660, pen and RED or COLOR_DIM, true }
         local cl = cmp and cmp.laps[k] or nil
         if cl then
-          local ct, cd = lapCells(cl, 640)
+          local ct, cd = lapCells(cl, 714)
           cells[#cells + 1] = ct
           cells[#cells + 1] = cd
         end
@@ -15723,13 +15825,13 @@ float4 main(PS_IN pin) {
     local driver = ownDriver()
     local all, carBest = stintsNow()
     local nStints, now, prev = #all, all[#all], all[#all - 1]
-    if not now or now.driver ~= driver then
+    if not now or now.driver ~= driver or Stint.fresh(now.laps[#now.laps]) then
       nStints, prev = #all + 1, now
       now = { driver = driver, laps = {} }
     end
     local best, bestDriver = carBest.ms, carBest.lap and carBest.lap.driver or '-'
     local n = math.min(#now.laps, 8)
-    local p1, p2, y = frame('laps', w, h, s, 2.5 + n + (prev and 2.6 or 0) + 1.6, TEXTS.scrLaps, nil)
+    local p1, p2, y = frame('laps', w, h, s, 2.5 + n + (prev and 3.4 or 0) + 1.6, TEXTS.scrLaps, nil)
     local et = TEXTS.scrLapsMore
     local etw = textWidth(et, FONT_MONO, 9 * s)
     local ea, eb = vec2(p2.x - 14 * s - etw - 6 * s, p1.y + 5 * s), vec2(p2.x - 14 * s, p1.y + 18 * s)
@@ -15738,7 +15840,7 @@ float4 main(PS_IN pin) {
     Drag.clickable(ea, eb, function() LapsView.big = true end)
     drawTextRight(string.format(TEXTS.scrLapN, Lap.number() + 1), FONT_MONO, 11 * s, ea.x - 8 * s, p1.y + 5 * s, COLOR_TITLE)
     local function sum(list) local t = 0; for _, l in ipairs(list) do t = t + l.ms end; return t end
-    local ms = RaceTable.stintMs() or sum(now.laps)
+    local ms = Stint.ms() or sum(now.laps)
     local rule = config.driverStint
     local tot = RaceTable.driveMs() or ms
     local stintCol = (rule.minMinutes <= 0 and rule.maxMinutes <= 0) and COLOR_DIM or ((rule.maxMinutes > 0 and tot > rule.maxMinutes * 60000) and RED)
@@ -15748,19 +15850,19 @@ float4 main(PS_IN pin) {
       (' - ' .. string.format(TEXTS.scrDriveTotal, hms(tot)) .. (rule.minMinutes > 0 and string.format(TEXTS.scrStintMin, rule.minMinutes) or '')) or ''),
       FONT_MONO, 10 * s, p2.x - 14 * s, y, stintCol)
     y = y + ROW * 1.5 * s
-    row(p1, y, s, { { TEXTS.hdr.lap, 14, COLOR_AXIS }, { TEXTS.hdr.time, 118, COLOR_AXIS, true }, { TEXTS.hdr.delta, 172, COLOR_AXIS, true },
-      { 'S1', 220, COLOR_AXIS, true }, { 'S2', 268, COLOR_AXIS, true }, { 'S3', 316, COLOR_AXIS, true } })
+    row(p1, y, s, { { TEXTS.hdr.lap, 14, COLOR_AXIS }, { TEXTS.hdr.time, 118, COLOR_AXIS, true }, { TEXTS.hdr.delta, 182, COLOR_AXIS, true },
+      { 'S1', 240, COLOR_AXIS, true }, { 'S2', 298, COLOR_AXIS, true }, { 'S3', 356, COLOR_AXIS, true } })
     y = y + ROW * s
     for k = #now.laps, #now.laps - n + 1, -1 do
       local l = now.laps[k]
       local col = not l.valid and RED or (l.ms == sessionBest and PURPLE) or (l.ms == best and GREEN) or COLOR_TITLE
       local cells = { { tostring(l.lap) .. (l.pit and ' P' or ''), 14, l.pit and YELLOW or COLOR_TITLE },
         { lapTime(l.ms), 118, col, true },
-        { not l.valid and TEXTS.lapTag.cut or l.pit and TEXTS.lapTag.pit or (l.ms == best and TEXTS.lapTag.best) or string.format('%+.3f', (l.ms - best) / 1000),
-          172, not l.valid and RED or (l.ms == best and GREEN) or (l.pit and COLOR_DIM) or RED, true } }
+        { not l.valid and TEXTS.lapTag.cut or l.pit and TEXTS.lapTag.pit or (l.ms == best and TEXTS.lapTag.best) or CarRead.secText((l.ms - best) / 1000, 3, true),
+          182, not l.valid and RED or (l.ms == best and GREEN) or (l.pit and COLOR_DIM) or RED, true } }
       for q = 1, 3 do
         local v = l.s[q]
-        cells[#cells + 1] = { secs(v), 172 + q * 48, (v and v > 0) and secColor(Lap.secCode(0, Lap.keyOf(0, l.driver), q, v, l.valid)) or COLOR_TITLE, true }
+        cells[#cells + 1] = { secs(v), 182 + q * 58, (v and v > 0) and secColor(Lap.lapSecCode(0, Lap.keyOf(0, l.driver), l, q, v)) or COLOR_TITLE, true }
       end
       row(p1, y, s, cells)
       y = y + ROW * s
@@ -15778,7 +15880,7 @@ float4 main(PS_IN pin) {
     end
     drawSeparator(p1, p2, y + 3 * s, s)
     y = y + 8 * s
-    row(p1, y, s, { { TEXTS.scrCarBest, 14, COLOR_DIM }, { best > 0 and (lapTime(best) .. ' (' .. bestDriver .. ')') or '-', 316,
+    row(p1, y, s, { { TEXTS.scrCarBest, 14, COLOR_DIM }, { best > 0 and (lapTime(best) .. ' (' .. bestDriver .. ')') or '-', 356,
       (best > 0 and best == sessionBest) and PURPLE or GREEN, true } })
     Drag.icons('laps', p1, p2, s)
   end
@@ -15820,11 +15922,11 @@ float4 main(PS_IN pin) {
       if me and r and r ~= me then
         if sim.raceSessionType == ac.SessionType.Race then
           local ahead = (r.pos or 0) < (me.pos or 0)
-          if r == rows[1] then gap = gapText(me.leadS and -me.leadS, me.leadL, '%+.3f', '-' .. TEXTS.lapsShort, '-')
-          elseif ahead then gap = gapText(me.gapS and -me.gapS, me.gapL, '%+.3f', '-' .. TEXTS.lapsShort, '-')
-          else gap = gapText(r.gapS, r.gapL, '%+.3f', '+' .. TEXTS.lapsShort, '-') end
+          if r == rows[1] then gap = gapText(me.leadS and -me.leadS, me.leadL, true, 3, '-' .. TEXTS.lapsShort, '-')
+          elseif ahead then gap = gapText(me.gapS and -me.gapS, me.gapL, true, 3, '-' .. TEXTS.lapsShort, '-')
+          else gap = gapText(r.gapS, r.gapL, true, 3, '+' .. TEXTS.lapsShort, '-') end
         else
-          gap = string.format('%+.3f', -ac.getGapBetweenCars(0, r.index))
+          gap = CarRead.secText(-ac.getGapBetweenCars(0, r.index), 3, true)
         end
       end
       row(p1, y, s, { { label, 14, COLOR_DIM, false, FONT_TEXT }, { r and r ~= me and ('#' .. r.number) or '-', 90 },
@@ -16569,15 +16671,20 @@ float4 main(PS_IN pin) {
       P.sessions = nil
       ask('search', q, function(d) P.sessions = d.sessions or {} end)
     end
-    local function openSession(key)
-      P.page, P.sess, P.drivers, P.sel, P.top = 'session', key, nil, 1, 0
+    local function openSession(key, x)
+      P.page, P.sess, P.drivers, P.sel, P.top, P.sessInfo = 'session', key, nil, 1, 0, x or P.sessInfo
       ask('session', { key = key }, function(d) P.drivers = d.drivers or {} end)
     end
     local function openDriver(d)
-      P.page, P.drv, P.laps, P.best, P.cb, P.db, P.cl, P.dl, P.sel, P.top = 'laps', d, nil, nil, nil, nil, nil, nil, 1, 0
+      P.wx, P.pens = nil, ''
+      P.page, P.drv, P.laps, P.sts, P.bst, P.best, P.cb, P.db, P.cl, P.dl, P.sel, P.top = 'laps', d, nil, nil, nil, nil, nil, nil, nil, nil, 1, 0
       ask('laps', { idx = d.id }, function(r)
         P.laps = r.laps or {}
-        local cls, cb, db, cl, dl = RaceTable.classOfModel(d.car), {}, {}, nil, nil
+        for _, l in ipairs(P.laps) do
+          l.ms, l.valid, l.driver, l.s = tonumber(l.ms) or 0, tonumber(l.valid) == 1, d.driver, {}
+          for v in tostring(l.sectors or ''):gmatch('[^/,;%s]+') do l.s[#l.s + 1] = tonumber(v) end
+        end
+        local cls, cb, db, cl = RaceTable.classOfModel(d.car), {}, {}, nil
         for key, v in pairs(type(r.sbest) == 'table' and r.sbest or {}) do
           local model, q = tostring(key):match('^(.*):(%d+)$')
           local ms = type(v) == 'table' and tonumber(v[1]) or nil
@@ -16588,20 +16695,45 @@ float4 main(PS_IN pin) {
           local ms = tonumber(x.best)
           if ms and ms > 0 and RaceTable.classOfModel(x.car) == cls and (not cl or ms < cl) then cl = ms end
         end
+        local function range(f, fmt)
+          local a, b
+          for _, l in ipairs(P.laps) do
+            local v = tonumber(l[f])
+            if v then a, b = math.min(a or v, v), math.max(b or v, v) end
+          end
+          if not a then return '-' end
+          a, b = string.format('%.0f', a), string.format('%.0f', b)
+          return string.format(fmt, a == b and a or (a .. '-' .. b))
+        end
+        local names, seen = {}, {}
         for _, l in ipairs(P.laps) do
-          if tonumber(l.valid) == 1 then
-            local ms = tonumber(l.ms)
-            if ms and ms > 0 and (not dl or ms < dl) then dl = ms end
-            local q = 0
-            for v in tostring(l.sectors or ''):gmatch('[^/,;%s]+') do
-              q, v = q + 1, tonumber(v)
-              if v and v > 0 and (not db[q] or v < db[q]) then db[q] = v end
-            end
+          for c in tostring(l.pen or ''):gmatch('[^/]+') do
+            local z = tonumber(c:match('^SD(%d+)$'))
+            local nm = TEXTS.reason[c] or z and string.format(TEXTS.cutZoneReason, z) or TEXTS.rep.penName[c]
+            if nm and not seen[c] then seen[c] = true names[#names + 1] = c .. ' ' .. nm end
           end
         end
-        P.cb, P.db, P.cl, P.dl = cb, db, cl, dl
+        P.pens = table.concat(names, ' · ')
+        local function wind()
+          local n, top, lo, hi = {}, nil, nil, nil
+          for _, l in ipairs(P.laps) do
+            local d, a, b = tonumber(l.wdir), tonumber(l.wmin), tonumber(l.wmax)
+            if d and a and b then
+              local p = math.floor((d % 360 + 11.25) / 22.5) % 16
+              n[p], lo, hi = (n[p] or 0) + 1, math.min(lo or a, a), math.max(hi or b, b)
+              if not top or n[p] > n[top] then top = p end
+            end
+          end
+          return top and Radar.windText({ dir = top * 22.5, vmin = lo / 3.6, vmax = hi / 3.6 }, true) or '-'
+        end
+        P.wx = { { TEXTS.rep.wxAir, range('air', '%s °C') }, { TEXTS.rep.wxRoad, range('road', '%s °C') }, { TEXTS.rep.wxHum, range('hum', '%s%%') }, { TEXTS.rep.wxRain, range('rain', '%s%%') },
+          { TEXTS.scrWxWind, wind() }, { TEXTS.rep.wxGrip, range('grip', '%s%%') } }
+        P.bst = Lap.bestOf(P.laps)
+        for q, v in pairs(P.bst.s) do db[q + 1] = v end
+        P.sts = Stint.list(P.laps, function(a, b) return a.st ~= b.st end)
+        P.cb, P.db, P.cl, P.dl = cb, db, cl, P.bst.ms > 0 and P.bst.ms or nil
       end)
-      RecordSync.base.reportGet('best', { track = d.track, car = d.car, session = P.sess }, function(b) P.best = b end)
+      RecordSync.base.reportGet('best', { track = d.track, car = d.car, session = P.sess, steam = d.steam_id }, function(b) P.best = b end)
     end
     local function lapGet(id)
       if not id or P.L[id] then return end
@@ -16626,9 +16758,11 @@ float4 main(PS_IN pin) {
       P.over, P.canvasKey = true, nil
       if id then lapGet(id) end
     end
+    local function leave() P.at0 = P.at0 or {} P.at0[P.page] = { P.sel, P.top } end
     local function back()
       P.page = P.page == 'lap' and 'laps' or P.page == 'laps' and 'session' or 'search'
-      P.sel, P.top, P.err = 1, 0, false
+      local a = P.at0 and P.at0[P.page] or { 1, 0 }
+      P.sel, P.top, P.err = a[1], a[2], false
     end
     local function reload()
       P.err = false
@@ -16648,9 +16782,14 @@ float4 main(PS_IN pin) {
         for _, d in ipairs(P.drivers or {}) do out[#out + 1] = { drv = d } end
         return out
       elseif P.page == 'laps' then
-        local out = { { best = 'session' }, { best = 'allTime' } }
-        local ls = P.laps or {}
-        for i = #ls, 1, -1 do out[#out + 1] = { lap = ls[i] } end
+        local out = { { best = 'ideal' }, { best = 'session' }, { best = 'mine' }, { best = 'allTime' } }
+        for k = #(P.sts or {}), 1, -1 do
+          local t = P.sts[k]
+          out[#out + 1] = { stint = t }
+          out[#out + 1] = { ideal = t }
+          out[#out + 1] = { bestOf = t }
+          for i = #t.laps, 1, -1 do out[#out + 1] = { lap = t.laps[i] } end
+        end
         return out
       end
       return {}
@@ -16671,6 +16810,12 @@ float4 main(PS_IN pin) {
       end
       local span = D[hi] - D[lo]
       return span > 0 and T[lo] + (T[hi] - T[lo]) * (d - D[lo]) / span or T[lo]
+    end
+    function P.stepOf(maxT, wpx)
+      for _, st in ipairs({ 10000, 30000, 60000, 300000 }) do
+        if st / maxT * wpx >= (st > 10000 and 30 or 20) then return st end
+      end
+      return 600000
     end
     local function paint(A, B, cw, ch)
       if P.canvas and (P.cw ~= cw or P.ch ~= ch) then P.canvas:dispose(); P.canvas = nil end
@@ -16711,16 +16856,17 @@ float4 main(PS_IN pin) {
           local function vals(L) return function(j) return L.cols[col][j] * f end end
           band(c[4], lo, hi, B and { { B, vals(B), COLOR_B, xB }, { A, vals(A), COLOR_A, xA } } or { { A, vals(A), TELE_COLOR[k], xA } })
         end
-        P.dl = nil
+        P.dlt = nil
         if B then
           local dl, m = {}, 0.1
           for j = 1, A.n do dl[j] = (A.cols.time[j] - timeAt(B, A.cols.dist[j])) / 1000; m = math.max(m, math.abs(dl[j])) end
           local y = (u0 + CHANNELS.dq / 2) * uh
           ui.drawSimpleLine(vec2(0, y), vec2(gw, y), rgbm(1, 1, 1, 0.25), 1)
           band(CHANNELS.dq, -m, m, { { A, function(j) return dl[j] end, COLOR_TITLE, xA } })
-          P.dl = dl
+          P.dlt = dl
         end
-        for t = 0, maxT, 5000 do local xx = t / maxT * gw; ui.drawSimpleLine(vec2(xx, 0), vec2(xx, ch), rgbm(1, 1, 1, 0.06), 1) end
+        P.step = P.stepOf(maxT, gw * 580 / CW)
+        for t = 0, maxT, P.step / 2 do local xx = t / maxT * gw; ui.drawSimpleLine(vec2(xx, 0), vec2(xx, ch), rgbm(1, 1, 1, 0.06), 1) end
         local x0, x1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
         for _, L in ipairs({ A, B }) do
           for j = 1, L.n do x0, x1 = math.min(x0, L.cols.x[j]), math.max(x1, L.cols.x[j]); z0, z1 = math.min(z0, L.cols.z[j]), math.max(z1, L.cols.z[j]) end
@@ -16759,6 +16905,16 @@ float4 main(PS_IN pin) {
         tonumber(l.lap) or 0, lapTime(tonumber(l.ms)))
     end
     local function cell(v) return (v ~= nil and tostring(v) ~= '') and tostring(v):gsub(',', ' ') or '-' end
+    function P.level(cells, s)
+      if P.levelS ~= s then
+        local size = math.max(FS * s, Desktop.text.minPx)
+        local function high(f) ui.pushDWriteFont(f) local h = ui.measureDWriteText('0', size).y ui.popDWriteFont() return h end
+        P.levelS, P.levelY = s, math.floor((high(FONT_MONO) - high(FONT_TEXT)) * 0.8 + 0.5)
+      end
+      for _, c in ipairs(cells) do if c[5] == FONT_TEXT then c[6] = P.levelY end end
+      return cells
+    end
+    function P.life(v) return (cell(v):gsub('%d+', function(n) return string.format('%3s', n) end)) end
     local function when(ms) return ms and os.date('%d/%m %H:%M', math.floor(tonumber(ms) / 1000)) or '-' end
     function P.age(laps, km)
       local L, K, out = {}, {}, {}
@@ -16772,15 +16928,17 @@ float4 main(PS_IN pin) {
       if P.page == 'search' and not P.sessions and not P.busy and not P.err then search() end
       local list = items()
       P.sel = math.max(1, math.min(P.sel, math.max(#list, 1)))
-      local fixed = P.page == 'search' and #FILTERS or P.page == 'laps' and 2 or 0
-      local rows = hu and math.max(LIST, math.floor((hu - 28) / ROW) - (fixed + 3)) or LIST
+      local fixed = P.page == 'search' and #FILTERS or P.page == 'laps' and 4 or 0
+      local head = P.page == 'laps' and 4 or 0
+      local leg = P.page == 'laps' and 2 or 0
+      local rows = hu and math.max(LIST, math.floor((hu - 28) / ROW) - (fixed + head + leg + 3)) or LIST
       local shownRows = math.min(rows, #list - fixed)
       if P.sel > fixed then
         if P.sel - fixed > P.top + rows then P.top = P.sel - fixed - rows end
         if P.sel - fixed <= P.top then P.top = P.sel - fixed - 1 end
       end
       P.top = math.max(0, math.min(P.top, math.max(#list - fixed - rows, 0)))
-      return list, fixed, P.page == 'lap' and 25 or (fixed + 2 + math.max(shownRows, 1) + 1), rows
+      return list, fixed, P.page == 'lap' and 25 or (fixed + head + leg + 2 + math.max(shownRows, 1) + 1), rows
     end
     Desktop.reportRows = function() return select(3, layout()) end
     Desktop.reportBody = function(p1, p2, y, s, right, sizing)
@@ -16807,8 +16965,8 @@ float4 main(PS_IN pin) {
       local function line(i, cells, fn, mark)
         local on = P.sel == i
         for _, c in ipairs(cells) do if on and not c[3] then c[3] = YELLOW end end
-        row(p1, y, s, cells)
-        if fn then Drag.clickable(vec2(p1.x + 6 * s, y), vec2(p2.x - (mark and 40 or 6) * s, y + ROW * s), function() P.sel = i; fn() end) end
+        row(p1, y, s, P.page == 'laps' and P.level(cells, s) or cells)
+        if fn then Drag.clickable(vec2(p1.x + 6 * s, y), vec2(p2.x - (mark and 40 or 6) * s, y + ROW * s), function() P.sel = i; leave(); fn() end) end
         if mark then
           local a, b = vec2(p2.x - 34 * s, y), vec2(p2.x - 16 * s, y + 12 * s)
           if P.mark == mark then ui.drawRectFilled(a, b, YELLOW, 2 * s) else ui.drawRect(a, b, TMP.edge30, 2 * s) end
@@ -16829,7 +16987,7 @@ float4 main(PS_IN pin) {
         for i = fixed + P.top + 1, math.min(#list, fixed + P.top + rows) do
           local x2 = list[i].sess
           line(i, { { when(x2.start), 14 }, { H.types[tonumber(x2.type) or 0] or '-', 104, COLOR_DIM }, { tostring((x2.trackName or '') ~= '' and x2.trackName or x2.track or ''), 200 },
-            { tostring(x2.drivers or '-'), 520, nil, true }, { tostring(x2.laps or '-'), 580, nil, true } }, function() openSession(x2.key) end)
+            { tostring(x2.drivers or '-'), 520, nil, true }, { tostring(x2.laps or '-'), 580, nil, true } }, function() openSession(x2.key, x2) end)
         end
       elseif P.page == 'session' then
         row(p1, y, s, { { 'P', 24, COLOR_AXIS, true }, { H.driver, 34, COLOR_AXIS }, { H.car, 250, COLOR_AXIS }, { H.hdrLaps, 480, COLOR_AXIS, true }, { H.hdrBest, 580, COLOR_AXIS, true } })
@@ -16840,33 +16998,84 @@ float4 main(PS_IN pin) {
             { tostring(d.laps or 0), 480, nil, true }, { lapTime(tonumber(d.best)), 580, nil, true } }, function() openDriver(d) end)
         end
       elseif P.page == 'laps' then
-        for i, k in ipairs({ 'session', 'allTime' }) do
+        local D, X = P.drv or {}, P.sessInfo or {}
+        row(p1, y, s, P.level({ { H.types[tonumber(X.type) or 0] or '-', 14, COLOR_TITLE, false, FONT_TEXT },
+          { tostring((X.trackName or '') ~= '' and X.trackName or X.track or ''), 110, COLOR_TITLE, false, FONT_TEXT }, { when(X.start), 502, COLOR_DIM } }, s))
+        y = y + ROW * s
+        do
+          local cs, at = {}, { 14, 110, 197, 292, 375, 502 }
+          for i, x in ipairs(P.wx or {}) do
+            cs[#cs + 1] = { x[1], at[i], COLOR_DIM, false, FONT_TEXT }
+            cs[#cs + 1] = { x[2], at[i] + textWidth(x[1] .. ' ', FONT_TEXT, FS * s) / s + 3, COLOR_TITLE }
+          end
+          row(p1, y, s, P.level(cs, s))
+          y = y + ROW * s
+        end
+        row(p1, y, s, P.level({ { tostring(D.driver or ''), 14, COLOR_TITLE, false, FONT_TEXT }, { tostring(D.car or ''), 110, COLOR_DIM }, { tostring(RaceTable.classOfModel(D.car) or '-'), 502, COLOR_DIM } }, s))
+        y = y + ROW * s
+        drawSeparator(p1, p2, y + 3 * s, s)
+        y = y + 8 * s
+        local function codeT(ms) return ms and secColor(Lap.codeOf(ms, P.cl, P.dl, true)) or nil end
+        local function codeS(v, q) return v and secColor(Lap.codeOf(v, P.cb and P.cb[q], P.db and P.db[q], true)) or nil end
+        local bst, M = P.bst, { ideal = H.idealSess, session = H.bestSess, mine = H.bestAll, allTime = H.bestServer }
+        for i, k in ipairs({ 'ideal', 'session', 'mine', 'allTime' }) do
           local b = P.best and P.best[k]
-          line(i, { { k == 'session' and H.bestSess or H.bestAll, 14, COLOR_DIM, false, FONT_TEXT },
-            { b and string.format('%s · %s · %s', tostring(b.driver or ''), lapTime(tonumber(b.ms)), when(b.at)) or '-', 250, PURPLE } },
-            b and function() openLap(b.id) end or nil, b and b.id or nil)
+          local c = { { M[k], 14, COLOR_DIM, false, FONT_TEXT } }
+          local id
+          if k == 'ideal' or k == 'session' then
+            local ms = bst and (k == 'ideal' and Stint.ideal(bst) or k == 'session' and bst.ms > 0 and bst.ms) or nil
+            c[2] = { ms and lapTime(ms) or '-', 220, k == 'ideal' and COLOR_A or codeT(ms), true }
+            for q = 1, 3 do
+              local v = ms and (k == 'ideal' and bst.s or bst.lapS)[q - 1] or nil
+              c[q + 2] = { v and secs(v) or '-', 220 + q * 58, k == 'ideal' and COLOR_A or codeS(v, q), true }
+            end
+            id = k == 'session' and ms and bst.lap.id or nil
+          else
+            local q = 0
+            c[2] = { b and lapTime(tonumber(b.ms)) or '-', 220, COLOR_TITLE, true }
+            for v in tostring(b and b.sectors or ''):gmatch('[^/,;%s]+') do q = q + 1 if q <= 3 then c[q + 2] = { secs(tonumber(v)), 220 + q * 58, COLOR_TITLE, true } end end
+            c[#c + 1] = { k == 'allTime' and b and tostring(b.driver or '') or '', 408, COLOR_DIM }
+            c[#c + 1] = { b and when(b.at) or '-', 502, COLOR_DIM }
+            id = b and b.id or nil
+          end
+          line(i, c, id and function() openLap(id) end or nil, id)
         end
         drawSeparator(p1, p2, y + 3 * s, s)
         y = y + 8 * s
         local lx = 14 + math.max(textWidth('0000', FONT_MONO, FS * s), textWidth(H.lap, FONT_MONO, FS * s)) / s
         local d = lx - 30
-        row(p1, y, s, { { H.lap, lx, COLOR_AXIS, true }, { H.hdrTime, 100 + d, COLOR_AXIS, true }, { 'S1', 156 + d, COLOR_AXIS, true }, { 'S2', 206 + d, COLOR_AXIS, true },
-          { 'S3', 256 + d, COLOR_AXIS, true }, { H.hdrValid, 266 + d, COLOR_AXIS }, { H.hdrPit, 296 + d, COLOR_AXIS }, { H.hdrFuel, 370 + d, COLOR_AXIS, true },
-          { H.hdrTyre, 380 + d, COLOR_AXIS }, { H.hdrTel, 510 + d, COLOR_AXIS } })
+        row(p1, y, s, { { H.lap, lx, COLOR_AXIS, true }, { H.hdrTime, 100 + d, COLOR_AXIS, true }, { 'S1', 158 + d, COLOR_AXIS, true }, { 'S2', 216 + d, COLOR_AXIS, true },
+          { 'S3', 274 + d, COLOR_AXIS, true }, { H.hdrValid, 284 + d, COLOR_AXIS }, { H.hdrPit, 300 + d, COLOR_AXIS }, { H.hdrFuel, 344 + d, COLOR_AXIS, true },
+          { H.hdrTyre, 352 + d, COLOR_AXIS }, { H.hdrLife, 380 + d, COLOR_AXIS }, { H.hdrStop, 474 + d, COLOR_AXIS },
+          { H.hdrCuts, 500 + d, COLOR_AXIS }, { H.hdrCrash, 536 + d, COLOR_AXIS }, { H.hdrPen, 571 + d, COLOR_AXIS }, { H.hdrTel, 623 + d, COLOR_AXIS } })
         y = y + ROW * s
-        local function secCol(v, q, ok, col) return (v and v > 0) and secColor(Lap.codeOf(v, P.cb and P.cb[q], P.db and P.db[q], ok)) or col end
+        local function secCol(l, q) local v = l.s[q] return (v and v > 0) and secColor(l.valid and Lap.codeOf(v, P.cb and P.cb[q], P.db and P.db[q], true) or Lap.cutCode(l, q)) or nil end
+        local function sect(b, col) return { b[0] and secs(b[0]) or '-', 158 + d, col(1), true }, { b[1] and secs(b[1]) or '-', 216 + d, col(2), true }, { b[2] and secs(b[2]) or '-', 274 + d, col(3), true } end
         for i = fixed + P.top + 1, math.min(#list, fixed + P.top + rows) do
-          local l = list[i].lap
-          local ss = {}
-          for v in tostring(l.sectors or ''):gmatch('[^/,;%s]+') do ss[#ss + 1] = tonumber(v) end
-          local ok = tonumber(l.valid) == 1
-          local col = not ok and RED or nil
-          local ms = tonumber(l.ms)
-          local tcol = (ms and ms > 0) and secColor(Lap.codeOf(ms, P.cl, P.dl, ok)) or col
-          line(i, { { tostring(l.lap or ''), lx, nil, true }, { lapTime(ms), 100 + d, tcol, true }, { secs(ss[1]), 156 + d, secCol(ss[1], 1, ok, col), true },
-            { secs(ss[2]), 206 + d, secCol(ss[2], 2, ok, col), true }, { secs(ss[3]), 256 + d, secCol(ss[3], 3, ok, col), true }, { ok and 'V' or '-', 266 + d, col },
-            { tonumber(l.pit) == 1 and 'P' or '-', 296 + d, COLOR_DIM }, { l.fuel and string.format('%.1f', tonumber(l.fuel) or 0) or '-', 370 + d, COLOR_DIM, true },
-            { cell(l.compound), 380 + d, COLOR_DIM }, { l.trace and 'T' or '-', 510 + d, COLOR_DIM } }, function() openLap(l.id) end, l.id)
+          local e = list[i]
+          local t, u, v, l = e.stint, e.ideal, e.bestOf, e.lap
+          if t then
+            row(p1, y, s, { { H.stint .. ' ' .. t.n, 14, COLOR_AXIS }, { string.format(H.nLaps, #t.laps), 100 + d, COLOR_DIM, true }, { tostring(t.stops), 474 + d, COLOR_TITLE },
+              { tostring(t.cuts), 500 + d, COLOR_TITLE }, { tostring(t.crashes), 536 + d, COLOR_TITLE }, { tostring(t.pens), 571 + d, COLOR_TITLE } })
+            y = y + ROW * s
+          elseif u then
+            local s1, s2, s3 = sect(u.b.s, function() return COLOR_A end)
+            row(p1, y, s, { { H.ideal, 14, COLOR_DIM }, { u.ideal and lapTime(u.ideal) or '-', 100 + d, COLOR_A, true }, s1, s2, s3 })
+            y = y + ROW * s
+          elseif v then
+            local s1, s2, s3 = sect(v.b.lapS, function(q) return codeS(v.b.lapS[q - 1], q) end)
+            row(p1, y, s, { { H.best, 14, COLOR_DIM }, { v.best > 0 and lapTime(v.best) or '-', 100 + d, codeT(v.best > 0 and v.best or nil), true }, s1, s2, s3 })
+            y = y + ROW * s
+          else
+            local tcol = l.ms > 0 and secColor(Lap.codeOf(l.ms, P.cl, P.dl, l.valid)) or (not l.valid and RED or nil)
+            local pen, cut, crash = (l.pen or '') ~= '' and l.pen or nil, tonumber(l.cut) or 0, tonumber(l.crash) or 0
+            line(i, { { tostring(l.lap or ''), lx, nil, true }, { lapTime(l.ms), 100 + d, tcol, true }, { secs(l.s[1]), 158 + d, secCol(l, 1), true },
+              { secs(l.s[2]), 216 + d, secCol(l, 2), true }, { secs(l.s[3]), 274 + d, secCol(l, 3), true }, { l.valid and 'V' or '-', 284 + d, not l.valid and RED or nil },
+              { tonumber(l.pit) == 1 and 'P' or '-', 300 + d, COLOR_DIM }, { l.fuel and string.format('%.1f', tonumber(l.fuel) or 0) or '-', 344 + d, COLOR_DIM, true },
+              { cell(l.compound), 352 + d, COLOR_DIM }, { P.life(l.tyre_life), 380 + d, COLOR_DIM }, { l.stop or '-', 474 + d, l.stop and COLOR_TITLE or COLOR_DIM },
+              { cut > 0 and tostring(cut) or '-', 500 + d, cut > 0 and COLOR_TITLE or COLOR_DIM }, { crash > 0 and tostring(crash) or '-', 536 + d, crash > 0 and COLOR_TITLE or COLOR_DIM },
+              { pen and fitText(pen, FONT_MONO, FS * s, 50 * s, '+') or '-', 571 + d, pen and RED or COLOR_DIM }, { l.trace and 'T' or '-', 623 + d, COLOR_DIM } }, function() openLap(l.id) end, l.id)
+          end
         end
       else
         local A = P.L[P.lapId]
@@ -16898,10 +17107,10 @@ float4 main(PS_IN pin) {
               drawText(string.format('%d', math.floor(B.cols[c[1]][ib] * c[2] + 0.5)), FONT_MONO, 8 * s, TMP.a:set(vx + textWidth(va .. ' ', FONT_MONO, 8 * s), ty), COLOR_B)
             end
           end
-          if B and P.dl and P.tops and P.tops[#CHANNELS + 1] then
+          if B and P.dlt and P.tops and P.tops[#CHANNELS + 1] then
             local ty = a.y + P.tops[#CHANNELS + 1] * syk
             drawText(H.delta, FONT_MONO, 8 * s, TMP.a:set(a.x + 2 * s, ty), COLOR_TITLE)
-            drawText(string.format('%+.3f', P.dl[ia]), FONT_MONO, 8 * s, TMP.a:set(a.x + 2 * s + textWidth(H.delta .. ' ', FONT_MONO, 8 * s), ty), COLOR_TITLE)
+            drawText(CarRead.secText(P.dlt[ia], 3, true), FONT_MONO, 8 * s, TMP.a:set(a.x + 2 * s + textWidth(H.delta .. ' ', FONT_MONO, 8 * s), ty), COLOR_TITLE)
           end
           local M = P.map
           if M then
@@ -16912,8 +17121,8 @@ float4 main(PS_IN pin) {
             local ja = LapTrace.idxAt(A, P.cur)
             ui.drawCircleFilled(TMP.a:set(a.x + (M.ox + (A.cols.x[ja] - M.x0) * M.k) * sxk, a.y + (M.oz + (A.cols.z[ja] - M.z0) * M.k) * syk), 3.5 * s, B and COLOR_A or COLOR_TITLE, 12)
           end
-          for t = 0, endMs, 10000 do
-            drawText(tostring(math.floor(t / 1000)), FONT_MONO, 8 * s, TMP.a:set(a.x + t / math.max(endMs, 1) * P.gw * sxk - 4 * s, b.y + s), COLOR_DIM)
+          for t = 0, endMs, P.step do
+            drawText(P.step > 10000 and string.format('%d:%02d', math.floor(t / 60000), math.floor(t / 1000) % 60) or tostring(math.floor(t / 1000)), FONT_MONO, 8 * s, TMP.a:set(a.x + t / math.max(endMs, 1) * P.gw * sxk - 4 * s, b.y + s), COLOR_DIM)
           end
           local lab = P.cur > 0 and lapTime(P.cur) or '0:00.000'
           local lw = textWidth(lab, FONT_MONO, 8 * s)
@@ -16941,6 +17150,13 @@ float4 main(PS_IN pin) {
           row(p1, y, s, { { string.format('%s %s · %s %s · %s %s', H.life, cell(la.tyre_life), H.km, P.age(la.tyre_laps, la.tyre_km), H.press, cell(la.pressure)), 14, COLOR_DIM } })
         end
         y = y + ROW * s
+      end
+      if P.page == 'laps' and P.sts then
+        local ly, w = p2.y - (3 * ROW + 4) * s, p2.x - p1.x - 28 * s
+        drawSeparator(p1, p2, ly - 3 * s, s)
+        for k, t in ipairs({ H.legend[1], H.legend[2], P.pens or '' }) do
+          drawText(fitText(t, FONT_MONO, 8.5 * s, k == 3 and w - 110 * s or w), FONT_MONO, 8.5 * s, TMP.a:set(p1.x + 14 * s, ly + (k - 1) * ROW * s), COLOR_DIM)
+        end
       end
       y = math.max(y, p2.y - (ROW + 4) * s)
       local msg = P.busy and H.loading or P.err and H.down or (#list - fixed == 0 and P.page ~= 'lap') and H.none or nil
@@ -17804,13 +18020,13 @@ float4 main(PS_IN pin) {
       local cls = byClass == nil and placeNow() ~= 'ALL' or byClass
       if ended and sim.raceSessionType == ac.SessionType.Race then
         if k == 1 then return string.format(T.laps, r.laps or 0) end
-        return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-')
+        return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+', 3, '+' .. T.laps, '-')
       end
       if phaseGap then
         local ahead = list[k - 1]
         if not ahead then return '-' end
-        if sim.raceSessionType == ac.SessionType.Race then return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-') end
-        return (r.best > 0 and ahead.best > 0) and string.format('+%.3f', (r.best - ahead.best) / 1000) or '-'
+        if sim.raceSessionType == ac.SessionType.Race then return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+', 3, '+' .. T.laps, '-') end
+        return (r.best > 0 and ahead.best > 0) and CarRead.secText((r.best - ahead.best) / 1000, 3, '+') or '-'
       end
       local ph = BC.timePhase()
       if ph == 'INST' then return BC.instText(r) end
@@ -18104,7 +18320,7 @@ float4 main(PS_IN pin) {
         if v and v > 0 then
           if #parts > 0 then parts[#parts + 1] = { ' · ', PAPER } end
           local code = Lap.secCode(idx, key, q, v, true)
-          parts[#parts + 1] = { 'S' .. q .. ' ' .. (v < 60000 and secs(v) or lapTime(v)), (best[q] or code == 'p') and PURPLE or code == 'g' and FLAGC.green or PAPER }
+          parts[#parts + 1] = { 'S' .. q .. ' ' .. secs(v), (best[q] or code == 'p') and PURPLE or code == 'g' and FLAGC.green or PAPER }
         end
       end
       for _, pp in ipairs(parts) do txt[#txt + 1] = pp[1] end
@@ -18745,10 +18961,10 @@ float4 main(PS_IN pin) {
           if r.absent then return '-' end
           if race then
             if isFirst then return string.format(T.laps, r.laps or 0) end
-            return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+%.3f', '+' .. T.laps, '-')
+            return gapText(cls and r.cGapS or r.gapS, cls and r.cGapL or r.gapL, '+', 3, '+' .. T.laps, '-')
           end
           if isFirst then return '-' end
-          return ((r.best or 0) > 0 and (lead.best or 0) > 0) and string.format('+%.3f', (r.best - lead.best) / 1000) or '-'
+          return ((r.best or 0) > 0 and (lead.best or 0) > 0) and CarRead.secText((r.best - lead.best) / 1000, 3, '+') or '-'
         end
         rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = nameOf(r), nation = r.nation, team = teamOf(r), class = r.class, laps = r.laps or 0,
           best = r.best or 0, tyre = BroadcastAlerts.tyreOf[r.index], fast = r.index == BC.fastIdx, gapAll = gapTo(leadAll, n == 1, false),
@@ -18820,7 +19036,7 @@ float4 main(PS_IN pin) {
       local s = (d - BC.opt.rsg) % BC.opt.rcs
       return R.pages[i], s, roll(s, BC.opt.rcs)
     end
-    local RES_COLS = { 6, 40, 44, 0, 0, 30, 76, 56, 56, 75, 98 }
+    local RES_COLS = { 6, 40, 44, 0, 0, 30, 76, 56, 56, 78, 98 }
     function CR.resDraw(w, h, k, id, page, out)
       local T = TEXTS.bc
       local R = CR.res
@@ -18866,8 +19082,8 @@ float4 main(PS_IN pin) {
       local fixedW, gap = 0, 12 * k
       for _, c in ipairs(RES_COLS) do fixedW = fixedW + c * k end
       local free = rw - 26 * k - fixedW - 10 * gap
-      local fr = (free - 125 * k) / 2.25
-      local cw = { 6 * k, 40 * k, 44 * k, free - fr, fr, 30 * k, 76 * k, 56 * k, 56 * k, 75 * k, 98 * k }
+      local fr = (free - 122 * k) / 2.25
+      local cw = { 6 * k, 40 * k, 44 * k, free - fr, fr, 30 * k, 76 * k, 56 * k, 56 * k, 78 * k, 98 * k }
       local function cols(yy, cells, row)
         local xx = x1
         local hh = row and rh or th
@@ -20745,9 +20961,10 @@ float4 main(PS_IN pin) {
     local function gapOf(a, b, sign)
       if not a or not b then return '-', nil end
       if sim.raceSessionType == ac.SessionType.Race then
-        return gapText(a.gapS, a.gapL, sign .. '%.3f', sign .. TEXTS.bc.laps, '-'), a.gapS and 's' or nil
+        return gapText(a.gapS, a.gapL, sign, 3, sign .. TEXTS.bc.laps, '-'), a.gapS and a.gapS < 59.9995 and 's' or nil
       end
-      if (a.best or 0) > 0 and (b.best or 0) > 0 then return string.format('%s%.3f', sign, math.abs(a.best - b.best) / 1000), 's' end
+      local d = (a.best or 0) > 0 and (b.best or 0) > 0 and math.abs(a.best - b.best) / 1000
+      if d then return CarRead.secText(d, 3, sign), d < 59.9995 and 's' or nil end
       return '-', nil
     end
     local cardPages = { {}, {}, {} }
@@ -20825,7 +21042,7 @@ float4 main(PS_IN pin) {
       for _, key in ipairs(RaceTable.classKeys()) do cw = math.max(cw, textWidth(Lang.letters.upper((classStyle(key))), F.cls, 14 * k)) end
       CW.name = math.max(CW.name, nw)
       local lt = textWidth('0:00.000', F.rb, 19 * k)
-      local gv = textWidth('−00.000', F.rb, 19 * k) + 3 * k + textWidth('s', F.sessT, 13 * k)
+      local gv = math.max(textWidth('−00.000', F.rb, 19 * k) + 3 * k + textWidth('s', F.sessT, 13 * k), textWidth('−00:00.000', F.rb, 19 * k))
       local pT = upW(T.thTimes, F.thn, 12 * k) + 14 * k + math.max(upW(T.lastLap, F.lab, 11 * k), lt) + 14 * k + math.max(upW(T.bestLap, F.lab, 11 * k), lt)
       local pF = upW(T.thFight, F.thn, 12 * k) + 14 * k + math.max(upW(T.ahead .. ' · #000 ', F.lab, 11 * k) + lw, gv) + 14 * k
         + math.max(upW(T.behind .. ' · #000 ', F.lab, 11 * k) + lw, gv)
@@ -21378,10 +21595,20 @@ float4 main(PS_IN pin) {
         if n > 0 then
           local pg = cardPages[on]
           local l1, v1, l2, v2 = pageR(pg)
+          local room = x2 - 10 * k - (math.max(n, 1) - 1) * 8 * k - 5 * k - 6 * k - (x1 + 12 * k)
+          local function lw(l) return (l and l ~= '') and textWidth(l, F.lab, 10 * k) or 0 end
+          local function vw(v) return v and textWidth(v, F.rb, 13 * k) or 0 end
+          local pad = ((l1 and l1 ~= '') and 4 * k or 0) + ((l2 and l2 ~= '') and 4 * k or 0)
+          local labs, vals = lw(l1) + lw(l2), vw(v1) + vw(v2)
+          local function word(l) return l and l ~= '' and not l:find('^#') end
+          local words = (word(l1) and lw(l1) or 0) + (word(l2) and lw(l2) or 0)
+          local gap = math.min(14 * k, math.max(room - vals - labs - pad, 6 * k))
+          local cut = words > 0 and math.min(math.max(room - vals - pad - gap - (labs - words), 0) / words, 1) or 1
           x = x1 + 12 * k
           for q = 1, 2 do
             local l, v = q == 1 and l1 or l2, q == 1 and v1 or v2
             if l and l ~= '' then
+              if cut < 1 and word(l) then l = fitText(l, F.lab, 10 * k, lw(l) * cut, '.') end
               drawText(l, F.lab, 10 * k, TMP.a:set(x, CR.midTop(c2, 10 * k, CR.MID_B)), DIMW)
               x = x + textWidth(l, F.lab, 10 * k) + 4 * k
             end
@@ -21389,7 +21616,7 @@ float4 main(PS_IN pin) {
               drawText(v, F.rb, 13 * k, TMP.a:set(x, CR.midTop(c2, 13 * k, CR.MID_R)), q == 2 and pg.fast and PURPLE or q == 1 and pg.bad and RED or PAPER)
               x = x + textWidth(v, F.rb, 13 * k)
             end
-            x = x + 14 * k
+            x = x + gap
           end
         end
         dotsR(x2 - 10 * k - (math.max(n, 1) - 1) * 8 * k - 5 * k, c2, n, on, k)
@@ -22862,7 +23089,7 @@ local drawDesktopUI = (function()
   end
   local function reportWindow(w, h, s)
     if not ac.getCar(0).isInPit then Desktop.reportOpen = false return end
-    local p1, p2 = windowAt('report', 600, 28 + Desktop.reportRows() * 13, w, h, s, true, true)
+    local p1, p2 = windowAt('report', 689, 28 + Desktop.reportRows() * 13, w, h, s, true, true)
     Drag.group = nil
     Drag.modal = { p1, p2 }
     local m = ui.mousePos()
