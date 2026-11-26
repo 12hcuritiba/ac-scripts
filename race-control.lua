@@ -812,7 +812,8 @@ local BLACK_FLAG = ac.PenaltyType.BlackFlag
 local TELEPORT_TO_PITS = ac.PenaltyType.TeleportToPits
 local NONE = ac.PenaltyType.None
 local GAME_DT = 2
-local function posList(v)
+local Pits = {}
+function Pits.list(v)
   local out = {}
   for n in tostring(v or ''):gmatch('[^/]+') do
     local p = math.floor(tonumber(n) or 0)
@@ -820,8 +821,8 @@ local function posList(v)
   end
   return out
 end
-local function pitsOf(l) return #l > 0 and table.concat(l, '/') or '0' end
-local function staffPitsText(p) return 'org:' .. pitsOf(p.org) .. ' | tv:' .. pitsOf(p.tv) end
+function Pits.of(l) return #l > 0 and table.concat(l, '/') or '0' end
+function Pits.text(p) return 'org:' .. Pits.of(p.org) .. ' | tv:' .. Pits.of(p.tv) end
 local function build(src)
   local OLD = {
     penaltyMode = { 'control', 'mode', nil, 'CSP' }, announce = { 'control', 'announce', nil, 0 },
@@ -1133,7 +1134,7 @@ local function build(src)
   c.raceProcedure.procedure = c.raceProcedure.procedure1
   c.staffSteamIDs = tostring(K('staffSteamIDs') or '')
   local staffPits = theme('staffPits') or {}
-  c.staffPits = { org = posList(staffPits.org), tv = posList(staffPits.tv) }
+  c.staffPits = { org = Pits.list(staffPits.org), tv = Pits.list(staffPits.tv) }
   c.broadcastSteamIDs = tostring(K('broadcastSteamIDs') or '')
   c.classesText = tostring(src('classes') or '')
   c.themesOnServer = {}
@@ -1157,13 +1158,13 @@ local function build(src)
     lines[#lines + 1] = string.format('kmr: points=%s ratingDsq=%s', tostring(kmrPoints.limit), kmrRating.on and tostring(kmrRating.dsqAt) or '-')
     lines[#lines + 1] = 'base: realName=' .. (c.realName and 1 or 0) .. ' offline=' .. c.realNameOffline .. ' downMax=' .. c.baseDownMax
       .. ' downPractice=' .. c.baseDownPractice
-    lines[#lines + 1] = 'staffPits: org=' .. pitsOf(c.staffPits.org) .. ' tv=' .. pitsOf(c.staffPits.tv)
+    lines[#lines + 1] = 'staffPits: org=' .. Pits.of(c.staffPits.org) .. ' tv=' .. Pits.of(c.staffPits.tv)
     return lines
   end
   return c
 end
 local config = build(function(key) return cfg[key] end)
-config.posList, config.staffPitsText = posList, staffPitsText
+config.posList, config.staffPitsText = Pits.list, Pits.text
 local function zoneReasons()
   for _, z in ipairs(config.cutZones) do TEXTS.reason[z.category] = string.format(TEXTS.cutZoneReason, tonumber(z.category:match('%d+'))) end
 end
