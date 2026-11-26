@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V360 - 2026.11.26'
+local RC_VERSION = 'V361 - 2026.11.26'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -18969,7 +18969,13 @@ float4 main(PS_IN pin) {
           if isFirst then return '-' end
           return ((r.best or 0) > 0 and (lead.best or 0) > 0) and CarRead.secText((r.best - lead.best) / 1000, 3, '+') or '-'
         end
-        rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = nameOf(r), nation = r.nation, team = teamOf(r), class = r.class, laps = r.laps or 0,
+        local name, nation, crewNow = nameOf(r), r.nation, crewOf(r)
+        if #crewNow > 1 then
+          for _, d in ipairs(crewNow) do if d.name == name and d.nation ~= '' then nation = d.nation end end
+        else
+          nation = crewNow[1].nation
+        end
+        rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = name, nation = nation, team = teamOf(r), class = r.class, laps = r.laps or 0,
           best = r.best or 0, tyre = BroadcastAlerts.tyreOf[r.index], fast = r.index == BC.fastIdx, gapAll = gapTo(leadAll, n == 1, false),
           gapCls = gapTo(leadCls[cl], first, true),
           slot = r.slot, stops = r.stops or 0, swaps = (RecordSync.base.dirPen.pit[r.slot] or {}).swaps or 0 }
