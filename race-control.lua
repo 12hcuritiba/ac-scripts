@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V365 - 2026.11.26'
+local RC_VERSION = 'V366 - 2026.11.26'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -543,8 +543,8 @@ local TEXTS = {
     pages = { search = 'SESSIONS', session = 'DRIVERS', laps = 'LAPS', lap = 'LAP' }, mark = 'MARK REF', ref = 'REF', lapS = 'L', lapK = 'LAP', play = 'PLAY', pause = 'PAUSE', start = 'START',
     hdrDate = 'DATE', hdrType = 'TYPE', hdrDrivers = 'DRV', hdrLaps = 'LAPS', hdrBest = 'BEST', hdrTime = 'TIME', hdrValid = 'V', hdrPit = 'PIT', hdrFuel = 'FUEL',
     hdrTyre = 'TYRE', hdrTel = 'TEL', bestSess = 'Best of the session', bestAll = 'Best of all times', bestServer = 'Best of the server', idealSess = 'Ideal of the session',
-    stint = 'STINT', nLaps = '%d laps', ideal = 'Ideal', best = 'Best', hdrLife = 'TYRES %', hdrStop = 'STOP', hdrCuts = 'CUTS', hdrCrash = 'CONT.',
-    legend = { 'V valid lap · PIT, P through the pit lane · FUEL litres · TYRE compound · TYRES % life: FL FR RL RR', 'STOP stop at the pits · CUTS track cuts · CONT. contacts · PEN. penalty · TEL, T telemetry · M marks the reference' },
+    stint = 'STINT', nLaps = '%d laps', ideal = 'Ideal', best = 'Best', hdrLife = 'TYRES %', hdrStop = 'STOP', hdrCuts = 'CUTS', hdrCrash = 'COLL.',
+    legend = { 'V valid lap · PIT, P through the pit lane · FUEL litres · TYRE compound · TYRES % life: FL FR RL RR', 'STOP stop at the pits · CUTS track cuts · COLL. collisions · PEN. penalty · TEL, T telemetry · M marks the reference' },
     penName = { SG = 'Stop & go', DSQ = 'Disqualified' }, hdrPen = 'PEN.',
     wxAir = 'Air', wxRoad = 'Track', wxHum = 'Humidity', wxRain = 'Rain', wxGrip = 'Grip', delta = 'A-B', airRoad = 'AIR/TRACK', grip = 'GRIP', life = 'LIFE %',
     km = 'AGE L/KM', press = 'PRESSURE', noTrace = 'This lap has no telemetry in the base', loading = 'Reading the base...',
@@ -570,7 +570,7 @@ local TEXTS = {
     classPos = 'Class position', narrator = 'Narrator', commentator = 'Commentator',
     setF1 = 'Car (F1)', setF6 = 'Car onboard (F6)', f1Cams = { 'Cockpit', 'Chase', 'Far chase', 'Bonnet', 'Bumper', 'Dash' },
     pipAl = { duel = 'Battle', pit = 'Pitlane', pitIn = 'Pit entry', pitBox = 'Stopped at the pits', pitOut = 'Pit exit', slow = 'Slow', stop = 'Stopped', broken = 'Broken', oil = 'Oil',
-      spin = 'Loss of control', cut = 'Cut', crash = 'Contact' },
+      spin = 'Loss of control', cut = 'Cut', crash = 'Collision' },
     penDt = 'Drive-through', penSg = 'Stop & go %d s', penLaps = '%d laps to serve', penLap0 = 'serve in this lap', penDsq = 'Disqualified',
     resK = 'Results', resAll = 'Overall', resHead = { 'Pos.', 'No.', 'Driver', 'Team', 'Tyre', 'Laps', 'Stops', 'Swaps', 'Best lap', 'Gap' }, chq = 'Chequered flag',
     opSessions = 'Sessions', opRules = 'Rules', opDrivers = 'Drivers per team', opStops = 'Pit stops required', opSwaps = 'Driver swaps required',
@@ -1532,6 +1532,7 @@ function CarRead.gridPlace(i)
   return idx[i]
 end
 function CarRead.num(v) return tonumber(v) or 0 end
+function CarRead.carHit(c) return c ~= nil and (tonumber(c.collidedWith) or 0) > 0 end
 function CarRead.secText(sec, dec, sign)
   local p = 10 ^ dec
   local v = math.floor(math.abs(sec) * p + 0.5) / p
@@ -4068,7 +4069,7 @@ do
   local BINS = 200
   local CRASH_GAP = 1
   local SPIN_SETTLE = 1
-  local function newInfo() return { crash = 0, cut = 0, cutS = '', spin = 0, pen = {} } end
+  local function newInfo() return { crash = 0, env = 0, cut = 0, cutS = '', spin = 0, pen = {} } end
   sessionPart('lap', Lap, function()
     return { count = 0, base = 0, marks = { cut = false, overdue = false, fuel = false, form = false, closed = false }, last = SESSION_NONE, others = {},
       best = { ms = 0, trace = nil, s = {} }, seq = 0, sentT = -1e9, sentBest = SESSION_NONE, over = false, baseDone = false, baseBusy = false, baseTries = 0,
@@ -4183,7 +4184,9 @@ do
   end
   ac.onCarCollision(0, function()
     local t = serverTimeMs()
-    if t - P.crashT >= CRASH_GAP * 1000 then P.info.crash = P.info.crash + 1 end
+    if t - P.crashT >= CRASH_GAP * 1000 then
+      if CarRead.carHit(ac.getCar(0)) then P.info.crash = P.info.crash + 1 else P.info.env = P.info.env + 1 end
+    end
     P.crashT = t
   end)
   local function binsAlong(p0, p1, t0, t1, into, minus)
@@ -4235,7 +4238,7 @@ do
     end
     local m = Lap.marks
     Lap.last = { lap = Lap.number(), ms = ms, s = s, valid = Lap.valid(m), why = why(m), pit = viaPit == true,
-      out = P.pit.started or P.pit.left, inLap = P.pit.entered or viaPit == true, outside = m.form or m.closed, crash = P.info.crash, cut = P.info.cut, cutS = P.info.cutS,
+      out = P.pit.started or P.pit.left, inLap = P.pit.entered or viaPit == true, outside = m.form or m.closed, crash = P.info.crash, env = P.info.env, cut = P.info.cut, cutS = P.info.cutS,
       spin = P.info.spin,
       pen = table.concat(P.info.pen, '/'), fuel = CarRead.num(car.fuel), t = t }
     local L = Lap.last
@@ -7410,7 +7413,7 @@ do
       cur.laps[#cur.laps + 1] = l
       cur.total = cur.total + l.ms
       for _ in tostring(l.stop or ''):gmatch('%d+') do cur.stops = cur.stops + 1 end
-      cur.cuts, cur.crashes = cur.cuts + (tonumber(l.cut) or 0), cur.crashes + (tonumber(l.crash) or 0)
+      cur.cuts, cur.crashes = cur.cuts + (tonumber(l.cut) or 0), cur.crashes + (tonumber(l.crash) or 0) + (tonumber(l.env) or 0)
       for _ in tostring(l.pen or ''):gmatch('[^/]+') do cur.pens = cur.pens + 1 end
     end
     for _, st in ipairs(out) do
@@ -11197,7 +11200,7 @@ do
   end
   function RaceTable.progress(r) return r.laps + r.spline end
   local function infoText(l, base)
-    return string.format('o%d:i%d:x%d:c%d:s%d:w%s:p%s:f%.1f:l%s:k%s', l.out and 1 or 0, l.inLap and 1 or 0, l.crash or 0, l.cut or 0,
+    return string.format('o%d:i%d:x%d:e%d:c%d:s%d:w%s:p%s:f%.1f:l%s:k%s', l.out and 1 or 0, l.inLap and 1 or 0, l.crash or 0, l.env or 0, l.cut or 0,
       l.spin or 0, l.why or '', (tostring(l.pen or ''):gsub('[,;|:]', ' ')), l.fuel or 0, (tostring(l.life or ''):gsub(',', '/')), l.cutS or '')
       .. (base and string.format(':u%s:r%s:d%s:v%s', l.hum and string.format('%.0f', l.hum) or '', l.rain and string.format('%.0f', l.rain) or '', l.wdir or '', l.wind or '') or '')
   end
@@ -11205,6 +11208,7 @@ do
   local function infoApply(l, text)
     for k, v in tostring(text or ''):gmatch('(%a)([^:]*)') do
       if k == 'o' then l.out = v == '1' elseif k == 'i' then l.inLap = v == '1' elseif k == 'x' then l.crash = tonumber(v) or 0
+      elseif k == 'e' then l.env = tonumber(v) or 0
       elseif k == 'c' then l.cut = tonumber(v) or 0 elseif k == 's' then l.spin = tonumber(v) or 0 elseif k == 'w' then l.why = v
       elseif k == 'p' then l.pen = v elseif k == 'f' then l.fuel = tonumber(v) elseif k == 'l' then l.life = v elseif k == 'k' then l.cutS = v
       elseif k == 'u' then l.hum = tonumber(v) elseif k == 'r' then l.rain = tonumber(v) end
@@ -11462,7 +11466,7 @@ do
       RaceTable.lastLap = L.lap
       local laps = RaceTable.laps
       laps[#laps + 1] = { lap = L.lap, ms = L.ms, valid = L.valid, pit = L.pit, s = L.s, why = L.why, out = L.out, inLap = L.inLap,
-        crash = L.crash, cut = L.cut, cutS = L.cutS, spin = L.spin, pen = L.pen, fuel = L.fuel, life = L.life,
+        crash = L.crash, env = L.env, cut = L.cut, cutS = L.cutS, spin = L.spin, pen = L.pen, fuel = L.fuel, life = L.life,
         driver = tostring(ac.getDriverName(0) or ''):gsub('[,;|]', ' ') }
       laps[#laps].touched = touched
       local wx = RecordSync.base.wxNow and RecordSync.base.wxNow()
@@ -17096,7 +17100,7 @@ float4 main(PS_IN pin) {
             y = y + ROW * s
           else
             local tcol = l.ms > 0 and secColor(Lap.codeOf(l.ms, P.cl, P.dl, l.valid)) or (not l.valid and RED or nil)
-            local pen, cut, crash = (l.pen or '') ~= '' and l.pen or nil, tonumber(l.cut) or 0, tonumber(l.crash) or 0
+            local pen, cut, crash = (l.pen or '') ~= '' and l.pen or nil, tonumber(l.cut) or 0, (tonumber(l.crash) or 0) + (tonumber(l.env) or 0)
             line(i, { { tostring(l.lap or ''), lx, nil, true }, { lapTime(l.ms), 100 + d, tcol, true }, { secs(l.s[1]), 158 + d, secCol(l, 1), true },
               { secs(l.s[2]), 216 + d, secCol(l, 2), true }, { secs(l.s[3]), 274 + d, secCol(l, 3), true }, { l.valid and 'V' or '-', 284 + d, not l.valid and RED or nil },
               { tonumber(l.pit) == 1 and 'P' or '-', 300 + d, COLOR_DIM }, { l.fuel and string.format('%.1f', tonumber(l.fuel) or 0) or '-', 344 + d, COLOR_DIM, true },
@@ -17220,7 +17224,8 @@ float4 main(PS_IN pin) {
       'tpl', 'tpi', 'tpg', 'tpv', 'tpp', 'tql', 'tqi', 'tqg', 'tqv', 'tqp', 'trl', 'tri', 'trg', 'trv', 'trp',
       'tpc', 'tqc', 'trc', 'tpf', 'tqf', 'trf',
       'aad', 'aap', 'aai', 'aac', 'add', 'adp', 'adi', 'adc', 'apw', 'amp', 'ams', 'amc', 'amd',
-      'aak', 'adk', 'ka', 'kr', 'wec' }
+      'aak', 'adk', 'ka', 'kr', 'wec',
+      'acc', 'aca' }
     local CR_KEYS = { hm = 'move', hps = 'page', hw = 'wait', vm = 'move', vps = 'page', vw = 'wait', rpn = 'pins', rw = 'wait', ipn = 'pins', iw = 'wait', fl = 'bool',
       fls = 'page', cl = 'bool', cls = 'page', fcop = 'op', tk = 'bool', tks = 'page', tkop = 'op', lc = 'bool', lcs = 'page', lcop = 'op', gr = 'bool', grs = 'page',
       grm = 'move', grps = 'page', grop = 'op', sg = 'bool', scl = 'bool', st = 'bool', sts = 'page', sx = 'bool', sxs = 'page', pm = 'bool', ptw = 'bool', ptws = 'page',
@@ -17232,7 +17237,7 @@ float4 main(PS_IN pin) {
       tpl = 'bool', tpi = 'bool', tpg = 'bool', tpv = 'bool', tpp = 'bool', tql = 'bool', tqi = 'bool', tqg = 'bool', tqv = 'bool', tqp = 'bool', trl = 'bool', tri = 'bool', trg = 'bool', trv = 'bool', trp = 'bool',
       tpc = 'bool', tqc = 'bool', trc = 'bool', tpf = 'ph', tqf = 'ph', trf = 'ph',
       aad = 'any', aap = 'any', aai = 'any', aac = 'any', add = 'page', adp = 'page', adi = 'page', adc = 'page', apw = 'bool', amp = 'dest', ams = 'set', amc = 'cam',
-      amd = 'page', aak = 'any', adk = 'page', ka = 'scale', kr = 'scale', wec = 'cam' }
+      amd = 'page', aak = 'any', adk = 'page', ka = 'scale', kr = 'scale', wec = 'cam', acc = 'bool', aca = 'bool' }
     local CR_START = { hm = 'ROLL', hps = 8, hw = 5, vm = 'ROLL', vps = 8, vw = 5, rpn = 3, rw = 5, ipn = 0, iw = 5, fl = true, fls = 8, cl = true, cls = 8, fcop = 75,
       tk = true, tks = 10, tkop = 75, lc = true, lcs = 12, lcop = 75, gr = true, grs = 20, grm = 'PAGE', grps = 8, grop = 75, sg = true, scl = true, st = true, sts = 5,
       sx = true, sxs = 5, pm = true, ptw = true, ptws = 5, pbx = true, pbxs = 5, allop = 90, secop = 75, pitop = 75, grw = 5, im = 'ROLL', ips = 8, qb = 1, qbs = 0, rh = 5,
@@ -17243,7 +17248,8 @@ float4 main(PS_IN pin) {
       tpl = false, tpi = true, tpg = false, tpv = true, tpp = false, tql = false, tqi = true, tqg = false, tqv = true, tqp = false, trl = true, tri = false, trg = true, trv = false, trp = true,
       tpc = true, tqc = true, trc = true, tpf = 1, tqf = 1, trf = 0,
       aad = 2, aap = 2, aai = 2, aac = 2, add = 8, adp = 8, adi = 8, adc = 8, apw = false, amp = 1, ams = 0, amc = -1, amd = 8,
-      aak = 0, adk = 8, ka = 88, kr = 90, wec = -1 }
+      aak = 0, adk = 8, ka = 88, kr = 90, wec = -1,
+      acc = true, aca = true }
     for k, v in pairs(CR_START) do
       BC.opt[k] = v
       if CR_KEYS[k] == 'bool' then BOOLS[k] = true elseif CR_KEYS[k] ~= 'move' then NUMS[k] = true end
@@ -22042,7 +22048,7 @@ do
     local c = ac.getCar(i)
     if not c or CarRead.isStaff(i) then return end
     local now = state.ui.clock
-    if now - (crashT[i] or -1e9) >= 1 then crashes[#crashes + 1] = { a = i, at = now, sp = CarRead.num(c.splinePosition) } end
+    if now - (crashT[i] or -1e9) >= 1 then crashes[#crashes + 1] = { a = i, at = now, sp = CarRead.num(c.splinePosition), car = CarRead.carHit(c) } end
     crashT[i] = now
   end
   local cuts = {}
@@ -22109,7 +22115,7 @@ do
       if k and not closed and not CarRead.isStaff(i) then list[#list + 1] = { k = k, a = i, sp = pos or 0, at = t or now } end
     end
     for _, p in ipairs(pits) do list[#list + 1] = { k = 'pit', a = p.a, sp = p.sp or 0, at = p.at } end
-    for _, c in ipairs(crashes) do list[#list + 1] = { k = 'crash', a = c.a, sp = c.sp, at = c.at } end
+    for _, c in ipairs(crashes) do list[#list + 1] = { k = 'crash', a = c.a, sp = c.sp, at = c.at, car = c.car } end
     for _, c in ipairs(cuts) do list[#list + 1] = { k = 'cut', a = c.a, sp = c.sp, at = c.at } end
     for n = #list, 1, -1 do
       local e = list[n]
@@ -22135,6 +22141,7 @@ do
       local key = keyOf(e)
       local x = KIND_OF[e.k] or 'i'
       local dest = tonumber(o['aa' .. x]) or 0
+      if e.k == 'crash' and o[e.car and 'acc' or 'aca'] == false then dest = 0 end
       local car = e.k == 'duel' and e.b or e.a
       local twice = false
       for _, a in pairs(onAir) do if a.car == car then twice = true end end
