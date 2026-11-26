@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V359 - 2026.11.26'
+local RC_VERSION = 'V360 - 2026.11.26'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -5669,6 +5669,8 @@ function Rules.practiceClear(car)
   if #l.items == 0 and not next(state.slowdowns) and #l.endOfLap == 0 then return nil end
   local cleared = {}
   for _, it in ipairs(l.items) do cleared[#cleared + 1] = Rules.itemReasonLog(it) end
+  local p = PitStops.pass
+  if p and p.entryMs and not p.jumped and sgItem() then p.sgCleared = true end
   Rules.zero()
   ac.log('race-control: practice, car at its pit place: penalties cleared')
   rcLog(TEXTS.rc.pit, #cleared > 0 and string.format(TEXTS.practiceClearedWhat, table.concat(cleared, ', '))
@@ -7705,7 +7707,7 @@ do
     if PitStops.pass and PitStops.pass.entryMs and CarRead.parked(car) and not PitControl.settling() then
       PitStops.pass.stopped = true
       if state.redFlag then PitStops.pass.redParked = true end
-      if not sgItem() and not PitStops.pass.sgPaid and not PitStops.pass.redParked and not (PitStops.pass.restored and Lap.rejoin) then PitStops.countStop() end
+      if not sgItem() and not PitStops.pass.sgPaid and not PitStops.pass.sgCleared and not PitStops.pass.redParked and not (PitStops.pass.restored and Lap.rejoin) then PitStops.countStop() end
     end
     local p = PitStops.pass
     if p and p.sgServiced then
