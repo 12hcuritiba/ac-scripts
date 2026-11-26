@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V362 - 2026.11.26'
+local RC_VERSION = 'V363 - 2026.11.26'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -11143,6 +11143,13 @@ do
     local arrival = race and Clock.endMs ~= nil
     if not race or arrival then table.sort(rows, arrival and arrivalOrder or bestOrder) end
     if race and not arrival and Clock.greenMs == nil and config.gridOrder then table.sort(rows, gridOrder) end
+    local out
+    for _, r in ipairs(rows) do if r.dsq then out = out or {} out[#out + 1] = r end end
+    if out then
+      local k = 0
+      for _, r in ipairs(rows) do if not r.dsq then k = k + 1 rows[k] = r end end
+      for i, r in ipairs(out) do rows[k + i] = r end
+    end
     local classPos2 = {}
     local classLead, classAhead = {}, {}
     local gap = arrival and lineGap or Relative.gap
@@ -17961,7 +17968,7 @@ float4 main(PS_IN pin) {
       end
       local fb, fi = 0, nil
       for _, r in ipairs(RaceTable.rows or {}) do
-        if not r.absent and (r.best or 0) > 0 and (fb == 0 or r.best < fb) then fb, fi = r.best, r.index end
+        if not r.absent and not r.dsq and (r.best or 0) > 0 and (fb == 0 or r.best < fb) then fb, fi = r.best, r.index end
         if place == 'ALL' or r.class == place then
           n = n + 1
           out[n] = r
@@ -18978,7 +18985,8 @@ float4 main(PS_IN pin) {
         rows[n] = { pos = r.pos or n, classPos = r.classPos, number = r.number, name = name, nation = nation, team = teamOf(r), class = r.class, laps = r.laps or 0,
           best = r.best or 0, tyre = BroadcastAlerts.tyreOf[r.index], fast = r.index == BC.fastIdx, gapAll = gapTo(leadAll, n == 1, false),
           gapCls = gapTo(leadCls[cl], first, true),
-          slot = r.slot, stops = r.stops or 0, swaps = (RecordSync.base.dirPen.pit[r.slot] or {}).swaps or 0 }
+          slot = r.slot, stops = r.stops or 0, swaps = (RecordSync.base.dirPen.pit[r.slot] or {}).swaps or 0,
+          dsq = r.dsq }
       end
       return rows
     end
@@ -19140,7 +19148,7 @@ float4 main(PS_IN pin) {
         if names == r.one and drv and drv[1] and drv[1].nation ~= '' then r.one[1].nation = drv[1].nation end
         cols(yy, { names = names, nil, tostring(byCls and (r.classPos or '') or r.pos), '#' .. tostring(r.number or ''), '', r.team, '', tostring(r.laps),
           (r.stops or 0) > 0 and tostring(r.stops) or '-', (config.swapOn() and (r.swaps or 0) > 0) and tostring(r.swaps) or '-',
-          r.best > 0 and lapTime(r.best) or '-', byCls and r.gapCls or r.gapAll }, r)
+          r.dsq and 'DSQ' or r.best > 0 and lapTime(r.best) or '-', r.dsq and '-' or (byCls and r.gapCls or r.gapAll) }, r)
       end
       for n = 1, pins do line(list[n], y) y = y + rh end
       if pins > 0 then
