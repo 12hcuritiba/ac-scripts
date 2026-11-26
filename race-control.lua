@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V361 - 2026.11.26'
+local RC_VERSION = 'V362 - 2026.11.26'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -17581,7 +17581,7 @@ float4 main(PS_IN pin) {
         elseif k == 'CYCLE' then BC.opt.cycle = math.min(math.max(math.floor(tonumber(v) or 0), 0), 600)
         elseif k == 'SPEED' then BC.opt.speed = speedOf(v)
         elseif k == 'FLAG' then BC.opt.flag = v:upper() == 'AUTO' and 'AUTO' or 'FIX'
-        elseif k == 'FORM' then BC.opt.form = v:upper() == 'V' and 'V' or 'H'
+        elseif k == 'FORM' then BC.opt.form = v:upper() == 'V' and 'V' or 'H' if BC.notesOff then BC.notesOff() end
         elseif k == 'TOWER' then BC.opt.tower = (v:upper() == 'SEG' or v:upper() == 'CYC') and v:upper() or 'ALL'
         elseif k == 'PINS' then BC.opt.pins = pinsOf(v)
         elseif k == 'CARD' then BC.opt.card = (v:upper() == 'ON' or v:upper() == 'OFF') and v:upper() or 'AUTO'
@@ -18216,21 +18216,29 @@ float4 main(PS_IN pin) {
         sm = sg and Rules.sgWhy(it) or tostring(TEXTS.reason[it.cat] or it.cat)
         col = sg and SEAL_R or SEAL_Y
       end
-      for _, q in pairs(CR.notes) do
-        if #q < 10 then q[#q + 1] = { kind = 'pen', idx = idx, b = Lang.letters.upper(b), sm = sm, col = col, t = nil } end
-      end
+      CR.noteAdd({ kind = 'pen', idx = idx, b = Lang.letters.upper(b), sm = sm, col = col, t = nil })
     end
     function CR.flagDrop()
       for _, q in pairs(CR.notes) do
         for i = #q, 1, -1 do if q[i].kind == 'flag' and q[i].t == nil then table.remove(q, i) end end
       end
     end
+    function CR.noteAdd(a, b)
+      local q = CR.notes[BC.opt.form == 'V' and 't' or 'b']
+      if #q + (b and 2 or 1) > 20 then return end
+      q[#q + 1] = a
+      if b then q[#q + 1] = b end
+    end
+    function BC.notesOff(all)
+      local on = BC.opt.form == 'V' and 't' or 'b'
+      for q, l in pairs(CR.notes) do
+        if all or q ~= on then for i = #l, 1, -1 do l[i] = nil end end
+      end
+    end
     function CR.flagPush(b, col)
       local sm = select(4, sessionLine()) or ''
       CR.flagDrop()
-      for _, q in pairs(CR.notes) do
-        if #q < 10 then q[#q + 1] = { kind = 'flag', b = b or Lang.letters.upper(TEXTS.bc.flagGreen), sm = sm, col = col or FLAGC.green, t = nil } end
-      end
+      CR.noteAdd({ kind = 'flag', b = b or Lang.letters.upper(TEXTS.bc.flagGreen), sm = sm, col = col or FLAGC.green, t = nil })
     end
     function CR.noteOpt(q, kind)
       local o = BC.opt
@@ -18254,9 +18262,7 @@ float4 main(PS_IN pin) {
         local idx = not first and s.entry > 0 and was ~= s.entry and slotCar(slot)
         if idx then
           local b, sm = Lang.letters.upper(string.format(T.pitStop, s.park / 1000)), string.format(T.pitLane, s.lane / 1000)
-          for _, q in pairs(CR.notes) do
-            if #q < 10 then q[#q + 1] = { kind = 'pit', idx = idx, b = b, sm = sm, col = PAPER, t = nil } end
-          end
+          CR.noteAdd({ kind = 'pit', idx = idx, b = b, sm = sm, col = PAPER, t = nil })
         end
       end
       if first or not CR.sgKept then CR.sgKept = {} end
@@ -18267,9 +18273,7 @@ float4 main(PS_IN pin) {
         end
         local idx = not first and on and not CR.sgKept[slot] and slotCar(slot)
         if idx then
-          for _, q in pairs(CR.notes) do
-            if #q < 10 then q[#q + 1] = { kind = 'pit', idx = idx, b = Lang.letters.upper(T.sgStop), sm = '', col = PAPER, t = nil } end
-          end
+          CR.noteAdd({ kind = 'pit', idx = idx, b = Lang.letters.upper(T.sgStop), sm = '', col = PAPER, t = nil })
         end
         CR.sgKept[slot] = on
       end
@@ -18327,12 +18331,8 @@ float4 main(PS_IN pin) {
         end
       end
       for _, pp in ipairs(parts) do txt[#txt + 1] = pp[1] end
-      for _, qq in pairs(CR.notes) do
-        if #qq < 9 then
-          qq[#qq + 1] = { kind = 'sec', idx = idx, b = table.concat(txt), parts = parts, sm = string.format(T.secLapS, n or 0), col = PURPLE, wet = wet, t = nil }
-          if (ms or 0) > 0 then qq[#qq + 1] = { kind = 'sec', idx = idx, b = Lang.letters.upper(TEXTS.hdr.lap .. ' ' .. lapTime(ms)), sm = string.format(T.secLapT, n or 0), col = PURPLE, t = nil } end
-        end
-      end
+      CR.noteAdd({ kind = 'sec', idx = idx, b = table.concat(txt), parts = parts, sm = string.format(T.secLapS, n or 0), col = PURPLE, wet = wet, t = nil },
+        (ms or 0) > 0 and { kind = 'sec', idx = idx, b = Lang.letters.upper(TEXTS.hdr.lap .. ' ' .. lapTime(ms)), sm = string.format(T.secLapT, n or 0), col = PURPLE, t = nil } or nil)
     end
     CR.q = { cars = {} }
     CR.LAST_SEC_S = 3
@@ -20426,7 +20426,7 @@ float4 main(PS_IN pin) {
       local fk = flagNow()
       if fk == 'yellow' then fk = 'green' end
       local rf = state.redFlag ~= nil
-      if CR.fg.sid ~= sid then CR.fg.sid, CR.fg.k, CR.fg.r = sid, fk, rf; CR.flagDrop()
+      if CR.fg.sid ~= sid then CR.fg.sid, CR.fg.k, CR.fg.r = sid, fk, rf; BC.notesOff(true)
       else
         if CR.fg.k ~= fk and fk == 'green' and not BC.formGreen() then CR.flagPush() end
         if rf and not CR.fg.r and fk == 'red' then CR.flagPush(Lang.letters.upper(BC.delayedNow() and TEXTS.bc.delayed or TEXTS.bc.flagRed), FLAGC.red) end
