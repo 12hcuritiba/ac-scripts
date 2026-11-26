@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V363 - 2026.11.26'
+local RC_VERSION = 'V364 - 2026.11.26'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -11031,6 +11031,15 @@ do
     id = tostring(id or ''):lower()
     return (config.carClasses or {})[id] or classesNow()[id]
   end
+  function RaceTable.classModels()
+    local out, seen = {}, {}
+    for _, map in ipairs({ config.carClasses or {}, classesNow() }) do
+      for m, c in pairs(map) do
+        if not seen[m] then seen[m] = true out[c] = out[c] or {} out[c][#out[c] + 1] = m end
+      end
+    end
+    return out
+  end
   local eventKeys, eventFrom = {}, false
   function RaceTable.classKeys()
     local text = config.carClassesText or ''
@@ -19449,32 +19458,24 @@ float4 main(PS_IN pin) {
       end
     end
     function CR.lapsAsk()
-      local models, seen = {}, {}
-      for i = 0, (sim.carsCount or 1) - 1 do
-        local m = (tostring(ac.getCarID(i) or ''):gsub('[|%s]', '_'))
-        if m ~= '' and not seen[m] and not CarRead.isStaff(i) then seen[m], models[#models + 1] = i, m end
-      end
-      local L = { want = #models, got = 0, by = {}, car = seen }
+      local asks = { { key = '*', car = '*' } }
+      for c, ms in pairs(RaceTable.classModels()) do asks[#asks + 1] = { key = c, car = table.concat(ms, ',') } end
+      local L = { want = #asks, got = 0, by = {} }
       CR.laps = L
-      for _, m in ipairs(models) do
-        RecordSync.base.reportGet('best', { track = RecordSync.base.trackKey(), car = m }, function(b)
+      for _, a in ipairs(asks) do
+        RecordSync.base.reportGet('best', { track = RecordSync.base.trackKey(), car = a.car }, function(b)
           L.got = L.got + 1
-          if b and type(b.allTime) == 'table' and (tonumber(b.allTime.ms) or 0) > 0 then L.by[m] = b.allTime end
+          if b and type(b.allTime) == 'table' and (tonumber(b.allTime.ms) or 0) > 0 then L.by[a.key] = b.allTime end
         end)
       end
     end
     function CR.lapsRows()
-      local L, rows, all, per = CR.laps, {}, nil, {}
-      for m, b in pairs(L and L.by or {}) do
-        local e = { b = b, model = m }
-        if not all or b.ms < all.b.ms then all = e end
-        local c = RaceTable.classOfModel(m)
-        if c and (not per[c] or b.ms < per[c].b.ms) then per[c] = e end
-      end
-      if all then rows[1] = { tag = TEXTS.bc.resAll, e = all, fast = true } end
+      local L, rows = CR.laps, {}
+      local by = L and L.by or {}
+      if by['*'] then rows[1] = { tag = TEXTS.bc.resAll, e = { b = by['*'] }, fast = true } end
       local keys = RaceTable.classKeys()
       if #keys > 1 then
-        for _, key in ipairs(keys) do if per[key] then rows[#rows + 1] = { tag = (classStyle(key)), cls = key, e = per[key] } end end
+        for _, key in ipairs(keys) do if by[key] then rows[#rows + 1] = { tag = (classStyle(key)), cls = key, e = { b = by[key] } } end end
       end
       return rows
     end
@@ -19514,8 +19515,7 @@ float4 main(PS_IN pin) {
             local nx = cx[3] + 14 * k
             local fw = CR.flagAt(b.nation, nx, yy + 19 * k, 19 * k, 6 * k)
             drawText(fitText(Lang.letters.upper(short(b.driver or '')), F.name, 19 * k, free - 28 * k - fw, '.'), F.name, 19 * k, TMP.a:set(nx + fw, yy + 19 * k), PAPER)
-            local ci = CR.laps and CR.laps.car[r.e.model]
-            local car = ci and ac.getCarName(ci) or r.e.model
+            local car = (b.carName ~= nil and b.carName ~= '') and b.carName or b.car
             drawText(fitText(tostring(car or ''), F.wtm, 16 * k, free - 28 * k, '.'), F.wtm, 16 * k, TMP.a:set(cx[4] + 14 * k, yy + 21 * k), DIMW)
             local at = tonumber(b.at)
             local when = at and at > 0 and os.date('%d/%m/%Y', math.floor(at / 1000)) or '-'
