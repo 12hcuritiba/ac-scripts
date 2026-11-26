@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V364 - 2026.11.26'
+local RC_VERSION = 'V365 - 2026.11.26'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -4250,6 +4250,9 @@ do
     ac.log(string.format('race-control: line - lap %d %s %d ms%s%s%s', L.lap, L.valid and 'valid' or ('invalid ' .. L.why), ms,
       #s > 0 and (' sectors ' .. table.concat(s, '/')) or '', L.out and ' out lap' or '', L.inLap and ' in lap' or ''))
     m.cut, m.overdue, m.fuel, m.form, m.closed = false, false, false, false, false
+    local held = {}
+    for q, v in ipairs(s) do held[q - 1] = v end
+    P.held = { s = held, ok = L.valid }
     P.start, P.secT, P.secN, P.cutN, P.broken, P.trace, P.info = t, {}, 0, nil, false, {}, newInfo()
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
     preMarks(car, true)
@@ -4346,6 +4349,11 @@ do
       prev = v
     end
     return out
+  end
+  function Lap.heldSectors()
+    local h = P.held
+    if not h or state.ui.clock - P.lineT >= 3 or (P.secN or 0) > 0 then return nil end
+    return h.s, h.ok
   end
   function Lap.bestOf(laps)
     local b = { ms = 0, lap = nil, lapS = {}, s = {} }
@@ -11598,7 +11606,7 @@ do
   function Delta.sectors(ref)
     local out = {}
     if not ref then return out end
-    for k, v in pairs(Lap.currentSectors()) do
+    for k, v in pairs(Lap.heldSectors() or Lap.currentSectors()) do
       local r = ref.s[k + 1]
       if v > 0 and r and r > 0 then out[k] = (v - r) / 1000 end
     end
@@ -14782,8 +14790,9 @@ local drawRaceScreens = (function()
     y = y + 15 * s
     local cells = { { TEXTS.scrDeltaSectors, 14, COLOR_DIM } }
     local ds = Delta.sectors(ref)
-    local cur = Lap.currentSectors()
-    local bad = Lap.invalidNow()
+    local held, heldOk = Lap.heldSectors()
+    local cur = held or Lap.currentSectors()
+    local bad = held and not heldOk or (not held and Lap.invalidNow())
     for k = 0, 2 do
       local v = ds[k]
       cells[#cells + 1] = { v and CarRead.secText(v, 2, true) or '-', 104 + k * 56, v and cur[k] and secColor(Lap.secCode(0, Lap.keyOf(0), k + 1, cur[k], not bad)) or nil, true }
