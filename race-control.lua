@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V366 - 2026.11.26'
+local RC_VERSION = 'V367 - 2026.11.27'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -1715,6 +1715,14 @@ function CarRead.trackAngle(car, x, z)
   local tn = math.sqrt(tx * tx + tz * tz)
   if tn <= 0 then return nil end
   return math.deg(math.acos(math.min(math.max((tx * x + tz * z) / (tn * n), -1), 1)))
+end
+function CarRead.againstTrack(car, x, z)
+  local a = CarRead.trackAngle(car, x, z)
+  return a ~= nil and a > config.wrongWay.angle
+end
+function CarRead.wrongWayNow(car)
+  local m = CarRead.motion
+  return m ~= nil and m.dist > 0 and CarRead.againstTrack(car, car.look.x, car.look.z) and CarRead.againstTrack(car, m.dx, m.dz)
 end
 end
 function CarRead.slipAngle(car)
@@ -4064,7 +4072,6 @@ function SwapRecord.baseLine()
 end
 local Lap = { splits = nil }
 do
-  local HALF = 0.5
   local ABSORB_S = 2
   local BINS = 200
   local CRASH_GAP = 1
@@ -4077,9 +4084,34 @@ do
   end, { 'splits' })
   local P = {}
   sessionPart('lapWay', P, function()
-    return { sp = SESSION_NONE, t = SESSION_NONE, raw = SESSION_NONE, prog = 1, start = SESSION_NONE, open = false, secT = {}, secN = 0, cutN = SESSION_NONE, broken = false, trace = {},
-      lineT = -1e9, info = newInfo(), pit = { entered = false, left = false }, crashT = -1e9, spinning = false, calmT = SESSION_NONE, recDriver = SESSION_NONE }
+    return { sp = SESSION_NONE, t = SESSION_NONE, raw = SESSION_NONE, start = SESSION_NONE, open = false, secT = {}, secN = 0, cutN = SESSION_NONE, broken = false, trace = {},
+      lineT = -1e9, info = newInfo(), pit = { entered = false, left = false }, crashT = -1e9, spinning = false, calmT = SESSION_NONE, recDriver = SESSION_NONE,
+      jump = false, made = false, wrong = false, lined = false }
   end)
+  local function lapState(ev, a)
+    if ev == 'open' then
+      P.open, P.start, P.secN, P.jump, P.made, P.wrong, P.lined = true, a.t, 0, false, false, false, true
+    elseif ev == 'close' then
+      P.start, P.secN, P.jump, P.made, P.wrong, P.lined = a.t, 0, false, false, false, true
+    elseif ev == 'turn' then
+      P.open, P.start, P.secN, P.jump, P.made, P.wrong = a.out, a.out and a.t or nil, 0, false, false, false
+    elseif ev == 'record' then
+      P.open, P.start = a.open, a.open and a.start or nil
+      if a.open then P.made, P.jump = true, false end
+    elseif ev == 'game' then
+      P.open, P.start, P.made, P.jump = true, a.start, true, false
+    elseif ev == 'jump' then
+      P.made, P.jump, P.secN = false, true, 0
+    elseif ev == 'made' then
+      P.made, P.jump = true, false
+    elseif ev == 'reverse' then
+      P.secN = 0
+    elseif ev == 'wrong' then
+      P.wrong = true
+    elseif ev == 'finish' then
+      P.open, P.start = false, nil
+    end
+  end
   local function splits()
     if Lap.splits then return Lap.splits end
     local out = {}
@@ -4135,8 +4167,7 @@ do
     if over == '1' then Lap.over = true end
     Lap.seq = math.max(Lap.seq or 0, seq or 0)
     Lap.base = tonumber(n) - Lap.count
-    P.open = tonumber(start) >= 0 and open ~= '0'
-    P.start = P.open and tonumber(start) or nil
+    if not P.lined then lapState('record', { open = tonumber(start) >= 0 and open ~= '0', start = tonumber(start) }) end
     Lap.marks.cut = Lap.marks.cut or m:find('C') ~= nil
     Lap.marks.overdue = Lap.marks.overdue or m:find('V') ~= nil
     Lap.marks.fuel = Lap.marks.fuel or m:find('F') ~= nil
@@ -4147,40 +4178,56 @@ do
     ac.log(string.format('race-control: lap %d of the car taken back (%s, marks %s)', tonumber(n), P.open and ('open, start ' .. start) or 'no lap open',
       m ~= '' and m or '-'))
   end
-  RecordSync.restorers.lap = function(body, seq) if (seq or 0) >= (Lap.seq or 0) then apply(body, seq) end end
+  RecordSync.restorers.lap = function(body, seq)
+    if (seq or 0) < (Lap.seq or 0) then return end
+    local lined = P.lined
+    apply(body, seq)
+    if not lined and Lap.boxDecision then Lap.boxDecision(ac.getCar(0)) end
+  end
+  local ENTRY_MARK = '.amxracing.race-control.lapentry'
   function Lap.sessionStart(transition)
-    P.prog = transition and 0 or 1
-    P.open = transition and not ac.getCar(0).isInPitlane or false
-    P.start = P.open and serverTimeMs() or nil
-    if not transition then
-      local body, seq = Record.load('lap')
-      if body then apply(body, seq) end
-      local car = ac.getCar(0)
-      if not body and not car.isInPitlane then
-        P.open, P.start = true, serverTimeMs() - CarRead.num(car.lapTimeMs)
-        ac.log('race-control: lap: the script started with the car on the track and no record of the lap: the lap open, the next line closes it')
-      end
+    local key = Record.key()
+    local reload = not transition and ac.load(ENTRY_MARK) == key
+    ac.store(ENTRY_MARK, key)
+    local car = ac.getCar(0)
+    if transition then
+      lapState('turn', { out = not car.isInPitlane, t = serverTimeMs() })
+      return
+    end
+    local body, seq = Record.load('lap')
+    if body then apply(body, seq) end
+    if not body and reload and not car.isInPitlane then
+      lapState('game', { start = serverTimeMs() - CarRead.num(car.lapTimeMs) })
+      ac.log('race-control: lap: the script reloaded inside the session with the car on the track and no record of the lap: the lap open, the next line closes it')
     end
   end
+  local function boxDecision(car)
+    if not car.isInPitlane or not P.open then return nil, nil end
+    local back = P.recDriver ~= nil and P.recDriver == nameCode(ac.getDriverName(0))
+    local sw = RecordSync.base.swapLine
+    local parked = back and sw ~= nil and sw.parked == true and sw.steam == tostring(ac.getUserSteamID() or '')
+    if back and not parked then lapState('jump') else lapState('made') end
+    return back, parked
+  end
+  Lap.boxDecision = boxDecision
   function Lap.connected(car)
     if not car.isInPitlane then return end
     if not P.open then
       ac.log('race-control: lap: connection with the car in its box, no lap open: the next line opens it')
       return
     end
-    local back = P.recDriver ~= nil and P.recDriver == nameCode(ac.getDriverName(0))
+    local back, parked = boxDecision(car)
     Lap.rejoin = back
     if back and state.redFlag then state.redRejoin = true end
-    P.prog = back and 0 or 1
     if back then P.broken, P.trace = true, {} end
-    ac.log('race-control: lap: connection with the car in its box ' .. (back and '(the same driver back: the line at the pit exit does not close the lap)'
-      or '(another driver: the next line closes the lap)'))
+    ac.log('race-control: lap: connection with the car in its box ' .. (back and not parked and '(the same driver back: the line at the pit exit does not close the lap)'
+      or back and '(the same driver back, left stopped at his pit place: the next line closes the lap)' or '(another driver: the next line closes the lap)'))
   end
   state.onJumped[#state.onJumped + 1] = function(tow)
     P.sp = nil
     if not tow or state.list.prevInPit or not P.open then return end
-    P.prog, P.broken = 0, true
-    P.trace = {}
+    P.broken, P.trace = true, {}
+    lapState('jump')
   end
   ac.onCarCollision(0, function()
     local t = serverTimeMs()
@@ -4256,7 +4303,8 @@ do
     local held = {}
     for q, v in ipairs(s) do held[q - 1] = v end
     P.held = { s = held, ok = L.valid }
-    P.start, P.secT, P.secN, P.cutN, P.broken, P.trace, P.info = t, {}, 0, nil, false, {}, newInfo()
+    lapState('close', { t = t })
+    P.secT, P.cutN, P.broken, P.trace, P.info = {}, nil, false, {}, newInfo()
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
     preMarks(car, true)
     P.lineT = state.ui.clock
@@ -4265,12 +4313,14 @@ do
   end
   function Lap.finish()
     if Lap.over then return end
-    Lap.over, P.open, P.start = true, false, nil
+    Lap.over = true
+    lapState('finish')
     ac.log('race-control: lap: chequered flag of this car: no lap counts from here (decision 953)')
     Lap.save()
   end
   local function open(car, t)
-    P.open, P.start, P.secT, P.secN, P.cutN, P.broken, P.trace, P.info = true, t, {}, 0, nil, false, {}, newInfo()
+    lapState('open', { t = t })
+    P.secT, P.cutN, P.broken, P.trace, P.info = {}, nil, false, {}, newInfo()
     Lap.marks.cut, Lap.marks.overdue, Lap.marks.fuel, Lap.marks.form, Lap.marks.closed = false, false, false, false, false
     P.pit = { started = car.isInPitlane == true, entered = false, left = false, wasIn = car.isInPitlane == true }
     preMarks(car, true)
@@ -4293,6 +4343,12 @@ do
     end
   end
   function Lap.lostControl() return P.spinning == true end
+  local function lapDone()
+    if P.made then return true end
+    local n = #splits()
+    if n > 0 then return P.secN >= n end
+    return not P.wrong
+  end
   function Lap.frame(car)
     local now = serverTimeMs()
     local raw = CarRead.num(car.lapCount)
@@ -4306,7 +4362,6 @@ do
       elseif d > 0 then
         along(P.sp, sp, P.t, now)
       end
-      P.prog = P.prog + d
     end
     local gameLine = P.raw ~= nil and raw > P.raw
     P.raw, P.sp, P.t = raw, sp, now
@@ -4316,24 +4371,23 @@ do
     P.pit.wasIn = car.isInPitlane == true
     spinWatch(car)
     if P.open then preMarks(car, false) end
+    if P.open and not P.wrong and CarRead.wrongWayNow(car) then lapState('wrong') end
     local closed = false
+    local line = (crossT ~= nil or gameLine) and state.ui.clock - P.lineT > ABSORB_S
     if Lap.over then
-      if crossT or gameLine then P.prog = crossT and math.max(sp, 0) or 0 end
-    elseif (crossT or gameLine) and not P.open then
+    elseif line and not P.open then
       open(car, crossT or now)
-      P.prog = crossT and math.max(sp, 0) or 0
       if crossT then along(0, sp, crossT, now) end
-    elseif crossT or gameLine then
+    elseif line then
       if state.pitPassReverse and car.isInPitlane then
-        P.prog = 0
+        lapState('reverse')
         ac.log('race-control: line in the pit lane entered the wrong way: no line')
-      elseif P.prog >= HALF then
+      elseif lapDone() then
         close(car, crossT or now, car.isInPitlane or state.list.prevInPit)
-        P.prog = crossT and math.max(sp, 0) or 0
         if crossT then along(0, sp, crossT, now) end
         closed = true
-      elseif gameLine and state.ui.clock - P.lineT > ABSORB_S then
-        ac.log(string.format('race-control: line of the game not taken: %.2f of a lap of way since the last line (wrong way or tow)', P.prog))
+      else
+        ac.log(string.format('race-control: line not taken: %d of %d splits passed since the lap opened (tow, reconnection or wrong way)', P.secN, #splits()))
       end
     end
     Lap.crossed = (crossT ~= nil or gameLine) and not Lap.over and not (state.pitPassReverse and car.isInPitlane)
@@ -7646,8 +7700,7 @@ do
     end
     local function wrongWayNow()
       local v = car.velocity
-      local a = v and not state.list.jumped and CarRead.trackAngle(car, v.x, v.z) or nil
-      return a ~= nil and a > config.wrongWay.angle
+      return v ~= nil and not state.list.jumped and CarRead.againstTrack(car, v.x, v.z)
     end
     if inPit and not PitStops.wasInPitlane then
       PitStops.passInWindow = PitStops.windowOpen()
@@ -8545,7 +8598,6 @@ do
     if car.isInPitlane then return end
     local m = CarRead.motion
     local pointing = CarRead.trackAngle(car, car.look.x, car.look.z)
-    local moving = m.dist > 0 and CarRead.trackAngle(car, m.dx, m.dz) or nil
     local before = WrongWay.back
     if car.speedKmh < STOPPED_KMH or (pointing and pointing <= rule.angle) then
       WrongWay.back = 0
@@ -8553,7 +8605,7 @@ do
         rcLog(TEXTS.rc.wrongWayOff, string.format('%.0f m - %s', before, car.speedKmh < STOPPED_KMH and 'car stopped'
           or string.format('back within %d deg (%.0f deg)', rule.angle, pointing)))
       end
-    elseif pointing and moving and moving > rule.angle then
+    elseif CarRead.wrongWayNow(car) then
       WrongWay.back = WrongWay.back + m.dist
       if before < rule.showMeters and WrongWay.back >= rule.showMeters then
         rcLog(TEXTS.rc.wrongWay, string.format('%.0f deg from the track - %.0f m', pointing, WrongWay.back))
