@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V367 - 2026.11.27'
+local RC_VERSION = 'V368 - 2026.11.27'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -4095,9 +4095,11 @@ do
       P.start, P.secN, P.jump, P.made, P.wrong, P.lined = a.t, 0, false, false, false, true
     elseif ev == 'turn' then
       P.open, P.start, P.secN, P.jump, P.made, P.wrong = a.out, a.out and a.t or nil, 0, false, false, false
+    elseif ev == 'enter' then
+      P.open, P.start, P.secN, P.jump, P.made, P.wrong = true, a.start, 0, false, false, false
     elseif ev == 'record' then
       P.open, P.start = a.open, a.open and a.start or nil
-      if a.open then P.made, P.jump = true, false end
+      if a.open and a.jump then P.made, P.jump, P.secN = false, true, 0 elseif a.open then P.made, P.jump = true, false end
     elseif ev == 'game' then
       P.open, P.start, P.made, P.jump = true, a.start, true, false
     elseif ev == 'jump' then
@@ -4159,7 +4161,7 @@ do
   function Lap.save()
     Lap.seq = (Lap.seq or 0) + 1
     Record.save('lap', Lap.seq, string.format('%d|%d|%s|%d|%d|%d|%d', Lap.number(), P.open and P.start and math.floor(P.start) or -1, why(Lap.marks),
-      (P.pit.started or P.pit.left) and 1 or 0, nameCode(ac.getDriverName(0)), P.open and 1 or 0, Lap.over and 1 or 0))
+      (P.pit.started or P.pit.left) and 1 or 0, nameCode(ac.getDriverName(0)), P.open and (P.jump and 2 or 1) or 0, Lap.over and 1 or 0))
   end
   local function apply(body, seq)
     local n, start, m, out, driver, open, over = tostring(body or ''):match('^(%d+)|(%-?%d+)|(%a*)|?(%d?)|?(%d*)|?(%d?)|?(%d?)')
@@ -4167,7 +4169,7 @@ do
     if over == '1' then Lap.over = true end
     Lap.seq = math.max(Lap.seq or 0, seq or 0)
     Lap.base = tonumber(n) - Lap.count
-    if not P.lined then lapState('record', { open = tonumber(start) >= 0 and open ~= '0', start = tonumber(start) }) end
+    if not P.lined then lapState('record', { open = tonumber(start) >= 0 and open ~= '0', start = tonumber(start), jump = open == '2' }) end
     Lap.marks.cut = Lap.marks.cut or m:find('C') ~= nil
     Lap.marks.overdue = Lap.marks.overdue or m:find('V') ~= nil
     Lap.marks.fuel = Lap.marks.fuel or m:find('F') ~= nil
@@ -4199,21 +4201,25 @@ do
     if not body and reload and not car.isInPitlane then
       lapState('game', { start = serverTimeMs() - CarRead.num(car.lapTimeMs) })
       ac.log('race-control: lap: the script reloaded inside the session with the car on the track and no record of the lap: the lap open, the next line closes it')
+    elseif not body and not reload then
+      lapState('enter', { start = serverTimeMs() - CarRead.num(car.lapTimeMs) })
+      ac.log('race-control: lap: entry in the session: the lap open, the way at zero')
     end
   end
   local function boxDecision(car)
-    if not car.isInPitlane or not P.open then return nil, nil end
-    local back = P.recDriver ~= nil and P.recDriver == nameCode(ac.getDriverName(0))
+    if not car.isInPitlane or not P.open or P.recDriver == nil then return nil, nil end
+    local back = P.recDriver == nameCode(ac.getDriverName(0))
     local sw = RecordSync.base.swapLine
     local parked = back and sw ~= nil and sw.parked == true and sw.steam == tostring(ac.getUserSteamID() or '')
-    if back and not parked then lapState('jump') else lapState('made') end
+    if P.jump or (back and not parked) then lapState('jump') else lapState('made') end
+    Lap.save()
     return back, parked
   end
   Lap.boxDecision = boxDecision
   function Lap.connected(car)
     if not car.isInPitlane then return end
-    if not P.open then
-      ac.log('race-control: lap: connection with the car in its box, no lap open: the next line opens it')
+    if not P.open or P.recDriver == nil then
+      ac.log('race-control: lap: connection with the car in its box, no lap of the record: the lap stays as it is')
       return
     end
     local back, parked = boxDecision(car)
@@ -4228,6 +4234,7 @@ do
     if not tow or state.list.prevInPit or not P.open then return end
     P.broken, P.trace = true, {}
     lapState('jump')
+    Lap.save()
   end
   ac.onCarCollision(0, function()
     local t = serverTimeMs()
@@ -8723,6 +8730,7 @@ do
       elseif laps then
         local cat = category(low)
         local base = TEXTS.kmrReasons[cat]
+        if cat == 'K13' or (cat == 'K1' and state.pitExitDriven ~= false) then Lap.mark('cut', 'track limits cut') end
         if cat == 'K3' then Audit.kmrPointsReset() end
         if cat == 'K1' then laps = 0 end
         if cat == 'K1' and state.pitExitDriven == false then
