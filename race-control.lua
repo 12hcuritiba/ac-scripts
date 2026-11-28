@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V368 - 2026.11.27'
+local RC_VERSION = 'V369 - 2026.11.27'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -8206,6 +8206,8 @@ do
   end
   function PitBox.update(car)
     PitBox.logSpinnersOnce()
+    local click = PitBox.click
+    PitBox.click = nil
     if state.pitService then return end
     local mounted = num(car.compoundIndex)
     if PitBox.compound == mounted and PitBox.tyres == 1 then PitBox.compound = nil end
@@ -8229,6 +8231,15 @@ do
       return padOn and (PAD[name]:pressed() or own or (KEYS[name]:pressed() and PitBox.open))
     end
     local up, down, left, right = hit('up'), hit('down'), hit('left'), hit('right')
+    if click then
+      for j, k in ipairs(ROWS) do
+        if k == click.key then
+          PitBox.row = j
+          if click.dir < 0 then left = true elseif click.dir > 0 then right = true end
+          break
+        end
+      end
+    end
     if up then PitBox.row = (PitBox.row - 2) % #ROWS + 1 end
     if down then PitBox.row = PitBox.row % #ROWS + 1 end
     local confirm = right and ROWS[PitBox.row] == 'mode' and PitBox.tab == 'stop'
@@ -13924,6 +13935,10 @@ do
     if presets > 1 then
       local tx = p1.x + BOX.side * s + textWidth(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s) + 8 * s
       drawText('|  ' .. TEXTS.pitStrategyTab, FONT_TITLE, 12 * s, TMP.a:set(tx, p1.y + 4 * s), strategy and COLOR_SEL or COLOR_DIM)
+      local tw0 = textWidth(TEXTS.pitBoxTitle, FONT_TITLE, 12 * s)
+      Drag.clickable(vec2(p1.x + BOX.side * s, p1.y), vec2(p1.x + BOX.side * s + tw0, p1.y + BOX.head * s), function() PitBox.click = { key = 'back', dir = 1 } end)
+      Drag.clickable(vec2(tx, p1.y), vec2(tx + textWidth('|  ' .. TEXTS.pitStrategyTab, FONT_TITLE, 12 * s), p1.y + BOX.head * s),
+        function() PitBox.click = { key = 'strategy', dir = -1 } end)
     end
     local total = string.format(TEXTS.pitBoxTotal, mmss(p.total))
     drawTextRight(total, FONT_MONO, 11 * s, p2.x - BOX.side * s, p1.y + 5 * s, COLOR_TITLE)
@@ -13984,6 +13999,11 @@ do
         drawTextRight(mmss(rest or r[4]), FONT_MONO, fs, p2.x - BOX.side * s, y,
           rest and rest > 0 and COLOR_SWAP or COLOR_TITLE)
       end
+      local key, ry2 = r[1], y + ROW_H * s
+      Drag.clickable(vec2(p1.x, y), vec2(vx, ry2), function() if key and not sv then PitBox.click = { key = key, dir = 0 } end end)
+      Drag.clickable(vec2(vx, y), vec2(p2.x, ry2), function()
+        if key and not sv then PitBox.click = { key = key, dir = ui.mousePos().x < (vx + p2.x - BOX.side * s) / 2 and -1 or 1 } end
+      end)
     end
     local sep = rowsTop + math.max(#rows, stopN) * ROW_H * s + gap
     drawSeparator(p1, p2, sep, s)
@@ -13995,6 +14015,13 @@ do
     drawText(footer, FONT_TEXT, fs, TMP.a:set(p1.x + BOX.side * s, fy),
       sv and COLOR_SWAP or (modeSel and COLOR_SEL or COLOR_TITLE))
     if modeSel then cursorLine(p1.x + BOX.side * s, p1.x + BOX.side * s + textWidth(footer, FONT_TEXT, fs), fy) end
+    local live = not sv and not strategy
+    local fx, fy2 = p1.x + BOX.side * s, fy + ROW_H * s
+    local mw = live and textWidth(string.format(TEXTS.pitBoxMode, PitBox.isAuto() and TEXTS.pitModeAuto or TEXTS.pitModeManual), FONT_TEXT, fs) or 0
+    local sw = live and textWidth(TEXTS.pitBoxStart, FONT_TEXT, fs) or 0
+    Drag.clickable(vec2(p1.x, fy), vec2(fx + mw, fy2), function() if live then PitBox.click = { key = 'mode', dir = -1 } end end)
+    Drag.clickable(vec2(fx + mw, fy), vec2(fx + mw + sw, fy2), function() if live then PitBox.click = { key = 'mode', dir = 1 } end end)
+    Drag.clickable(vec2(fx + mw + sw, fy), vec2(p2.x, fy2), function() end)
     drawTextRight(string.format('%s / %s', mmss(elapsed), mmss(p.total)), FONT_MONO, fs, p2.x - BOX.side * s, fy,
       COLOR_TITLE)
     Drag.icons('pitbox', p1, p2, s)
