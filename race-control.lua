@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V372 - 2026.11.28'
+local RC_VERSION = 'V373 - 2026.11.28'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -7708,7 +7708,7 @@ do
     local inPit = car.isInPitlane
     if car.isInPit then
       if PitRecord.box ~= true then PitRecord.boxSet(true, Lap.count) end
-    elseif PitRecord.box and Lap.count > (PitRecord.boxLap or 0) then
+    elseif PitRecord.box and Lap.crossed and not car.isInPitlane then
       PitRecord.boxSet(false, Lap.count)
     end
     local dist = -1
