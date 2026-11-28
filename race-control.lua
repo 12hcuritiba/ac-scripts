@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V370 - 2026.11.28'
+local RC_VERSION = 'V371 - 2026.11.28'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2436,6 +2436,15 @@ do
     local x = string.format('%d|%d', math.floor(tonumber(stops) or 0), (tonumber(dsq) or 0) > 0 and 1 or 0)
     if x ~= B.stat.x then B.stat.x, B.stat.due = x, true end
   end
+  B.out = { sid = nil, due = false }
+  function B.outSet()
+    if B.outOn() then return end
+    B.out.sid, B.out.due = Session.id, true
+    ac.log('race-control: a car of a driver left its pit box in this session (this car)')
+  end
+  function B.outOn()
+    return Session.id ~= nil and (B.out.sid == Session.id or B.dirPen.outSid == Session.id)
+  end
   B.plan = { done = tostring(ac.storage['rc.pitplan'] or ''), due = nil }
   local planApply
   local PLAN_PIT_GAP, PLAN_GAP = 2, 10
@@ -2468,8 +2477,9 @@ do
     local me = CarsTick.byIndex[0]
     local nat = src.now and me and me.nation or ''
     local natDue = nat ~= '' and nat ~= B.natSent
+    local outDue = src.now and B.out.due and B.out.sid == Session.id
     local quiet = next(src.parts) == nil and not src.track and #src.rc == 0 and #src.laps == 0 and #src.traces == 0 and not exitDue and not (src.now and B.stat.due) and not natDue and not B.plan.due
-      and not askRr and not askName and not askPush
+      and not askRr and not askName and not askPush and not outDue
     if quiet then
       if not src.now then table.remove(B.old, 1) return end
       if now < B.idleT then return end
@@ -2504,6 +2514,8 @@ do
     local statDue = src.now and B.stat.due
     local statJson = statDue and (',"stat":' .. jsonStr(B.stat.x)) or ''
     if statDue then B.stat.due = false end
+    local outJson = outDue and ',"out":1' or ''
+    if outDue then B.out.due = false end
     local natJson = natDue and (',"nation":' .. jsonStr(nat)) or ''
     if natDue then B.natSent = nat end
     local planDone = src.now and B.plan.due or nil
@@ -2515,7 +2527,7 @@ do
     B.busy = true
     B.flight = { key = src.key, rc = lines, laps = lapLines, traces = traces }
     local body = '{"key":' .. jsonStr(src.key) .. ',"steam":' .. jsonStr(ac.getUserSteamID() or '') .. ',"car":' .. jsonStr(B.carKey()) .. ',"parts":{' .. table.concat(partTexts, ',') .. '}'
-      .. (track and (',"track":{"t":' .. track.t .. ',"x":' .. jsonStr(track.x) .. '}') or '') .. exitJson .. statJson .. natJson
+      .. (track and (',"track":{"t":' .. track.t .. ',"x":' .. jsonStr(track.x) .. '}') or '') .. exitJson .. statJson .. natJson .. outJson
       .. ',"lines":[' .. table.concat(lineParts, ',') .. '],"laps":[' .. table.concat(lapParts, ',') .. '],"traces":[' .. table.concat(traceParts, ',') .. ']'
       .. (planDone and (',"planDone":' .. jsonStr(planDone)) or '') .. (#asks > 0 and (',"ask":{' .. table.concat(asks, ',') .. '}') or '')
       .. (src.now and B.clockOut and B.clockOut() or '') .. '}'
@@ -2533,6 +2545,7 @@ do
           for i = #traces, 1, -1 do table.insert(src.traces, 1, traces[i]) end
           if exitDue then e.due = true end
           if statDue then B.stat.due = true end
+          if outDue then B.out.due = true end
           if natDue then B.natSent = nil end
           if askRr then B.rrRead(false) end
           if askName then B.nameRead(false, nil, err or status) end
@@ -2654,12 +2667,14 @@ do
     if only and state.ui.clock < D.fullUntil then return end
     if not only then D.fullUntil = state.ui.clock + 2 * gap end
     D.busy, D.nextT = true, state.ui.clock + gap
-    WebQueue.request('GET', config.baseUrl .. '/v1/report/penalties?sid=' .. Session.id .. (only and '&only=stat' or ''), nil, nil, function(err, res)
+    local sid = Session.id
+    WebQueue.request('GET', config.baseUrl .. '/v1/report/penalties?sid=' .. sid .. (only and '&only=stat' or '') .. (B.outOn() and '' or '&out=1'), nil, nil, function(err, res)
       D.busy = false
       if err or not res or tonumber(res.status) ~= 200 then return end
       local stat = {}
       for slot, n, d in (tostring(res.body or ''):match('STAT|([^\r\n]*)') or ''):gmatch('(%d+):(%d+):(%d)') do stat[tonumber(slot)] = { stops = tonumber(n), dsq = d == '1' } end
       D.stat = stat
+      if tostring(res.body or ''):match('OUT|1') then D.outSid = sid end
       if only then return end
       local by = {}
       for slot, x in tostring(res.body or ''):gmatch('(%d+)|([^\r\n]+)') do by[tonumber(slot)] = x end
@@ -11093,7 +11108,7 @@ do
 end
 local RaceTable = {}
 sessionPart('raceTable', RaceTable, function()
-  return { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, passes = {}, seen = {}, leftBox = false, present = SESSION_NONE, lastLap = SESSION_NONE,
+  return { rows = {}, byIndex = {}, order = {}, laps = {}, nextT = 0, box = false, seen = {}, present = SESSION_NONE, lastLap = SESSION_NONE,
     stint = { driver = 0, startMs = -1, parkMs = -1, seq = 0, totals = {} }, stintDone = false, maxDsq = false, minDone = false, prevParked = SESSION_NONE }
 end, { 'losses' })
 do
@@ -11154,9 +11169,8 @@ do
     for i in body:gmatch('%d+') do RaceTable.seen[tonumber(i)] = true end
   end
   local function boxWatch(c)
-    local ps = RaceTable.passes[c.index] or {}
-    RaceTable.passes[c.index] = ps
-    if c.isInPit then ps.box = true elseif c.isConnected and (ps.box or Lap.of(c.index) ~= nil) then ps.box, RaceTable.leftBox = false, true end
+    if c.index ~= 0 or RecordSync.base.outOn() then return end
+    if c.isInPit then RaceTable.box = true elseif RaceTable.box and c.isConnected then RecordSync.base.outSet() end
   end
   local pool = {}
   local function bestOrder(a, b)
@@ -18765,8 +18779,7 @@ float4 main(PS_IN pin) {
       return string.format('%02d:%02d', math.floor(s / 60), s % 60)
     end
     function CR.anyOnTrack()
-      if RaceTable.rows and RaceTable.rows.anyLap then RaceTable.leftBox = true end
-      return RaceTable.leftBox == true
+      return RecordSync.base.outOn()
     end
     function BC.abortUp() return Formation.abortMs ~= nil and CR.sn.ab == Formation.abortMs and CR.sn.abN ~= true end
     function BC.formGreen()
