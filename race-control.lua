@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V371 - 2026.11.28'
+local RC_VERSION = 'V372 - 2026.11.28'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -2432,8 +2432,8 @@ do
     end
   end
   B.stat = { x = nil, due = false }
-  function B.statSet(stops, dsq)
-    local x = string.format('%d|%d', math.floor(tonumber(stops) or 0), (tonumber(dsq) or 0) > 0 and 1 or 0)
+  function B.statSet(stops, dsq, box)
+    local x = string.format('%d|%d|%d', math.floor(tonumber(stops) or 0), (tonumber(dsq) or 0) > 0 and 1 or 0, box == true and 1 or 0)
     if x ~= B.stat.x then B.stat.x, B.stat.due = x, true end
   end
   B.out = { sid = nil, due = false }
@@ -2672,8 +2672,9 @@ do
       D.busy = false
       if err or not res or tonumber(res.status) ~= 200 then return end
       local stat = {}
-      for slot, n, d in (tostring(res.body or ''):match('STAT|([^\r\n]*)') or ''):gmatch('(%d+):(%d+):(%d)') do stat[tonumber(slot)] = { stops = tonumber(n), dsq = d == '1' } end
+      for slot, n, d, b in (tostring(res.body or ''):match('STAT|([^\r\n]*)') or ''):gmatch('(%d+):(%d+):(%d):?(%d?)') do stat[tonumber(slot)] = { stops = tonumber(n), dsq = d == '1', box = b == '1' } end
       D.stat = stat
+      D.statSid = sid
       if tostring(res.body or ''):match('OUT|1') then D.outSid = sid end
       if only then return end
       local by = {}
@@ -3508,7 +3509,7 @@ do
 end
 local PitRecord = { HOLD_MAX = 86400, HOLD_GRACE = 2000 }
 sessionPart('pitRecord', PitRecord, function() return { stops = 0, valid = 0, validOut = 0, last = '-', seq = 0, holdEnded = SESSION_NONE, lastPass = SESSION_NONE, pass = SESSION_NONE,
-  resume = SESSION_NONE, notOut = SESSION_NONE } end, { 'HOLD_MAX', 'HOLD_GRACE' })
+  resume = SESSION_NONE, notOut = SESSION_NONE, box = SESSION_NONE, boxLap = SESSION_NONE } end, { 'HOLD_MAX', 'HOLD_GRACE' })
 PitRecord.onService = nil
 local startHold
 function PitRecord.save()
@@ -3529,7 +3530,13 @@ function PitRecord.save()
     state.pitExitDriven == nil and '' or state.pitExitDriven and '1' or '0',
     lp and lp.entry or 0, lp and lp.lane or 0, lp and lp.park or 0, cp and cp.entry or 0, cp and cp.park or 0, cp and cp.since or 0, PitRecord.valid or 0,
     PitRecord.validOut or 0, PitRecord.notOut == nil and '' or PitRecord.notOut and '1' or '0'))
-  RecordSync.base.statSet(PitRecord.stops, state.list.dsq)
+  RecordSync.base.statSet(PitRecord.stops, state.list.dsq, PitRecord.box)
+end
+local PIT_BOX_MARK = '.amxracing.race-control.pitbox'
+function PitRecord.boxSet(on, lap)
+  PitRecord.box, PitRecord.boxLap = on == true, lap
+  ac.store(PIT_BOX_MARK, Record.key() .. '|' .. (PitRecord.box and '1' or '0') .. '|' .. math.floor(tonumber(lap) or 0))
+  RecordSync.base.statSet(PitRecord.stops, state.list.dsq, PitRecord.box)
 end
 function PitRecord.apply(body, seq, newConnection)
   local f = {}
@@ -3580,6 +3587,8 @@ end
 function PitRecord.load()
   local body, seq, source = Record.load('pit')
   if body then PitRecord.apply(body, seq, source ~= 'store') end
+  local key, on, lap = tostring(ac.load(PIT_BOX_MARK) or ''):match('^(.*)|([01])|(%-?%d+)$')
+  if key == Record.key() then PitRecord.box, PitRecord.boxLap = on == '1', tonumber(lap) else PitRecord.box, PitRecord.boxLap = false, 0 end
 end
 startHold = function(seconds, text, cause)
   state.tow.ownJumpUntil = state.ui.clock + 2
@@ -5526,7 +5535,7 @@ local function listSave()
   Record.save('penalties', l.seq, string.format('%d|0|%d|%d|%d|%d|%d|%d|%d|%s', l.seq, l.curLap,
     l.owner or 0, l.dsq, l.dsqStage, math.floor(l.dsqUntil), w and w.driver or 0, w and math.floor(w.since) or 0,
     table.concat(parts, ';')))
-  RecordSync.base.statSet(PitRecord.stops, l.dsq)
+  RecordSync.base.statSet(PitRecord.stops, l.dsq, PitRecord.box)
 end
 local function listApply(data, source)
   local l = state.list
@@ -7697,6 +7706,11 @@ do
   end
   function PitStops.update(car)
     local inPit = car.isInPitlane
+    if car.isInPit then
+      if PitRecord.box ~= true then PitRecord.boxSet(true, Lap.count) end
+    elseif PitRecord.box and Lap.count > (PitRecord.boxLap or 0) then
+      PitRecord.boxSet(false, Lap.count)
+    end
     local dist = -1
     if car.position and car.pitTransform and car.pitTransform.position then
       local a, b = car.position, car.pitTransform.position
@@ -18601,14 +18615,15 @@ float4 main(PS_IN pin) {
     end
     function CR.pitCall(r)
       if not BC.opt.io or r.absent or not r.connected then return nil end
+      local c = ac.getCar(r.index)
+      local D = RecordSync.base.dirPen
+      local st = c and D.statSid == Session.id and D.stat[c.sessionID]
+      local box = st and st.box == true
       if r.inPit then
-        local c = ac.getCar(r.index)
         if c and c.isInPit then return nil end
-        local st = CR.q.cars[r.index]
-        return st and st.box and CR.q.sid == Session.id and 'out' or 'in'
+        return box and 'out' or 'in'
       end
-      local st = CR.q.cars[r.index]
-      return st and st.out and CR.q.sid == Session.id and 'out' or nil
+      return box and 'out' or nil
     end
     function CR.swapIcon(x, y, size, color)
       local q = size / 24
