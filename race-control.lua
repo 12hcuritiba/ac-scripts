@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V373 - 2026.11.28'
+local RC_VERSION = 'V374 - 2026.11.28'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -7708,7 +7708,7 @@ do
     local inPit = car.isInPitlane
     if car.isInPit then
       if PitRecord.box ~= true then PitRecord.boxSet(true, Lap.count) end
-    elseif PitRecord.box and Lap.crossed and not car.isInPitlane then
+    elseif PitRecord.box and not car.isInPitlane then
       PitRecord.boxSet(false, Lap.count)
     end
     local dist = -1
@@ -18623,7 +18623,8 @@ float4 main(PS_IN pin) {
         if c and c.isInPit then return nil end
         return box and 'out' or 'in'
       end
-      return box and 'out' or nil
+      local q = CR.q.cars[r.index]
+      return q and q.out and CR.q.sid == Session.id and 'out' or nil
     end
     function CR.swapIcon(x, y, size, color)
       local q = size / 24
