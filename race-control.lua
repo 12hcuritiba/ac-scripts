@@ -114,7 +114,7 @@ local cfg = ac.configValues({
   raceSlowdownUnpaidPenalty = 'DT',
   cutSpinAngle = 90,
 })
-local RC_VERSION = 'V369 - 2026.11.27'
+local RC_VERSION = 'V370 - 2026.11.28'
 local TEXTS = {
   rc = {
     baseOff = 'Base offline', chatSeen = 'Chat seen', damageBeyond = 'Damage beyond safety limit',
@@ -3651,6 +3651,7 @@ do
       directorPenalty = { en = { 'money penalty', 'points penalty', 'point penalty' },
         pt = { 'penalidade em dinheiro', 'penalidade de pontos', 'pontos de penalidade', 'dinheiro de penalidade' } },
       lapInvalid = { en = { 'laptime invalidated' }, pt = { 'tempo de volta invalidado' } },
+      boundary = { en = { 'track boundary' } },
     },
     areas = {
       { 'limits', en = { 'laptime invalidated', 'do not improve your laptime' },
@@ -4143,14 +4144,15 @@ do
   function Lap.invalidNow() return not Lap.valid(Lap.marks) end
   local function why(m) return (m.cut and 'C' or '') .. (m.overdue and 'V' or '') .. (m.fuel and 'F' or '') .. (m.form and 'P' or '') .. (m.closed and 'S' or '') end
   Lap.why = why
-  function Lap.mark(kind, text)
+  function Lap.cut()
+    P.info.cut = P.info.cut + 1
+    local q = tostring(P.secN + 1)
+    if not P.info.cutS:find(q, 1, true) then P.info.cutS = P.info.cutS .. q end
+    if Lap.onCut then Lap.onCut() end
+  end
+  function Lap.mark(kind, text, count)
     if Lap.marks[kind] == nil then return end
-    if kind == 'cut' then
-      P.info.cut = P.info.cut + 1
-      local q = tostring(P.secN + 1)
-      if not P.info.cutS:find(q, 1, true) then P.info.cutS = P.info.cutS .. q end
-      if Lap.onCut then Lap.onCut() end
-    end
+    if kind == 'cut' and count ~= false then Lap.cut() end
     if Lap.marks[kind] then return end
     Lap.marks[kind] = true
     ac.log('race-control: lap invalid (' .. (text or kind) .. ')')
@@ -5325,7 +5327,7 @@ ac.onChatMessage(function(message, senderCarIndex)
   if server then Connection.chat(message) end
   if server and hasAny(low, DICT.kmr.lapInvalid) then
     ac.log('race-control: lap invalidated by the KMR (track limits): cut lap')
-    Lap.mark('cut', 'track limits cut')
+    Lap.mark('cut', 'track limits cut', false)
   end
   if message:sub(1, #TEXTS.rcPrefix) ~= TEXTS.rcPrefix and (hasAny(low, DICT.kmr.driveThrough)
       or hasAny(low, DICT.kmr.penalty)) then
@@ -5384,6 +5386,7 @@ ac.onChatMessage(function(message, senderCarIndex)
     local rating = Audit.kmrRating(message)
     if points or rating then
       if staff then return true end
+      if points and hasAny(low, DICT.kmr.boundary) then Lap.cut() end
       Audit.add('KMR', message, true, DICT.area(low) == 'damage' and 'damage' or 'points')
       if points then AppLink.clipWant('kmr', message) end
       return true
@@ -11153,7 +11156,7 @@ do
   local function boxWatch(c)
     local ps = RaceTable.passes[c.index] or {}
     RaceTable.passes[c.index] = ps
-    if c.isInPit then ps.box = true elseif ps.box and c.isConnected then ps.box, RaceTable.leftBox = false, true end
+    if c.isInPit then ps.box = true elseif c.isConnected and (ps.box or Lap.of(c.index) ~= nil) then ps.box, RaceTable.leftBox = false, true end
   end
   local pool = {}
   local function bestOrder(a, b)
